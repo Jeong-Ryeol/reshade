@@ -133,7 +133,7 @@ static const char *addon_event_to_string(reshade::addon_event ev)
 bool reshade::addon_enabled = true;
 #endif
 bool reshade::addon_all_loaded = true;
-std::vector<void *> reshade::addon_event_list[static_cast<uint32_t>(reshade::addon_event::max)];
+std::vector<std::pair<void *, bool>> reshade::addon_event_list[static_cast<uint32_t>(reshade::addon_event::max)];
 std::vector<reshade::addon_info> reshade::addon_loaded_info;
 static unsigned long s_reference_count = 0;
 
@@ -563,8 +563,8 @@ void ReShadeRegisterEventForAddon(HMODULE module, reshade::addon_event ev, void 
 	}
 #endif
 
-	std::vector<void *> &event_list = reshade::addon_event_list[static_cast<uint32_t>(ev)];
-	event_list.push_back(callback);
+	std::vector<std::pair<void *, bool>> &event_list = reshade::addon_event_list[static_cast<uint32_t>(ev)];
+	event_list.push_back(std::make_pair(callback, false));
 
 	info->event_callbacks.emplace_back(static_cast<uint32_t>(ev), callback);
 
@@ -592,8 +592,8 @@ void ReShadeUnregisterEventForAddon(HMODULE module, reshade::addon_event ev, voi
 		return;
 #endif
 
-	std::vector<void *> &event_list = reshade::addon_event_list[static_cast<uint32_t>(ev)];
-	event_list.erase(std::remove(event_list.begin(), event_list.end(), callback), event_list.end());
+	std::vector<std::pair<void *, bool>> &event_list = reshade::addon_event_list[static_cast<uint32_t>(ev)];
+	event_list.erase(std::remove(event_list.begin(), event_list.end(), std::make_pair(callback, false)), event_list.end());
 
 	info->event_callbacks.erase(std::remove(info->event_callbacks.begin(), info->event_callbacks.end(), std::make_pair(static_cast<uint32_t>(ev), callback)), info->event_callbacks.end());
 

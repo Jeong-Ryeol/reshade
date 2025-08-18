@@ -23,7 +23,7 @@ namespace reshade
 	/// <summary>
 	/// List of add-on event callbacks.
 	/// </summary>
-	extern std::vector<void *> addon_event_list[];
+	extern std::vector<std::pair<void *, bool>> addon_event_list[];
 
 	/// <summary>
 	/// List of currently loaded add-ons.
@@ -110,9 +110,9 @@ namespace reshade
 		if (!addon_enabled)
 			return;
 #endif
-		std::vector<void *> &event_list = addon_event_list[static_cast<uint32_t>(ev)];
+		std::vector<std::pair<void *, bool>> &event_list = addon_event_list[static_cast<uint32_t>(ev)];
 		for (size_t cb = 0, count = event_list.size(); cb < count; ++cb) // Generates better code than ranged-based for loop
-			reinterpret_cast<typename addon_event_traits<ev>::decl>(event_list[cb])(std::forward<Args>(args)...);
+			reinterpret_cast<typename addon_event_traits<ev>::decl>(event_list[cb].first)(std::forward<Args>(args)...);
 	}
 	/// <summary>
 	/// Invokes registered callbacks for the specified <typeparamref name="ev"/>ent until a callback reports back as having handled this event by returning <see langword="true"/>.
@@ -146,10 +146,17 @@ namespace reshade
 		if (!addon_enabled)
 			return false;
 #endif
-		std::vector<void *> &event_list = addon_event_list[static_cast<uint32_t>(ev)];
+		std::vector<std::pair<void *, bool>> &event_list = addon_event_list[static_cast<uint32_t>(ev)];
 		for (size_t cb = 0, count = event_list.size(); cb < count; ++cb)
-			if (reinterpret_cast<typename addon_event_traits<ev>::decl>(event_list[cb])(std::forward<Args>(args)...))
+		{
+			if (event_list[cb].second)
+				continue;
+			event_list[cb].second = true;
+			const bool skip = reinterpret_cast<typename addon_event_traits<ev>::decl>(event_list[cb].first)(std::forward<Args>(args)...);
+			event_list[cb].second = false;
+			if (skip)
 				return true;
+		}
 		return false;
 	}
 }
