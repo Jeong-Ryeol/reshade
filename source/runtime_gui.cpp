@@ -1140,16 +1140,29 @@ void reshade::runtime::draw_gui()
 		else if (hue < 300.0f) { r = x; g = 0; b = c; }
 		else { r = c; g = 0; b = x; }
 		
-		// 오버레이 윈도우 배경색을 동적으로 변경
+		// 전체 UI 색상을 동적으로 변경 (모든 요소가 무지개색으로!)
+		
+		// 배경 계열
 		colors[ImGuiCol_WindowBg] = ImVec4(r + m, g + m, b + m, 0.95f);
 		colors[ImGuiCol_ChildBg] = ImVec4(r + m + 0.02f, g + m + 0.02f, b + m + 0.02f, 0.50f);
 		colors[ImGuiCol_PopupBg] = ImVec4(r + m, g + m, b + m, 0.98f);
+		colors[ImGuiCol_MenuBarBg] = ImVec4(r + m + 0.03f, g + m + 0.03f, b + m + 0.03f, 0.90f);
 		
-		// ActiveItem 색상도 같이 변화 (보색으로 대비감 있게)
-		float complement_hue = std::fmod(hue + 180.0f, 360.0f); // 정반대 색상 (보색)
-		float complement_brightness = 0.6f + std::sin(time * 0.9f) * 0.1f; // 더 밝게
+		// 프레임 계열 (입력창, 슬라이더 등)
+		colors[ImGuiCol_FrameBg] = ImVec4(r + m + 0.05f, g + m + 0.05f, b + m + 0.05f, 0.8f);
+		colors[ImGuiCol_FrameBgHovered] = ImVec4(r + m + 0.08f, g + m + 0.08f, b + m + 0.08f, 1.0f);
+		colors[ImGuiCol_FrameBgActive] = ImVec4(r + m + 0.12f, g + m + 0.12f, b + m + 0.12f, 1.0f);
 		
-		// 보색 RGB 계산
+		// 스크롤바
+		colors[ImGuiCol_ScrollbarBg] = ImVec4(r + m, g + m, b + m, 0.6f);
+		colors[ImGuiCol_ScrollbarGrab] = ImVec4(r + m + 0.15f, g + m + 0.15f, b + m + 0.15f, 0.8f);
+		colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(r + m + 0.2f, g + m + 0.2f, b + m + 0.2f, 1.0f);
+		colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(r + m + 0.25f, g + m + 0.25f, b + m + 0.25f, 1.0f);
+		
+		// 보색 계산 (대비를 위한 액티브 요소들)
+		float complement_hue = std::fmod(hue + 180.0f, 360.0f);
+		float complement_brightness = 0.6f + std::sin(time * 0.9f) * 0.1f;
+		
 		float cc = complement_brightness * saturation;
 		float xx = cc * (1.0f - std::abs(std::fmod(complement_hue / 60.0f, 2.0f) - 1.0f));
 		float mm = complement_brightness - cc;
@@ -1162,12 +1175,28 @@ void reshade::runtime::draw_gui()
 		else if (complement_hue < 300.0f) { cr = xx; cg = 0; cb = cc; }
 		else { cr = cc; cg = 0; cb = xx; }
 		
-		// ActiveItem과 관련 색상들을 보색으로 설정 (배경과 대비)
+		// 액티브/호버 요소들 (보색으로 대비)
 		colors[ImGuiCol_ButtonActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
+		colors[ImGuiCol_ButtonHovered] = ImVec4(cr + mm - 0.1f, cg + mm - 0.1f, cb + mm - 0.1f, 1.0f);
+		colors[ImGuiCol_Button] = ImVec4(r + m + 0.1f, g + m + 0.1f, b + m + 0.1f, 0.9f);
+		
 		colors[ImGuiCol_HeaderActive] = ImVec4(cr + mm, cg + mm, cb + mm, 0.8f);
+		colors[ImGuiCol_HeaderHovered] = ImVec4(cr + mm - 0.1f, cg + mm - 0.1f, cb + mm - 0.1f, 0.8f);
+		colors[ImGuiCol_Header] = ImVec4(r + m + 0.08f, g + m + 0.08f, b + m + 0.08f, 0.7f);
+		
 		colors[ImGuiCol_SliderGrabActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
+		colors[ImGuiCol_SliderGrab] = ImVec4(cr + mm - 0.1f, cg + mm - 0.1f, cb + mm - 0.1f, 0.9f);
+		
+		// 탭
 		colors[ImGuiCol_TabSelected] = ImVec4(cr + mm, cg + mm, cb + mm, 0.9f);
+		colors[ImGuiCol_TabHovered] = ImVec4(cr + mm - 0.1f, cg + mm - 0.1f, cb + mm - 0.1f, 0.8f);
+		colors[ImGuiCol_Tab] = ImVec4(r + m + 0.05f, g + m + 0.05f, b + m + 0.05f, 0.7f);
+		
+		// 기타
 		colors[ImGuiCol_CheckMark] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
+		colors[ImGuiCol_TitleBg] = ImVec4(r + m - 0.05f, g + m - 0.05f, b + m - 0.05f, 0.9f);
+		colors[ImGuiCol_TitleBgActive] = ImVec4(r + m + 0.05f, g + m + 0.05f, b + m + 0.05f, 1.0f);
+		colors[ImGuiCol_Border] = ImVec4(cr + mm * 0.5f, cg + mm * 0.5f, cb + mm * 0.5f, 0.5f);
 	}
 
 #if RESHADE_LOCALIZATION
