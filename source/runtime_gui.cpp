@@ -114,15 +114,15 @@ void reshade::runtime::init_gui()
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
-	// Modern rounded UI style
-	imgui_style.GrabRounding = 6.0f;        // 슬라이더 둥글게
-	imgui_style.FrameRounding = 8.0f;       // 버튼, 입력창 둥글게
-	imgui_style.ChildRounding = 10.0f;      // 자식 윈도우 둥글게
-	imgui_style.ScrollbarRounding = 6.0f;   // 스크롤바 둥글게
-	imgui_style.WindowRounding = 12.0f;     // 윈도우 둥글게
+	// Ultra rounded UI style - 최대 둥글기!
+	imgui_style.GrabRounding = 15.0f;       // 슬라이더 최대 둥글게
+	imgui_style.FrameRounding = 15.0f;      // 버튼, 입력창 최대 둥글게
+	imgui_style.ChildRounding = 20.0f;      // 자식 윈도우 최대 둥글게
+	imgui_style.ScrollbarRounding = 15.0f;  // 스크롤바 최대 둥글게
+	imgui_style.WindowRounding = 20.0f;     // 윈도우 최대 둥글게
 	imgui_style.WindowBorderSize = 1.0f;    // 윈도우 테두리
-	imgui_style.TabRounding = 8.0f;         // 탭 둥글게
-	imgui_style.PopupRounding = 8.0f;       // 팝업 둥글게
+	imgui_style.TabRounding = 15.0f;        // 탭 최대 둥글게
+	imgui_style.PopupRounding = 15.0f;      // 팝업 최대 둥글게
 	
 	// 더 넓은 패딩으로 편안한 느낌
 	imgui_style.FramePadding = ImVec2(12.0f, 8.0f);  // 버튼 내부 패딩
