@@ -1111,7 +1111,7 @@ void reshade::runtime::draw_gui()
 
 	ImGui::NewFrame();
 
-	// 그라데이션 배경 렌더링 (오버레이가 활성화되고 옵션이 켜진 경우)
+	// 그라데이션 배경 색상 애니메이션 (오버레이 윈도우 배경이 계속 색깔 변화)
 	if (_show_overlay && _show_gradient_background)
 	{
 		// 시간 기반 애니메이션을 위한 시간 계산
@@ -1119,28 +1119,31 @@ void reshade::runtime::draw_gui()
 		auto current_time = std::chrono::high_resolution_clock::now();
 		float time = std::chrono::duration<float>(current_time - start_time).count();
 		
-		// 그라데이션 색상 계산 (황금색 게이밍 테마로 부드럽게 변화)
-		ImVec4 gradient_top = ImVec4(
-			0.05f + std::sin(time * 0.3f) * 0.02f,        // R: 어두운 빨강
-			0.05f + std::sin(time * 0.3f + 1.0f) * 0.02f, // G: 어두운 초록  
-			0.08f + std::sin(time * 0.3f + 2.0f) * 0.02f, // B: 약간의 파랑
-			0.8f);
-		ImVec4 gradient_bottom = ImVec4(
-			0.12f + std::sin(time * 0.2f) * 0.03f,        // R: 황금색 베이스
-			0.10f + std::sin(time * 0.2f + 0.5f) * 0.03f, // G: 황금색
-			0.02f + std::sin(time * 0.2f + 1.0f) * 0.01f, // B: 최소 파랑
-			0.8f);
+		// 오버레이 윈도우 배경 색상을 계속 변화 (빨강→주황→노랑→초록→파랑→보라→빨강)
+		ImVec4* colors = _imgui_context->Style.Colors;
 		
-		// 전체 화면에 그라데이션 배경 그리기
-		ImDrawList* background_draw_list = ImGui::GetBackgroundDrawList();
-		background_draw_list->AddRectFilledMultiColor(
-			ImVec2(0, 0),
-			ImVec2(imgui_io.DisplaySize.x, imgui_io.DisplaySize.y),
-			ImGui::ColorConvertFloat4ToU32(gradient_top),      // 왼쪽 위
-			ImGui::ColorConvertFloat4ToU32(gradient_top),      // 오른쪽 위  
-			ImGui::ColorConvertFloat4ToU32(gradient_bottom),   // 오른쪽 아래
-			ImGui::ColorConvertFloat4ToU32(gradient_bottom)    // 왼쪽 아래
-		);
+		// HSV 색상환을 따라 부드럽게 변화 (Hue가 0~360도 계속 회전)
+		float hue = std::fmod(time * 50.0f, 360.0f); // 50도/초 속도로 색상 회전
+		float saturation = 0.7f + std::sin(time * 1.2f) * 0.2f; // 채도도 살짝 변화
+		float brightness = 0.15f + std::sin(time * 0.8f) * 0.03f; // 밝기도 살짝 변화
+		
+		// HSV를 RGB로 변환
+		float c = brightness * saturation;
+		float x = c * (1.0f - std::abs(std::fmod(hue / 60.0f, 2.0f) - 1.0f));
+		float m = brightness - c;
+		
+		float r, g, b;
+		if (hue < 60.0f) { r = c; g = x; b = 0; }
+		else if (hue < 120.0f) { r = x; g = c; b = 0; }
+		else if (hue < 180.0f) { r = 0; g = c; b = x; }
+		else if (hue < 240.0f) { r = 0; g = x; b = c; }
+		else if (hue < 300.0f) { r = x; g = 0; b = c; }
+		else { r = c; g = 0; b = x; }
+		
+		// 오버레이 윈도우 배경색을 동적으로 변경
+		colors[ImGuiCol_WindowBg] = ImVec4(r + m, g + m, b + m, 0.95f);
+		colors[ImGuiCol_ChildBg] = ImVec4(r + m + 0.02f, g + m + 0.02f, b + m + 0.02f, 0.50f);
+		colors[ImGuiCol_PopupBg] = ImVec4(r + m, g + m, b + m, 0.98f);
 	}
 
 #if RESHADE_LOCALIZATION
