@@ -1144,6 +1144,30 @@ void reshade::runtime::draw_gui()
 		colors[ImGuiCol_WindowBg] = ImVec4(r + m, g + m, b + m, 0.95f);
 		colors[ImGuiCol_ChildBg] = ImVec4(r + m + 0.02f, g + m + 0.02f, b + m + 0.02f, 0.50f);
 		colors[ImGuiCol_PopupBg] = ImVec4(r + m, g + m, b + m, 0.98f);
+		
+		// ActiveItem 색상도 같이 변화 (보색으로 대비감 있게)
+		float complement_hue = std::fmod(hue + 180.0f, 360.0f); // 정반대 색상 (보색)
+		float complement_brightness = 0.6f + std::sin(time * 0.9f) * 0.1f; // 더 밝게
+		
+		// 보색 RGB 계산
+		float cc = complement_brightness * saturation;
+		float xx = cc * (1.0f - std::abs(std::fmod(complement_hue / 60.0f, 2.0f) - 1.0f));
+		float mm = complement_brightness - cc;
+		
+		float cr, cg, cb;
+		if (complement_hue < 60.0f) { cr = cc; cg = xx; cb = 0; }
+		else if (complement_hue < 120.0f) { cr = xx; cg = cc; cb = 0; }
+		else if (complement_hue < 180.0f) { cr = 0; cg = cc; cb = xx; }
+		else if (complement_hue < 240.0f) { cr = 0; cg = xx; cb = cc; }
+		else if (complement_hue < 300.0f) { cr = xx; cg = 0; cb = cc; }
+		else { cr = cc; cg = 0; cb = xx; }
+		
+		// ActiveItem과 관련 색상들을 보색으로 설정 (배경과 대비)
+		colors[ImGuiCol_ButtonActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
+		colors[ImGuiCol_HeaderActive] = ImVec4(cr + mm, cg + mm, cb + mm, 0.8f);
+		colors[ImGuiCol_SliderGrabActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
+		colors[ImGuiCol_TabActive] = ImVec4(cr + mm, cg + mm, cb + mm, 0.9f);
+		colors[ImGuiCol_CheckMark] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
 	}
 
 #if RESHADE_LOCALIZATION
