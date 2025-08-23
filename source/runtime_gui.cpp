@@ -114,13 +114,20 @@ void reshade::runtime::init_gui()
 	imgui_io.BackendFlags = ImGuiBackendFlags_HasMouseCursors | ImGuiBackendFlags_RendererHasVtxOffset;
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
-	// Disable rounding by default
-	imgui_style.GrabRounding = 0.0f;
-	imgui_style.FrameRounding = 0.0f;
-	imgui_style.ChildRounding = 0.0f;
-	imgui_style.ScrollbarRounding = 0.0f;
-	imgui_style.WindowRounding = 0.0f;
-	imgui_style.WindowBorderSize = 0.0f;
+	// Modern rounded UI style
+	imgui_style.GrabRounding = 6.0f;        // 슬라이더 둥글게
+	imgui_style.FrameRounding = 8.0f;       // 버튼, 입력창 둥글게
+	imgui_style.ChildRounding = 10.0f;      // 자식 윈도우 둥글게
+	imgui_style.ScrollbarRounding = 6.0f;   // 스크롤바 둥글게
+	imgui_style.WindowRounding = 12.0f;     // 윈도우 둥글게
+	imgui_style.WindowBorderSize = 1.0f;    // 윈도우 테두리
+	imgui_style.TabRounding = 8.0f;         // 탭 둥글게
+	imgui_style.PopupRounding = 8.0f;       // 팝업 둥글게
+	
+	// 더 넓은 패딩으로 편안한 느낌
+	imgui_style.FramePadding = ImVec2(12.0f, 8.0f);  // 버튼 내부 패딩
+	imgui_style.ItemSpacing = ImVec2(8.0f, 6.0f);    // 요소 간 간격
+	imgui_style.WindowPadding = ImVec2(15.0f, 15.0f); // 윈도우 내부 패딩
 
 	// Restore previous context in case this was called from a new runtime being created from an add-on event triggered by an existing runtime
 	ImGui::SetCurrentContext(backup_context);
@@ -550,24 +557,24 @@ void reshade::runtime::load_custom_style()
 	case 1:
 		ImGui::StyleColorsLight(&_imgui_context->Style);
 		break;
-	case 2: // Cute Yellow Gaming Theme
-		colors[ImGuiCol_Text] = ImVec4(1.0f, 0.9f, 0.7f, 1.00f); // Warm cream text
-		colors[ImGuiCol_TextDisabled] = ImVec4(1.0f, 0.9f, 0.7f, 0.58f);
-		colors[ImGuiCol_WindowBg] = ImVec4(0.169f, 0.094f, 0.063f, 1.00f); // Dark brown background
-		colors[ImGuiCol_ChildBg] = ImVec4(0.2f, 0.12f, 0.08f, 0.00f);
+	case 2: // Clean Yellow Gaming Theme
+		colors[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.95f, 1.00f); // Clean white text
+		colors[ImGuiCol_TextDisabled] = ImVec4(0.6f, 0.6f, 0.6f, 1.00f); // Clean gray
+		colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.12f, 1.00f); // Clean dark gray background
+		colors[ImGuiCol_ChildBg] = ImVec4(0.15f, 0.15f, 0.15f, 0.00f);
 		colors[ImGuiCol_Border] = ImVec4(1.0f, 0.84f, 0.2f, 0.35f); // Golden border
-		colors[ImGuiCol_FrameBg] = ImVec4(0.25f, 0.15f, 0.1f, 1.00f); // Darker brown frame
+		colors[ImGuiCol_FrameBg] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f); // Clean dark frame
 		colors[ImGuiCol_FrameBgHovered] = ImVec4(1.0f, 0.8f, 0.2f, 0.47f); // Bright yellow hover
 		colors[ImGuiCol_FrameBgActive] = ImVec4(1.0f, 0.8f, 0.2f, 0.59f);
 		colors[ImGuiCol_TitleBg] = ImVec4(1.0f, 0.65f, 0.0f, 0.45f); // Orange title
 		colors[ImGuiCol_TitleBgCollapsed] = ImVec4(1.0f, 0.65f, 0.0f, 0.35f);
 		colors[ImGuiCol_TitleBgActive] = ImVec4(1.0f, 0.65f, 0.0f, 0.58f);
-		colors[ImGuiCol_MenuBarBg] = ImVec4(0.25f, 0.15f, 0.1f, 0.57f);
-		colors[ImGuiCol_ScrollbarBg] = ImVec4(0.25f, 0.15f, 0.1f, 1.00f);
+		colors[ImGuiCol_MenuBarBg] = ImVec4(0.16f, 0.16f, 0.16f, 0.90f);
+		colors[ImGuiCol_ScrollbarBg] = ImVec4(0.16f, 0.16f, 0.16f, 1.00f);
 		colors[ImGuiCol_ScrollbarGrab] = ImVec4(1.0f, 0.8f, 0.2f, 0.31f); // Yellow scrollbar
 		colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(1.0f, 0.8f, 0.2f, 0.78f);
 		colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(1.0f, 0.8f, 0.2f, 1.00f);
-		colors[ImGuiCol_PopupBg] = ImVec4(0.169f, 0.094f, 0.063f, 0.92f);
+		colors[ImGuiCol_PopupBg] = ImVec4(0.14f, 0.14f, 0.14f, 0.95f);
 		colors[ImGuiCol_CheckMark] = ImVec4(1.0f, 0.84f, 0.2f, 0.80f); // Golden checkmark
 		colors[ImGuiCol_SliderGrab] = ImVec4(1.0f, 0.8f, 0.2f, 0.78f);
 		colors[ImGuiCol_SliderGrabActive] = ImVec4(1.0f, 0.8f, 0.2f, 1.00f);
