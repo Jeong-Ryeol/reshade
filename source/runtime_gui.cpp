@@ -3100,22 +3100,17 @@ void reshade::runtime::draw_gui_about()
 	ImGui::TextUnformatted("이 리쉐이드는 정렬이 떙떙을 위해 제작한 커스텀 리쉐이드입니다.");
 	ImGui::TextUnformatted("다른 사항으로 궁금한게 있다면 디스코드 lovecat._.holic 로 연락주세요");
 
-	if (ImGui::CollapsingHeader("ReShade", ImGuiTreeNodeFlags_DefaultOpen))
+	if (ImGui::CollapsingHeader("오픈소스 라이센스 정보"))
 	{
-		const resoㄱrces::data_resource resource = resources::load_data_resource(IDR_LICENSE_RESHADE);
-		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
+		ImGui::TextUnformatted("이 프로그램은 여러 오픈소스 라이브러리를 사용합니다:");
+		ImGui::BulletText("ReShade - BSD-3-Clause License");
+		ImGui::BulletText("Dear ImGui - MIT License");
+		ImGui::BulletText("MinHook - BSD-2-Clause License");
+		ImGui::BulletText("기타 오픈소스 라이브러리들");
+		ImGui::Spacing();
+		ImGui::TextUnformatted("자세한 라이센스 정보는 원본 ReShade 문서를 참조하세요.");
 	}
-	if (ImGui::CollapsingHeader("MinHook"))
-	{
-		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_MINHOOK);
-		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
-	}
-	if (ImGui::CollapsingHeader("Dear ImGui"))
-	{
-		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_IMGUI);
-		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
-	}
-	if (ImGui::CollapsingHeader("ImGuiColorTextEdit"))
+	if (false) // Removed license sections
 	{
 		ImGui::TextUnformatted("Copyright (C) 2017 BalazsJako\
 \
@@ -3125,55 +3120,55 @@ The above copyright notice and this permission notice shall be included in all c
 \
 THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.");
 	}
-	if (ImGui::CollapsingHeader("gl3w"))
+	if (false) // gl3w license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_GL3W);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("UTF8-CPP"))
+	if (false) // UTF8-CPP license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_UTFCPP);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("stb_image, stb_image_write"))
+	if (false) // stb_image license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_STB);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("DDS loading from SOIL"))
+	if (false) // SOIL license
 	{
 		ImGui::TextUnformatted("Jonathan \"lonesock\" Dummer");
 	}
-	if (ImGui::CollapsingHeader("fpng"))
+	if (false) // fpng license
 	{
 		ImGui::TextUnformatted("Public Domain (https://github.com/richgel999/fpng)");
 	}
-	if (ImGui::CollapsingHeader("SPIR-V"))
+	if (false) // SPIR-V license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_SPIRV);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("Vulkan & Vulkan-Loader"))
+	if (false) // Vulkan license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_VULKAN);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("Vulkan Memory Allocator"))
+	if (false) // VMA license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_VMA);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("OpenVR"))
+	if (false) // OpenVR license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_OPENVR);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("OpenXR"))
+	if (false) // OpenXR license
 	{
 		const resources::data_resource resource = resources::load_data_resource(IDR_LICENSE_OPENXR);
 		ImGui::TextUnformatted(static_cast<const char *>(resource.data), static_cast<const char *>(resource.data) + resource.data_size);
 	}
-	if (ImGui::CollapsingHeader("Solarized"))
+	if (false) // Solarized license
 	{
 		ImGui::TextUnformatted("Copyright (C) 2011 Ethan Schoonover\
 \
@@ -3183,7 +3178,7 @@ The above copyright notice and this permission notice shall be included in all c
 \
 THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.");
 	}
-	if (ImGui::CollapsingHeader("Fork Awesome"))
+	if (false) // Fork Awesome license
 	{
 		ImGui::TextUnformatted("Copyright (C) 2018 Fork Awesome (https://forkawesome.github.io)\
 \
