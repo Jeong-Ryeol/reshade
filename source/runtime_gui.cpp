@@ -1166,7 +1166,7 @@ void reshade::runtime::draw_gui()
 		colors[ImGuiCol_ButtonActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
 		colors[ImGuiCol_HeaderActive] = ImVec4(cr + mm, cg + mm, cb + mm, 0.8f);
 		colors[ImGuiCol_SliderGrabActive] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
-		colors[ImGuiCol_TabActive] = ImVec4(cr + mm, cg + mm, cb + mm, 0.9f);
+		colors[ImGuiCol_TabSelected] = ImVec4(cr + mm, cg + mm, cb + mm, 0.9f);
 		colors[ImGuiCol_CheckMark] = ImVec4(cr + mm, cg + mm, cb + mm, 1.0f);
 	}
 
