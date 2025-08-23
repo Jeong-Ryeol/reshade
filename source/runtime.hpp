@@ -432,6 +432,7 @@ namespace reshade
 		unsigned int _show_preset_name = false;
 		bool _show_screenshot_message = true;
 		bool _show_preset_transition_message = true;
+		bool _show_gradient_background = false;
 		unsigned int _reload_count = 0;
 
 		bool _is_font_scaling = false;

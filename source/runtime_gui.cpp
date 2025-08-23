@@ -389,6 +389,7 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ShowFrameTime", _show_frametime);
 	config.get("OVERLAY", "ShowPresetName", _show_preset_name);
 	config.get("OVERLAY", "ShowScreenshotMessage", _show_screenshot_message);
+	config.get("OVERLAY", "ShowGradientBackground", _show_gradient_background);
 	if (!global_config().get("OVERLAY", "TutorialProgress", _tutorial_index))
 		config.get("OVERLAY", "TutorialProgress", _tutorial_index);
 	config.get("OVERLAY", "VariableListHeight", _variable_editor_height);
@@ -489,6 +490,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "ShowFrameTime", _show_frametime);
 	config.set("OVERLAY", "ShowPresetName", _show_preset_name);
 	config.set("OVERLAY", "ShowScreenshotMessage", _show_screenshot_message);
+	config.set("OVERLAY", "ShowGradientBackground", _show_gradient_background);
 	global_config().set("OVERLAY", "TutorialProgress", _tutorial_index);
 	config.set("OVERLAY", "TutorialProgress", _tutorial_index);
 	config.set("OVERLAY", "VariableListHeight", _variable_editor_height);
@@ -1108,6 +1110,38 @@ void reshade::runtime::draw_gui()
 	}
 
 	ImGui::NewFrame();
+
+	// 그라데이션 배경 렌더링 (오버레이가 활성화되고 옵션이 켜진 경우)
+	if (_show_overlay && _show_gradient_background)
+	{
+		// 시간 기반 애니메이션을 위한 시간 계산
+		static auto start_time = std::chrono::high_resolution_clock::now();
+		auto current_time = std::chrono::high_resolution_clock::now();
+		float time = std::chrono::duration<float>(current_time - start_time).count();
+		
+		// 그라데이션 색상 계산 (황금색 게이밍 테마로 부드럽게 변화)
+		ImVec4 gradient_top = ImVec4(
+			0.05f + std::sin(time * 0.3f) * 0.02f,        // R: 어두운 빨강
+			0.05f + std::sin(time * 0.3f + 1.0f) * 0.02f, // G: 어두운 초록  
+			0.08f + std::sin(time * 0.3f + 2.0f) * 0.02f, // B: 약간의 파랑
+			0.8f);
+		ImVec4 gradient_bottom = ImVec4(
+			0.12f + std::sin(time * 0.2f) * 0.03f,        // R: 황금색 베이스
+			0.10f + std::sin(time * 0.2f + 0.5f) * 0.03f, // G: 황금색
+			0.02f + std::sin(time * 0.2f + 1.0f) * 0.01f, // B: 최소 파랑
+			0.8f);
+		
+		// 전체 화면에 그라데이션 배경 그리기
+		ImDrawList* background_draw_list = ImGui::GetBackgroundDrawList();
+		background_draw_list->AddRectFilledMultiColor(
+			ImVec2(0, 0),
+			ImVec2(imgui_io.DisplaySize.x, imgui_io.DisplaySize.y),
+			ImGui::ColorConvertFloat4ToU32(gradient_top),      // 왼쪽 위
+			ImGui::ColorConvertFloat4ToU32(gradient_top),      // 오른쪽 위  
+			ImGui::ColorConvertFloat4ToU32(gradient_bottom),   // 오른쪽 아래
+			ImGui::ColorConvertFloat4ToU32(gradient_bottom)    // 왼쪽 아래
+		);
+	}
 
 #if RESHADE_LOCALIZATION
 	const std::string prev_language = resources::set_current_language(_selected_language);
@@ -2327,6 +2361,9 @@ void reshade::runtime::draw_gui_settings()
 			_tutorial_index = 0;
 
 		modified |= ImGui::Checkbox(_("Show screenshot message"), &_show_screenshot_message);
+
+		modified |= ImGui::Checkbox("그라데이션 배경", &_show_gradient_background);
+		ImGui::SetItemTooltip("오버레이가 활성화됐을 때 움직이는 그라데이션 배경을 표시합니다");
 
 		ImGui::BeginDisabled(_preset_transition_duration == 0);
 		modified |= ImGui::Checkbox(_("Show preset transition message"), &_show_preset_transition_message);
