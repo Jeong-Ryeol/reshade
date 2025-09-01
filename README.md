@@ -4,7 +4,7 @@
 원본: crosire/reshade (BSD-3-Clause)
 
 ## 내가 한 핵심 변경점
-## 📌 Changelog
+## Changelog
 - [CHANGELOG.md](./CHANGELOG.md) 에서 확인할 수 있습니다.
   
 - **한국어 로컬라이징 & 온보딩 메시지 커스텀**
