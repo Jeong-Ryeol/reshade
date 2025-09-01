@@ -1,5 +1,9 @@
 # JeongRyeol's Custom ReShade (Fork)
 
+
+https://github.com/user-attachments/assets/54d8682e-a43a-47b9-9f46-0fc3c3b889dd
+
+
 이 저장소는 공식 ReShade(후처리 인젝터)를 포크하여 **UI/사용자 경험(UX) 개선**과 **로컬 환경에 특화된 기능**을 실험/적용한 브랜치들을 모은 것입니다.  
 원본: crosire/reshade (BSD-3-Clause)
 
