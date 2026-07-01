@@ -14,6 +14,7 @@
 #include "addon_manager.hpp"
 #include "input.hpp"
 #include "imgui_widgets.hpp"
+#include "cutie_ui.hpp"
 #include "localization.hpp"
 #include "platform_utils.hpp"
 #include "fonts/forkawesome.inl"
@@ -1030,6 +1031,8 @@ void reshade::runtime::draw_gui()
 	}
 
 	ImGui::NewFrame();
+
+	reshade::cutie::apply_style(_imgui_context->Style, reshade::cutie::g_cutie_theme);
 
 	// Reset input source to mouse when the cursor is moved
 	if (_input != nullptr && (_input->mouse_movement_delta_x() != 0 || _input->mouse_movement_delta_y() != 0))
