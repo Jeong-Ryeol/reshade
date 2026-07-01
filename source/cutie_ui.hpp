@@ -12,4 +12,7 @@ namespace reshade::cutie
 	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec);
 	// base 색상의 색조(hue)를 hue_deg만큼 회전시킨다 (rainbow 애니메이션용).
 	ImU32 hsv_shift(const ImVec4 &base, float hue_deg);
+
+	// 테마색 반짝이 파티클을 아래에서 위로 떠오르게 그린다.
+	void draw_sparkles(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec);
 }

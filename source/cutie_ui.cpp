@@ -81,4 +81,33 @@ namespace reshade::cutie
 			dl->AddRectFilledMultiColor(min, max, ca, cb, cb, ca);
 		}
 	}
+
+	// 시드 기반 해시(랜덤 대체, 프레임 간 안정)
+	static float hash01(int i, int salt)
+	{
+		unsigned int x = static_cast<unsigned int>(i * 374761393 + salt * 668265263);
+		x = (x ^ (x >> 13)) * 1274126177u;
+		return static_cast<float>((x ^ (x >> 16)) & 0xFFFFFF) / static_cast<float>(0xFFFFFF);
+	}
+
+	void draw_sparkles(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec)
+	{
+		const float w = max.x - min.x, h = max.y - min.y;
+		if (w <= 0.0f || h <= 0.0f)
+			return;
+
+		for (int i = 0; i < t.particle_count; ++i)
+		{
+			const float px   = min.x + hash01(i, 1) * w;
+			const float phase = hash01(i, 2);
+			// 아래->위로 이동, wrap
+			float y = h - fmodf((time_sec * t.particle_speed) * (0.6f + phase) + phase * h, h);
+			const float py = min.y + y;
+			// 반짝임(알파 진동)
+			const float tw = 0.5f + 0.5f * sinf(time_sec * 3.0f + phase * 6.28318f);
+			ImVec4 col = t.particle_color; col.w *= tw;
+			dl->AddText(nullptr, 14.0f + hash01(i, 3) * 8.0f, ImVec2(px, py),
+				ImGui::ColorConvertFloat4ToU32(col), t.particle_glyph);
+		}
+	}
 }

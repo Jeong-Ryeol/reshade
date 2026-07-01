@@ -1380,6 +1380,7 @@ void reshade::runtime::draw_gui()
 			const ImVec2 wmax = ImVec2(wmin.x + ImGui::GetWindowSize().x, wmin.y + ImGui::GetWindowSize().y);
 			const float t_sec = static_cast<float>(ImGui::GetTime());
 			reshade::cutie::draw_background(dl, wmin, wmax, reshade::cutie::g_cutie_theme, t_sec);
+			reshade::cutie::draw_sparkles(dl, wmin, wmax, reshade::cutie::g_cutie_theme, t_sec);
 		}
 		ImGui::DockSpace(root_space_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
 		ImGui::End();
