@@ -15,6 +15,7 @@
 #include "input.hpp"
 #include "imgui_widgets.hpp"
 #include "cutie_ui.hpp"
+#include "cutie_fonts.h"
 #include "localization.hpp"
 #include "platform_utils.hpp"
 #include "fonts/forkawesome.inl"
@@ -103,6 +104,7 @@ static std::string_view get_localized_annotation(T &object, const std::string_vi
 
 static const ImVec4 COLOR_RED = ImColor(240, 100, 100);
 static const ImVec4 COLOR_YELLOW = ImColor(204, 204, 0);
+static ImFont *s_cutie_title_font = nullptr;
 
 void reshade::runtime::init_gui()
 {
@@ -243,30 +245,19 @@ void reshade::runtime::build_font_atlas()
 	ImFontConfig cfg;
 	std::filesystem::path resolved_font_path;
 
-#if RESHADE_LOCALIZATION
-	// Add latin font
-	resolved_font_path = _latin_font_path;
-	if (!_default_font_path.empty())
+	// Cutie: use embedded Jua as the primary UI font (covers Latin + Korean)
+	cfg.MergeMode = false;
+	cfg.PixelSnapH = true;
+	atlas->AddFontFromMemoryCompressedTTF(CUTIE_JUA_compressed_data, CUTIE_JUA_compressed_size, 0.0f, &cfg);
+
+	// Merge icon font into the main font
+	cfg.MergeMode = true;
+	atlas->AddFontFromMemoryCompressedBase85TTF(FONT_ICON_BUFFER_NAME_FK, 0.0f, &cfg);
+
+	// Cutie: embedded Gaegu title font for big headings (separate font)
 	{
-		if (!add_font_from_file(resolved_font_path, &cfg, ec))
-			log::message(log::level::error, "Failed to load latin font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
-
-		cfg.MergeMode = true;
-		cfg.PixelSnapH = true;
-	}
-#endif
-
-	// Add main font
-	resolved_font_path = _font_path.empty() ? _default_font_path : _font_path;
-	{
-		if (!add_font_from_file(resolved_font_path, &cfg, ec))
-			log::message(log::level::error, "Failed to load font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
-
-		// Merge icons into main font
-		cfg.MergeMode = true;
-		cfg.PixelSnapH = true;
-
-		atlas->AddFontFromMemoryCompressedBase85TTF(FONT_ICON_BUFFER_NAME_FK, 0.0f, &cfg);
+		ImFontConfig tcfg;
+		s_cutie_title_font = atlas->AddFontFromMemoryCompressedTTF(CUTIE_GAEGU_compressed_data, CUTIE_GAEGU_compressed_size, 0.0f, &tcfg);
 	}
 
 	// Add editor font

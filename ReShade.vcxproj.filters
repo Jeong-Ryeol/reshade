@@ -512,6 +512,9 @@
     <ClInclude Include="source\com_utils.hpp">
       <Filter>core\utils</Filter>
     </ClInclude>
+    <ClInclude Include="source\cutie_fonts.h">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\cutie_theme.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>

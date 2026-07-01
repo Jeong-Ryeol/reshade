@@ -697,6 +697,7 @@
     <ClInclude Include="source\addon_manager.hpp" />
     <ClInclude Include="source\com_ptr.hpp" />
     <ClInclude Include="source\com_utils.hpp" />
+    <ClInclude Include="source\cutie_fonts.h" />
     <ClInclude Include="source\cutie_theme.hpp" />
     <ClInclude Include="source\cutie_ui.hpp" />
     <ClInclude Include="source\d3d10\d3d10_device.hpp" />
