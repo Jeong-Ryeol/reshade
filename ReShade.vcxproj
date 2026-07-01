@@ -537,6 +537,8 @@
     </ClCompile>
     <ClCompile Include="source\addon.cpp" />
     <ClCompile Include="source\addon_manager.cpp" />
+    <ClCompile Include="source\cutie_theme.cpp" />
+    <ClCompile Include="source\cutie_ui.cpp" />
     <ClCompile Include="source\d2d1\d2d1.cpp" />
     <ClCompile Include="source\d3d10\d3d10.cpp" />
     <ClCompile Include="source\d3d10\d3d10_device.cpp" />
@@ -695,6 +697,8 @@
     <ClInclude Include="source\addon_manager.hpp" />
     <ClInclude Include="source\com_ptr.hpp" />
     <ClInclude Include="source\com_utils.hpp" />
+    <ClInclude Include="source\cutie_theme.hpp" />
+    <ClInclude Include="source\cutie_ui.hpp" />
     <ClInclude Include="source\d3d10\d3d10_device.hpp" />
     <ClInclude Include="source\d3d10\d3d10_impl_device.hpp" />
     <ClInclude Include="source\d3d10\d3d10_impl_state_block.hpp" />

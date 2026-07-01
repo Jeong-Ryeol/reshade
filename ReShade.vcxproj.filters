@@ -96,6 +96,12 @@
     <ClCompile Include="source\addon_manager.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\cutie_theme.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
+    <ClCompile Include="source\cutie_ui.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\d2d1\d2d1.cpp">
       <Filter>hooks\d2d1</Filter>
     </ClCompile>
@@ -505,6 +511,12 @@
     </ClInclude>
     <ClInclude Include="source\com_utils.hpp">
       <Filter>core\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="source\cutie_theme.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\cutie_ui.hpp">
+      <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\d3d10\d3d10_device.hpp">
       <Filter>hooks\d3d10</Filter>
