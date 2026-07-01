@@ -1054,12 +1054,28 @@ void reshade::runtime::draw_gui()
 			ImGuiWindowFlags_NoDocking |
 			ImGuiWindowFlags_NoFocusOnAppearing);
 
+		{
+			const reshade::cutie::CutieTheme &ct = reshade::cutie::g_cutie_theme;
+			ImDrawList *const sdl = ImGui::GetWindowDrawList();
+			const ImVec2 smin = ImGui::GetWindowPos();
+			const ImVec2 smax = ImVec2(smin.x + ImGui::GetWindowSize().x, smin.y + ImGui::GetWindowSize().y);
+			const float sts = static_cast<float>(ImGui::GetTime());
+			reshade::cutie::draw_background(sdl, smin, smax, ct, sts);
+			reshade::cutie::draw_sparkles(sdl, smin, smax, ct, sts);
+		}
+
 		if (show_spinner)
 		{
 			imgui::spinner((_effects.size() - _reload_remaining_effects) / float(_effects.size()), 16.0f * ImGui::GetFontSize() / 13, 10.0f * ImGui::GetFontSize() / 13);
 		}
 		else
 		{
+			if (s_cutie_title_font != nullptr)
+				ImGui::PushFont(s_cutie_title_font, 26.0f);
+			ImGui::Text(u8"%s님을 위한 리쉐이드 ✨", reshade::cutie::g_cutie_theme.recipient_name);
+			if (s_cutie_title_font != nullptr)
+				ImGui::PopFont();
+			ImGui::Spacing();
 			ImGui::TextUnformatted("ReShade " VERSION_STRING_PRODUCT);
 
 			if ((s_latest_version[0] > VERSION_MAJOR) ||
