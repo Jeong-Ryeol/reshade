@@ -1,4 +1,5 @@
 #include "cutie_ui.hpp"
+#include <cmath> // fmodf
 
 namespace reshade::cutie
 {
@@ -48,5 +49,33 @@ namespace reshade::cutie
 		c[ImGuiCol_Separator]            = t.border;
 		c[ImGuiCol_SeparatorHovered]     = t.accent_hover;
 		c[ImGuiCol_SeparatorActive]      = t.accent_active;
+	}
+
+	ImU32 hsv_shift(const ImVec4 &base, float hue_deg)
+	{
+		float h, s, v;
+		ImGui::ColorConvertRGBtoHSV(base.x, base.y, base.z, h, s, v);
+		h = fmodf(h + hue_deg / 360.0f, 1.0f);
+		float r, g, b;
+		ImGui::ColorConvertHSVtoRGB(h, s, v, r, g, b);
+		return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, base.w));
+	}
+
+	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec)
+	{
+		ImVec4 a = t.bg_stop_a, b = t.bg_stop_b;
+		if (t.bg_animated)
+		{
+			const float hue = t.bg_anim_speed * time_sec;
+			const ImU32 ca = hsv_shift(a, hue);
+			const ImU32 cb = hsv_shift(b, hue + 40.0f);
+			dl->AddRectFilledMultiColor(min, max, ca, cb, cb, ca);
+		}
+		else
+		{
+			const ImU32 ca = ImGui::ColorConvertFloat4ToU32(a);
+			const ImU32 cb = ImGui::ColorConvertFloat4ToU32(b);
+			dl->AddRectFilledMultiColor(min, max, ca, cb, cb, ca);
+		}
 	}
 }
