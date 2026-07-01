@@ -3207,10 +3207,10 @@ void reshade::runtime::draw_gui_about()
 		ImGui::Spacing();
 	}
 
-	ImGui::TextUnformatted("ReShade " VERSION_STRING_PRODUCT);
+	ImGui::TextUnformatted(u8"정렬 커스텀 리쉐이드 디스코드 주소");
 
-	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("https://reshade.me").x, ImGui::GetStyle().ItemSpacing.x);
-	ImGui::TextLinkOpenURL("https://reshade.me");
+	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("https://discord.gg/5NGR7XVFta").x, ImGui::GetStyle().ItemSpacing.x);
+	ImGui::TextLinkOpenURL("https://discord.gg/5NGR7XVFta", "https://discord.gg/5NGR7XVFta");
 
 	ImGui::Separator();
 
