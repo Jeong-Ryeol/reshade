@@ -1535,6 +1535,27 @@ void reshade::runtime::draw_gui()
 
 void reshade::runtime::draw_gui_home()
 {
+	{
+		const reshade::cutie::CutieTheme &ct = reshade::cutie::g_cutie_theme;
+		const float pulse = 0.5f + 0.5f * sinf(static_cast<float>(ImGui::GetTime()) * 2.5f);
+
+		if (s_cutie_title_font != nullptr)
+			ImGui::PushFont(s_cutie_title_font, 40.0f);
+		// Draw the glow behind the title first (draw list is painted in order), then the text on top
+		const ImVec2 title_pos = ImGui::GetCursorScreenPos();
+		const ImVec2 title_size = ImGui::CalcTextSize(u8"안녕! ✨");
+		reshade::cutie::draw_glow(ImGui::GetWindowDrawList(), title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_size.y), ct, pulse);
+		ImGui::TextUnformatted(u8"안녕! ✨");
+		if (s_cutie_title_font != nullptr)
+			ImGui::PopFont();
+
+		ImGui::PushStyleColor(ImGuiCol_Text, ct.text_dim);
+		ImGui::TextUnformatted(ct.name);
+		ImGui::PopStyleColor();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+
 	std::string tutorial_text;
 
 	// It is not possible to follow some of the tutorial steps while performance mode is active, so skip them
