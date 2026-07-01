@@ -3134,6 +3134,28 @@ void reshade::runtime::draw_gui_log()
 }
 void reshade::runtime::draw_gui_about()
 {
+	{
+		const reshade::cutie::CutieTheme &ct = reshade::cutie::g_cutie_theme;
+		if (s_cutie_title_font != nullptr)
+			ImGui::PushFont(s_cutie_title_font, 32.0f);
+		ImGui::TextUnformatted(u8"정렬 커스텀 리쉐이드");
+		if (s_cutie_title_font != nullptr)
+			ImGui::PopFont();
+
+		ImGui::Spacing();
+		ImGui::PushTextWrapPos();
+		ImGui::TextWrapped(u8"이 리쉐이드는 %s이 %s를 위해 제작한 커스텀 리쉐이드입니다.", ct.maker_name, ct.recipient_name);
+		if (ct.about_message != nullptr)
+			ImGui::TextWrapped("%s", ct.about_message);
+		ImGui::Spacing();
+		ImGui::TextWrapped(u8"궁금한 점은 디스코드 %s 로 연락주세요", ct.discord_handle);
+		ImGui::PopTextWrapPos();
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+
 	ImGui::TextUnformatted("ReShade " VERSION_STRING_PRODUCT);
 
 	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("https://reshade.me").x, ImGui::GetStyle().ItemSpacing.x);
