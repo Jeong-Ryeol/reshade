@@ -15,4 +15,7 @@ namespace reshade::cutie
 
 	// 테마색 반짝이 파티클을 아래에서 위로 떠오르게 그린다.
 	void draw_sparkles(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec);
+
+	// 액티브/호버 요소 뒤 소프트 글로우를 그린다.
+	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float pulse);
 }

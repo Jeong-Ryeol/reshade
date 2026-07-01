@@ -110,4 +110,19 @@ namespace reshade::cutie
 				ImGui::ColorConvertFloat4ToU32(col), t.particle_glyph);
 		}
 	}
+
+	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float pulse)
+	{
+		const int layers = 5;
+		for (int i = layers; i >= 1; --i)
+		{
+			const float spread = static_cast<float>(i) * 3.0f;
+			ImVec4 col = t.glow;
+			col.w = t.glow_intensity * (0.12f * pulse) / static_cast<float>(i);
+			dl->AddRectFilled(
+				ImVec2(min.x - spread, min.y - spread),
+				ImVec2(max.x + spread, max.y + spread),
+				ImGui::ColorConvertFloat4ToU32(col), t.rounding + spread);
+		}
+	}
 }
