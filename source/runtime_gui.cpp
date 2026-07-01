@@ -1573,7 +1573,9 @@ void reshade::runtime::draw_gui_home()
 			const char *const bg_label = u8"배경";
 			const float cb_w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(bg_label).x;
 			ImGui::SameLine();
-			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - cb_w - ImGui::GetStyle().WindowPadding.x);
+			const float avail = ImGui::GetContentRegionAvail().x;
+			if (avail > cb_w)
+				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - cb_w));
 			ImGui::Checkbox(bg_label, &s_cutie_bg_enabled);
 		}
 
