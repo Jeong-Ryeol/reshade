@@ -85,7 +85,7 @@ namespace reshade::cutie
 	// 시드 기반 해시(랜덤 대체, 프레임 간 안정)
 	static float hash01(int i, int salt)
 	{
-		unsigned int x = static_cast<unsigned int>(i * 374761393 + salt * 668265263);
+		unsigned int x = static_cast<unsigned int>(i) * 374761393u + static_cast<unsigned int>(salt) * 668265263u;
 		x = (x ^ (x >> 13)) * 1274126177u;
 		return static_cast<float>((x ^ (x >> 16)) & 0xFFFFFF) / static_cast<float>(0xFFFFFF);
 	}
@@ -106,8 +106,12 @@ namespace reshade::cutie
 			// 반짝임(알파 진동)
 			const float tw = 0.5f + 0.5f * sinf(time_sec * 3.0f + phase * 6.28318f);
 			ImVec4 col = t.particle_color; col.w *= tw;
-			dl->AddText(nullptr, 14.0f + hash01(i, 3) * 8.0f, ImVec2(px, py),
-				ImGui::ColorConvertFloat4ToU32(col), t.particle_glyph);
+			const float s = 4.0f + hash01(i, 3) * 4.0f;          // sparkle radius
+			const float thin = s * 0.28f;
+			const ImU32 cu = ImGui::ColorConvertFloat4ToU32(col);
+			// 4-point star = two crossed thin diamonds (no font glyph needed)
+			dl->AddQuadFilled(ImVec2(px, py - s), ImVec2(px + thin, py), ImVec2(px, py + s), ImVec2(px - thin, py), cu);
+			dl->AddQuadFilled(ImVec2(px - s, py), ImVec2(px, py - thin), ImVec2(px + s, py), ImVec2(px, py + thin), cu);
 		}
 	}
 

@@ -1072,7 +1072,7 @@ void reshade::runtime::draw_gui()
 		{
 			if (s_cutie_title_font != nullptr)
 				ImGui::PushFont(s_cutie_title_font, 26.0f);
-			ImGui::Text(u8"%s님을 위한 리쉐이드 ✨", reshade::cutie::g_cutie_theme.recipient_name);
+			ImGui::Text(u8"%s님을 위한 리쉐이드", reshade::cutie::g_cutie_theme.recipient_name);
 			if (s_cutie_title_font != nullptr)
 				ImGui::PopFont();
 			ImGui::Spacing();
@@ -1559,9 +1559,9 @@ void reshade::runtime::draw_gui_home()
 			ImGui::PushFont(s_cutie_title_font, 40.0f);
 		// Draw the glow behind the title first (draw list is painted in order), then the text on top
 		const ImVec2 title_pos = ImGui::GetCursorScreenPos();
-		const ImVec2 title_size = ImGui::CalcTextSize(u8"안녕! ✨");
+		const ImVec2 title_size = ImGui::CalcTextSize(u8"안녕!");
 		reshade::cutie::draw_glow(ImGui::GetWindowDrawList(), title_pos, ImVec2(title_pos.x + title_size.x, title_pos.y + title_size.y), ct, pulse);
-		ImGui::TextUnformatted(u8"안녕! ✨");
+		ImGui::TextUnformatted(u8"안녕!");
 		if (s_cutie_title_font != nullptr)
 			ImGui::PopFont();
 
