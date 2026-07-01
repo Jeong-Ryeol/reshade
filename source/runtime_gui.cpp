@@ -3202,7 +3202,7 @@ void reshade::runtime::draw_gui_about()
 
 	ImGui::PushTextWrapPos();
 
-	ImGui::TextUnformatted(_("Developed and maintained by crosire."));
+	ImGui::TextUnformatted(u8"정렬이 개발 및 유지관리했습니다.");
 	ImGui::TextUnformatted(_("This project makes use of several open source libraries, licenses of which are listed below:"));
 
 	if (ImGui::CollapsingHeader("ReShade", ImGuiTreeNodeFlags_DefaultOpen))
