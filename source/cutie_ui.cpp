@@ -63,7 +63,10 @@ namespace reshade::cutie
 
 	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const CutieTheme &t, float time_sec)
 	{
+		constexpr float TINT_ALPHA = 0.25f;
 		ImVec4 a = t.bg_stop_a, b = t.bg_stop_b;
+		a.w *= TINT_ALPHA;
+		b.w *= TINT_ALPHA;
 		if (t.bg_animated)
 		{
 			const float hue = t.bg_anim_speed * time_sec;
