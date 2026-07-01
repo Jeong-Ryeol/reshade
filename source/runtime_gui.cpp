@@ -105,6 +105,7 @@ static std::string_view get_localized_annotation(T &object, const std::string_vi
 static const ImVec4 COLOR_RED = ImColor(240, 100, 100);
 static const ImVec4 COLOR_YELLOW = ImColor(204, 204, 0);
 static ImFont *s_cutie_title_font = nullptr;
+static bool s_cutie_bg_enabled = true; // toggles the cutie gradient background (Home checkbox)
 
 void reshade::runtime::init_gui()
 {
@@ -1060,7 +1061,8 @@ void reshade::runtime::draw_gui()
 			const ImVec2 smin = ImGui::GetWindowPos();
 			const ImVec2 smax = ImVec2(smin.x + ImGui::GetWindowSize().x, smin.y + ImGui::GetWindowSize().y);
 			const float sts = static_cast<float>(ImGui::GetTime());
-			reshade::cutie::draw_background(sdl, smin, smax, ct, sts);
+			if (s_cutie_bg_enabled)
+				reshade::cutie::draw_background(sdl, smin, smax, ct, sts);
 			reshade::cutie::draw_sparkles(sdl, smin, smax, ct, sts);
 		}
 
@@ -1386,7 +1388,8 @@ void reshade::runtime::draw_gui()
 			const ImVec2 wmin = ImGui::GetWindowPos();
 			const ImVec2 wmax = ImVec2(wmin.x + ImGui::GetWindowSize().x, wmin.y + ImGui::GetWindowSize().y);
 			const float t_sec = static_cast<float>(ImGui::GetTime());
-			reshade::cutie::draw_background(dl, wmin, wmax, reshade::cutie::g_cutie_theme, t_sec);
+			if (s_cutie_bg_enabled)
+				reshade::cutie::draw_background(dl, wmin, wmax, reshade::cutie::g_cutie_theme, t_sec);
 			reshade::cutie::draw_sparkles(dl, wmin, wmax, reshade::cutie::g_cutie_theme, t_sec);
 		}
 		ImGui::DockSpace(root_space_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
@@ -1564,6 +1567,15 @@ void reshade::runtime::draw_gui_home()
 		ImGui::TextUnformatted(u8"안녕!");
 		if (s_cutie_title_font != nullptr)
 			ImGui::PopFont();
+
+		// 배경 on/off toggle, right-aligned on the title line
+		{
+			const char *const bg_label = u8"배경";
+			const float cb_w = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(bg_label).x;
+			ImGui::SameLine();
+			ImGui::SetCursorPosX(ImGui::GetWindowWidth() - cb_w - ImGui::GetStyle().WindowPadding.x);
+			ImGui::Checkbox(bg_label, &s_cutie_bg_enabled);
+		}
 
 		ImGui::PushStyleColor(ImGuiCol_Text, ct.text_dim);
 		ImGui::TextUnformatted(ct.name);
