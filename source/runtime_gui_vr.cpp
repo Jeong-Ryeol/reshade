@@ -12,7 +12,10 @@
 #include "imgui_widgets.hpp"
 #include "localization.hpp"
 #include "addon_manager.hpp"
+#include "sherbet_theme.hpp"
+#include "sherbet_owner.h"
 #include "vulkan/vulkan_impl_device.hpp"
+#include <cstdio>
 #include <openvr.h>
 #include <stb_image.h>
 
@@ -42,7 +45,13 @@ bool reshade::runtime::init_gui_vr()
 		return true; // Do not prevent effect runtime from initializing
 	}
 
-	const vr::EVROverlayError overlay_e = vr::VROverlay()->CreateDashboardOverlay("reshade", "ReShade " VERSION_STRING_PRODUCT, &s_vr_overlay_handle, &s_vr_thumbnail_handle);
+	char sherbet_vr_title[128];
+	if (sherbet::has_owner())
+		snprintf(sherbet_vr_title, sizeof(sherbet_vr_title), "Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", sherbet::default_theme().display_name, SHERBET_OWNER);
+	else
+		snprintf(sherbet_vr_title, sizeof(sherbet_vr_title), "Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", sherbet::default_theme().display_name);
+
+	const vr::EVROverlayError overlay_e = vr::VROverlay()->CreateDashboardOverlay("reshade", sherbet_vr_title, &s_vr_overlay_handle, &s_vr_thumbnail_handle);
 	if (overlay_e != vr::VROverlayError_None)
 	{
 		log::message(log::level::error, "Failed to create VR dashboard overlay with error code %d!", static_cast<int>(overlay_e));

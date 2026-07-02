@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 정렬 (Jeong-Ryeol)
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "sherbet_theme.hpp"
 #include "sherbet_owner.h"
 #include <cstring>

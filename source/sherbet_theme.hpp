@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 정렬 (Jeong-Ryeol)
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #pragma once
 
 #include <cstddef>
