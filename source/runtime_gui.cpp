@@ -1246,18 +1246,23 @@ void reshade::runtime::draw_gui()
 		fps_window_pos.y = _sherbet_osd_y * ImMax(0.0f, imgui_io.DisplaySize.y - fps_window_size.y);
 		const bool osd_align_right = _sherbet_osd_x > 0.5f;
 
-		ImGui::SetNextWindowPos(fps_window_pos);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(_fps_col[0], _fps_col[1], _fps_col[2], _fps_col[3]));
-		ImGui::Begin("OSD", nullptr,
+		ImGuiWindowFlags osd_flags =
 			ImGuiWindowFlags_NoDecoration |
 			ImGuiWindowFlags_NoNav |
-			ImGuiWindowFlags_NoMove |
-			ImGuiWindowFlags_NoInputs |
 			ImGuiWindowFlags_NoSavedSettings |
 			ImGuiWindowFlags_NoDocking |
 			ImGuiWindowFlags_NoFocusOnAppearing |
 			ImGuiWindowFlags_NoBackground |
-			ImGuiWindowFlags_AlwaysAutoResize);
+			ImGuiWindowFlags_AlwaysAutoResize;
+		if (!_show_overlay)
+			osd_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+		// 오버레이 열림 시엔 SetNextWindowPos를 강제하지 않아 사용자가 드래그로 옮길 수 있게 함
+		if (!_show_overlay)
+			ImGui::SetNextWindowPos(fps_window_pos);
+		else
+			ImGui::SetNextWindowPos(fps_window_pos, ImGuiCond_Appearing);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(_fps_col[0], _fps_col[1], _fps_col[2], _fps_col[3]));
+		ImGui::Begin("OSD", nullptr, osd_flags);
 
 		ImGui::PushFont(nullptr, _imgui_context->Style.FontSizeBase * _fps_scale);
 
@@ -1312,6 +1317,22 @@ void reshade::runtime::draw_gui()
 		ImGui::Dummy(ImVec2(200, 0)); // Force a minimum window width
 
 		ImGui::PopFont();
+
+		if (_show_overlay)
+		{
+			const ImVec2 wp = ImGui::GetWindowPos();
+			const ImVec2 ws = ImGui::GetWindowSize();
+			const float nx = (imgui_io.DisplaySize.x - ws.x) > 1.0f ? wp.x / (imgui_io.DisplaySize.x - ws.x) : 0.0f;
+			const float ny = (imgui_io.DisplaySize.y - ws.y) > 1.0f ? wp.y / (imgui_io.DisplaySize.y - ws.y) : 0.0f;
+			const float cnx = ImClamp(nx, 0.0f, 1.0f);
+			const float cny = ImClamp(ny, 0.0f, 1.0f);
+			if (fabsf(cnx - _sherbet_osd_x) > 0.001f || fabsf(cny - _sherbet_osd_y) > 0.001f)
+			{
+				_sherbet_osd_x = cnx;
+				_sherbet_osd_y = cny;
+				save_config();
+			}
+		}
 
 		ImGui::End();
 		ImGui::PopStyleColor();
