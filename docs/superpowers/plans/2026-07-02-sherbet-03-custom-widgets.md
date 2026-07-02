@@ -38,20 +38,16 @@
 ```cpp
 	bool toggle(const char *label, bool *v)
 	{
-		ImGuiWindow *window = ImGui::GetCurrentWindow();
-		if (window->SkipItems)
-			return false;
-
 		const theme &t = default_theme();
 		const float height = ImGui::GetFrameHeight() * 0.78f;
 		const float width = height * 1.85f;
 		const float radius = height * 0.5f;
 		const ImVec2 p = ImGui::GetCursorScreenPos();
-		ImGuiContext &g = *ImGui::GetCurrentContext();
+		const ImGuiStyle &style = ImGui::GetStyle();
 		const float label_w = (label && label[0] != '\0' && label[0] != '#') ? ImGui::CalcTextSize(label, NULL, true).x : 0.0f;
 
-		ImGui::InvisibleButton(label, ImVec2(width + (label_w > 0 ? g.Style.ItemInnerSpacing.x + label_w : 0.0f), height));
-		const bool clicked = ImGui::IsItemClicked();
+		// InvisibleButton은 SkipItems를 내부 처리하고 클릭 시 true 반환(공개 API만 사용)
+		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width + (label_w > 0 ? style.ItemInnerSpacing.x + label_w : 0.0f), height));
 		if (clicked)
 			*v = !*v;
 
@@ -70,14 +66,14 @@
 
 		if (label_w > 0.0f)
 		{
-			ImGui::SameLine(0.0f, g.Style.ItemInnerSpacing.x);
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted(label);
 		}
 		return clicked;
 	}
 ```
-주의: `ImGui::GetCurrentWindow()`, `ImGuiWindow::SkipItems`는 내부 API지만 ReShade가 `imgui_internal.h`를 이미 포함하는지 확인 필요. 포함 안 되면 `sherbet_ui.cpp` 상단에 `#include <imgui_internal.h>` 추가. `InvisibleButton`/`IsItemClicked`/`IsItemHovered`/`GetWindowDrawList`/`SameLine`/`AlignTextToFramePadding`/`TextUnformatted`는 공개 API.
+주의: 전부 공개 API. `InvisibleButton`은 1.92에서 클릭 시 true 반환. `IsItemHovered`/`GetWindowDrawList`/`SameLine`/`AlignTextToFramePadding`/`TextUnformatted`/`CalcTextSize`/`GetStyle` 모두 공개. `imgui_internal.h` 불필요.
 
 - [ ] **Step 3: 로컬 검증 + Commit(push 안 함)**
 
