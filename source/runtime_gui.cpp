@@ -830,8 +830,15 @@ void reshade::runtime::draw_gui()
 			if (!_sherbet_preset_trial_restore.empty())
 			{
 				const std::filesystem::path restore = _sherbet_preset_trial_restore;
+				const std::filesystem::path trial_file = _current_preset_path; // 체험용으로 풀어놨던 파일
 				_sherbet_preset_trial_restore.clear(); // 원복 완료 → 저장된 체험 상태 제거
 				set_current_preset_path(restore.u8string().c_str());
+				// 언락 전에는 체험 프리셋 파일을 디스크에 남기지 않는다(수동 로드로 우회 방지)
+				if (!_sherbet_preset_unlocked && _current_preset_path != trial_file)
+				{
+					std::error_code ec;
+					std::filesystem::remove(trial_file, ec);
+				}
 				save_config();
 			}
 		}
