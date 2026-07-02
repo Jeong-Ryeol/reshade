@@ -248,16 +248,35 @@ void reshade::runtime::build_font_atlas()
 	ImFontConfig cfg;
 	std::filesystem::path resolved_font_path;
 
-#if RESHADE_LOCALIZATION
-	// Add latin font
-	resolved_font_path = _latin_font_path;
-	if (!_default_font_path.empty())
+	// SHERBET: 기본 빌드는 Latin/숫자 베이스로 임베드 Fredoka(동글동글 귀여운) 사용.
+	// 병합 순서상 먼저 온 폰트가 해당 글자를 담당하므로, Fredoka 를 먼저 깔면
+	// 숫자/영어=Fredoka, 뒤에 병합되는 Jua 는 한글만 채운다.
+	const bool sherbet_font = _font_path.empty();
+	if (sherbet_font)
 	{
-		if (!add_font_from_file(resolved_font_path, &cfg, ec))
-			log::message(log::level::error, "Failed to load latin font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
+		ImFontConfig latin_cfg = cfg;
+		const resources::data_resource fredoka = resources::load_data_resource(IDR_FONT_SHERBET_LATIN);
+		void *fredoka_data = IM_ALLOC(fredoka.data_size);
+		memcpy(fredoka_data, fredoka.data, fredoka.data_size);
+		atlas->AddFontFromMemoryTTF(fredoka_data, static_cast<int>(fredoka.data_size), 0.0f, &latin_cfg);
 
 		cfg.MergeMode = true;
 		cfg.PixelSnapH = true;
+	}
+
+#if RESHADE_LOCALIZATION
+	// Add latin font (Sherbet 기본 폰트를 쓸 땐 Fredoka 가 이미 Latin 베이스라 생략)
+	if (!sherbet_font)
+	{
+		resolved_font_path = _latin_font_path;
+		if (!_default_font_path.empty())
+		{
+			if (!add_font_from_file(resolved_font_path, &cfg, ec))
+				log::message(log::level::error, "Failed to load latin font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
+
+			cfg.MergeMode = true;
+			cfg.PixelSnapH = true;
+		}
 	}
 #endif
 
