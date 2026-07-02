@@ -3190,7 +3190,7 @@ void reshade::runtime::draw_gui_about()
 	// SHERBET 크레딧 블록
 	sherbet::begin_card("##about_credit");
 	ImGui::PushFont(_sherbet_title_font, 0.0f);
-	ImGui::Text("Sherbet %s", sherbet::default_theme().display_name);
+	ImGui::Text("Sherbet %s", sherbet::active_theme().display_name);
 	ImGui::PopFont();
 	ImGui::TextUnformatted("\xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEB\xA7\x8C\xEB\x93\xA0 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C"); // "정렬이 만든 커스텀 리쉐이드"
 	ImGui::Spacing();
