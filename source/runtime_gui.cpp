@@ -18,6 +18,7 @@
 #include "platform_utils.hpp"
 #include "fonts/forkawesome.inl"
 #include "sherbet_theme.hpp"
+#include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
 #include <cmath> // std::abs, std::ceil, std::floor
 #include <cctype> // std::tolower
@@ -1316,6 +1317,8 @@ void reshade::runtime::draw_gui()
 	{
 		const ImGuiViewport *const viewport = ImGui::GetMainViewport();
 
+		sherbet::apply_style(_imgui_context->Style, sherbet::default_theme());
+
 		// Change font size if user presses the control key and moves the mouse wheel
 		if (!_no_font_scaling && imgui_io.KeyCtrl && imgui_io.MouseWheel != 0 && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
 		{
@@ -1399,6 +1402,17 @@ void reshade::runtime::draw_gui()
 			ImGuiWindowFlags_NoFocusOnAppearing |
 			ImGuiWindowFlags_NoBringToFrontOnFocus |
 			ImGuiWindowFlags_NoBackground);
+
+		{
+			// Sherbet: animated themed background + rising particles, drawn behind all overlay windows
+			ImDrawList *const sherbet_bg = ImGui::GetBackgroundDrawList();
+			const ImVec2 sherbet_vmin = viewport->Pos;
+			const ImVec2 sherbet_vmax = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
+			static float s_sherbet_time = 0.0f; s_sherbet_time += _imgui_context->IO.DeltaTime;
+			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::default_theme(), s_sherbet_time);
+			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::default_theme(), s_sherbet_time);
+		}
+
 		ImGui::DockSpace(root_space_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
 		ImGui::End();
 
