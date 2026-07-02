@@ -331,6 +331,8 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 
 	config.get("OVERLAY", "ClockFormat", _clock_format);
 	config.get("OVERLAY", "FPSPosition", _fps_pos);
+	config.get("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
+	config.get("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
 	config.get("OVERLAY", "ShowClock", _show_clock);
 	config.get("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
@@ -433,6 +435,8 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 
 	config.set("OVERLAY", "ClockFormat", _clock_format);
 	config.set("OVERLAY", "FPSPosition", _fps_pos);
+	config.set("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
+	config.set("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.set("OVERLAY", "ShowClock", _show_clock);
 	config.set("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
 	config.set("OVERLAY", "ShowFPS", _show_fps);
@@ -1237,10 +1241,10 @@ void reshade::runtime::draw_gui()
 				(_imgui_context->Style.ItemSpacing.y + _imgui_context->Style.FontSizeBase * _fps_scale) * ((show_clock ? 1 : 0) + (show_fps ? 1 : 0) + (show_frametime ? 1 : 0) + (show_preset_name ? 1 : 0)));
 		}
 
-		if (_fps_pos % 2)
-			fps_window_pos.x = imgui_io.DisplaySize.x - fps_window_size.x - 5;
-		if (_fps_pos > 1)
-			fps_window_pos.y = imgui_io.DisplaySize.y - fps_window_size.y - 5;
+		// SHERBET: 자유 X/Y 배치 (화면 비율)
+		fps_window_pos.x = _sherbet_osd_x * ImMax(0.0f, imgui_io.DisplaySize.x - fps_window_size.x);
+		fps_window_pos.y = _sherbet_osd_y * ImMax(0.0f, imgui_io.DisplaySize.y - fps_window_size.y);
+		const bool osd_align_right = _sherbet_osd_x > 0.5f;
 
 		ImGui::SetNextWindowPos(fps_window_pos);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(_fps_col[0], _fps_col[1], _fps_col[2], _fps_col[3]));
@@ -1279,28 +1283,28 @@ void reshade::runtime::draw_gui()
 				temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%.4d-%.2d-%.2d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 				break;
 			}
-			if (_fps_pos % 2) // Align text to the right of the window
+			if (osd_align_right) // Align text to the right of the window
 				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
 			ImGui::TextUnformatted(temp, temp + temp_size);
 		}
 		if (show_fps)
 		{
 			const int temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%.0f fps", imgui_io.Framerate);
-			if (_fps_pos % 2)
+			if (osd_align_right)
 				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
 			ImGui::TextUnformatted(temp, temp + temp_size);
 		}
 		if (show_frametime)
 		{
 			const int temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%5.2f ms", 1000.0f / imgui_io.Framerate);
-			if (_fps_pos % 2)
+			if (osd_align_right)
 				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
 			ImGui::TextUnformatted(temp, temp + temp_size);
 		}
 		if (show_preset_name)
 		{
 			const std::string preset_name = _current_preset_path.stem().u8string();
-			if (_fps_pos % 2)
+			if (osd_align_right)
 				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(preset_name.c_str(), preset_name.c_str() + preset_name.size()).x + _imgui_context->Style.ItemSpacing.x);
 			ImGui::TextUnformatted(preset_name.c_str(), preset_name.c_str() + preset_name.size());
 		}
@@ -2515,9 +2519,8 @@ void reshade::runtime::draw_gui_settings()
 			modified |= ImGui::SliderFloat(_("OSD text size"), &_fps_scale, 0.2f, 2.5f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 			modified |= ImGui::ColorEdit4(_("OSD text color"), _fps_col, ImGuiColorEditFlags_AlphaBar);
 
-			std::string fps_pos_items = _("Top left\nTop right\nBottom left\nBottom right\n");
-			std::replace(fps_pos_items.begin(), fps_pos_items.end(), '\n', '\0');
-			modified |= ImGui::Combo(_("OSD position on screen"), reinterpret_cast<int *>(&_fps_pos), fps_pos_items.c_str());
+			modified |= ImGui::SliderFloat("OSD X", &_sherbet_osd_x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			modified |= ImGui::SliderFloat("OSD Y", &_sherbet_osd_y, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		}
 	}
 

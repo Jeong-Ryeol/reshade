@@ -487,6 +487,8 @@ namespace reshade
 		std::filesystem::path _file_selection_path;
 		float _fps_col[4] = { 1.0f, 1.0f, 0.784314f, 1.0f };
 		float _fps_scale = 1.0f;
+		float _sherbet_osd_x = 0.02f; // OSD 가로 위치 (0=왼쪽,1=오른쪽)
+		float _sherbet_osd_y = 0.02f; // OSD 세로 위치 (0=위,1=아래)
 		float _hdr_overlay_brightness = 203.f; // HDR reference white as per BT.2408
 		api::color_space _hdr_overlay_overwrite_color_space = api::color_space::unknown;
 		bool  _show_force_load_effects_button = true;
