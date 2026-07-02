@@ -266,7 +266,7 @@ void reshade::runtime::build_font_atlas()
 		// 아틀라스는 데이터를 소유하지 않으므로 복사본을 넘긴다
 		void *jua_data = IM_ALLOC(jua.data_size);
 		memcpy(jua_data, jua.data, jua.data_size);
-		atlas->AddFontFromMemoryTTF(jua_data, static_cast<int>(jua.data_size), 0.0f, &jua_cfg, atlas->GetGlyphRangesKorean());
+		atlas->AddFontFromMemoryTTF(jua_data, static_cast<int>(jua.data_size), 0.0f, &jua_cfg);
 
 		cfg.MergeMode = true;
 		cfg.PixelSnapH = true;
@@ -298,7 +298,7 @@ void reshade::runtime::build_font_atlas()
 		const resources::data_resource gaegu = resources::load_data_resource(IDR_FONT_SHERBET_TITLE);
 		void *gaegu_data = IM_ALLOC(gaegu.data_size);
 		memcpy(gaegu_data, gaegu.data, gaegu.data_size);
-		_sherbet_title_font = atlas->AddFontFromMemoryTTF(gaegu_data, static_cast<int>(gaegu.data_size), _font_size * 1.4f, &title_cfg, atlas->GetGlyphRangesKorean());
+		_sherbet_title_font = atlas->AddFontFromMemoryTTF(gaegu_data, static_cast<int>(gaegu.data_size), _font_size * 1.4f, &title_cfg);
 	}
 
 	ImGui::SetCurrentContext(backup_context);

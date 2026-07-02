@@ -77,13 +77,13 @@ namespace sherbet
 		c[ImGuiCol_ResizeGripActive] = accent;
 		c[ImGuiCol_Tab] = chip;
 		c[ImGuiCol_TabHovered] = accent;
-		c[ImGuiCol_TabActive] = panel_alt;
-		c[ImGuiCol_TabUnfocused] = chip;
-		c[ImGuiCol_TabUnfocusedActive] = panel;
+		c[ImGuiCol_TabSelected] = panel_alt;
+		c[ImGuiCol_TabDimmed] = chip;
+		c[ImGuiCol_TabDimmedSelected] = panel;
 		c[ImGuiCol_PlotLines] = accent;
 		c[ImGuiCol_PlotHistogram] = accent;
 		c[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
-		c[ImGuiCol_NavHighlight] = accent;
+		c[ImGuiCol_NavCursor] = accent;
 		c[ImGuiCol_DragDropTarget] = to_vec4(t.accent2);
 	}
 
