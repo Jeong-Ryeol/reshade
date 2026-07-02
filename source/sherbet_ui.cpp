@@ -4,6 +4,7 @@
  */
 #include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
+#include "sherbet_license.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -36,18 +37,11 @@ namespace sherbet
 			if (*p == ',' || *p == '\0') { if (!cur.empty() && find_theme(cur.c_str())) s_unlocked.insert(cur); cur.clear(); if (*p == '\0') break; }
 			else cur += *p; }
 	}
-	// 오프라인 언락코드: FNV-1a(SECRET:id) → "SHRB-XXXX-XXXX"
-	static unsigned int fnv1a(const char *s) { unsigned int h = 2166136261u; for (; *s; ++s) { h ^= (unsigned char)*s; h *= 16777619u; } return h; }
+	// 오프라인 언락코드 검증은 통합 모듈(sherbet_license.hpp)로 위임한다.
+	// 형식/공식은 그대로라 기존 SHRB-XXXX-XXXX 코드와 100% 호환.
 	bool check_theme_code(const char *id, const char *code)
 	{
-		if (!id || !code) return false;
-		static const char *SECRET = "sherbet-by-jeongryeol-2026";
-		char buf[128]; snprintf(buf, sizeof(buf), "%s:theme:%s", SECRET, id);
-		unsigned int h = fnv1a(buf);
-		char expect[16]; snprintf(expect, sizeof(expect), "SHRB-%04X-%04X", (h >> 16) & 0xFFFF, h & 0xFFFF);
-		// 대소문자 무시 비교
-		for (int i = 0; expect[i] || code[i]; ++i) { char a = expect[i], b = code[i]; if (a >= 'a' && a <= 'z') a -= 32; if (b >= 'a' && b <= 'z') b -= 32; if (a != b) return false; }
-		return true;
+		return license::verify_theme(id, code);
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
