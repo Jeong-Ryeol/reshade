@@ -1455,6 +1455,17 @@ void reshade::runtime::draw_gui()
 
 		{
 			// 애니메이션 배경 + 파티클 — '창 영역'에만 그린다(게임은 창 밖에서 그대로 보임)
+			// 창 전체가 항상 화면 안에 있도록 위치를 매 프레임 보정.
+			// (예전 전체화면 빌드가 imgui.ini 에 남긴 큰 창 크기/아래로 치우친 위치 때문에
+			//  창 하단이 화면 밖으로 밀려 하단바(다시 로드/성능 모드)가 잘리던 문제 방지)
+			const ImVec2 sherbet_wpos = ImGui::GetWindowPos();
+			const ImVec2 sherbet_wsize = ImGui::GetWindowSize();
+			const ImVec2 sherbet_clamped(
+				ImClamp(sherbet_wpos.x, viewport->Pos.x, viewport->Pos.x + ImMax(0.0f, viewport->Size.x - sherbet_wsize.x)),
+				ImClamp(sherbet_wpos.y, viewport->Pos.y, viewport->Pos.y + ImMax(0.0f, viewport->Size.y - sherbet_wsize.y)));
+			if (sherbet_clamped.x != sherbet_wpos.x || sherbet_clamped.y != sherbet_wpos.y)
+				ImGui::SetWindowPos(sherbet_clamped);
+
 			ImDrawList *const sherbet_bg = ImGui::GetWindowDrawList();
 			const ImVec2 sherbet_vmin = ImGui::GetWindowPos();
 			const ImVec2 sherbet_vmax = ImVec2(sherbet_vmin.x + ImGui::GetWindowSize().x, sherbet_vmin.y + ImGui::GetWindowSize().y);
