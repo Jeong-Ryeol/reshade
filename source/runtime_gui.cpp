@@ -1086,11 +1086,16 @@ void reshade::runtime::draw_gui()
 	// Create ImGui widgets and windows
 	if (show_splash_window && !(show_spinner && show_overlay))
 	{
+		// SHERBET: 테마색 둥근 패널 스플래시 (기본 회색 바 → 브랜드 패널)
+		const sherbet::theme &splash_theme = sherbet::default_theme();
 		ImGui::SetNextWindowPos(_imgui_context->Style.WindowPadding);
-		ImGui::SetNextWindowSize(ImVec2(imgui_io.DisplaySize.x - 20.0f, 0.0f));
+		ImGui::SetNextWindowSize(ImVec2(ImMin(imgui_io.DisplaySize.x - 20.0f, 720.0f), 0.0f));
 		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.862745f, 0.862745f, 0.862745f, 1.0f));
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.117647f, 0.117647f, 0.117647f, show_spinner ? 0.0f : 0.7f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(splash_theme.text));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4((splash_theme.panel & 0x00FFFFFF) | (show_spinner ? 0x00000000u : 0xE6000000u)));
+		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(splash_theme.border));
 		ImGui::Begin("Splash Window", nullptr,
 			ImGuiWindowFlags_NoDecoration |
 			ImGuiWindowFlags_NoNav |
@@ -1106,25 +1111,18 @@ void reshade::runtime::draw_gui()
 		}
 		else
 		{
-			// SHERBET 리브랜드 스플래시 제목
+			// SHERBET 리브랜드 스플래시 제목 (타이틀 폰트 + 액센트 색)
+			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(splash_theme.accent));
 			if (sherbet::has_owner())
-				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", sherbet::default_theme().display_name, SHERBET_OWNER);
+				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", splash_theme.display_name, SHERBET_OWNER);
 			else
-				ImGui::Text("Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", sherbet::default_theme().display_name);
+				ImGui::Text("Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", splash_theme.display_name);
+			ImGui::PopStyleColor();
+			ImGui::PopFont();
 
-			if ((s_latest_version[0] > VERSION_MAJOR) ||
-				(s_latest_version[0] == VERSION_MAJOR && s_latest_version[1] > VERSION_MINOR) ||
-				(s_latest_version[0] == VERSION_MAJOR && s_latest_version[1] == VERSION_MINOR && s_latest_version[2] > VERSION_REVISION))
-			{
-				ImGui::TextColored(COLOR_YELLOW, _(
-					"An update is available! Please visit %s and install the new version (v%u.%u.%u)."),
-					"https://reshade.me",
-					s_latest_version[0], s_latest_version[1], s_latest_version[2]);
-			}
-			else
-			{
-				ImGui::Text(_("Visit %s for news, updates, effects and discussion."), "https://discord.gg/5NGR7XVFta");
-			}
+			// 판매 제품이라 reshade.me 업데이트 안내는 숨기고, 디스코드만 노출
+			ImGui::TextDisabled("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C: %s", "https://discord.gg/5NGR7XVFta"); // "디스코드: ..."
 
 			ImGui::Spacing();
 
@@ -1198,8 +1196,8 @@ void reshade::runtime::draw_gui()
 		viewport_offset.y += ImGui::GetWindowHeight() + _imgui_context->Style.WindowPadding.x; // Add small space between windows
 
 		ImGui::End();
-		ImGui::PopStyleColor(2);
-		ImGui::PopStyleVar();
+		ImGui::PopStyleColor(3);
+		ImGui::PopStyleVar(3);
 	}
 
 	if (show_message_window)
