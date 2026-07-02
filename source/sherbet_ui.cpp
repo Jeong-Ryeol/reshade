@@ -154,4 +154,41 @@ namespace sherbet
 			dl->AddRect(ImVec2(min.x - e, min.y - e), ImVec2(max.x + e, max.y + e), a, 16.0f, 0, 3.0f);
 		}
 	}
+
+	bool toggle(const char *label, bool *v)
+	{
+		const theme &t = default_theme();
+		const float height = ImGui::GetFrameHeight() * 0.78f;
+		const float width = height * 1.85f;
+		const float radius = height * 0.5f;
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		const ImGuiStyle &style = ImGui::GetStyle();
+		const float label_w = (label && label[0] != '\0' && label[0] != '#') ? ImGui::CalcTextSize(label, NULL, true).x : 0.0f;
+
+		// InvisibleButton은 SkipItems를 내부 처리하고 클릭 시 true 반환(공개 API만 사용)
+		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width + (label_w > 0 ? style.ItemInnerSpacing.x + label_w : 0.0f), height));
+		if (clicked)
+			*v = !*v;
+
+		const bool hovered = ImGui::IsItemHovered();
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+		const float tnorm = *v ? 1.0f : 0.0f;
+		const ImU32 track = *v ? t.accent : t.chip;
+		dl->AddRectFilled(p, ImVec2(p.x + width, p.y + height), track, radius);
+		if (*v)
+			draw_glow(dl, p, ImVec2(p.x + width, p.y + height), t.glow);
+		const float knob_x = p.x + radius + tnorm * (width - 2 * radius);
+		const ImU32 knob = *v ? IM_COL32(255, 255, 255, 255) : t.text_dim;
+		dl->AddCircleFilled(ImVec2(knob_x, p.y + radius), radius - 2.0f, knob, 24);
+		if (hovered)
+			dl->AddRect(p, ImVec2(p.x + width, p.y + height), t.border, radius, 0, 1.5f);
+
+		if (label_w > 0.0f)
+		{
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted(label);
+		}
+		return clicked;
+	}
 }

@@ -18,4 +18,7 @@ namespace sherbet
 	void draw_particles(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const theme &t, float time);
 	// 사각형 뒤 부드러운 글로우
 	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, ImU32 glow_color);
+
+	// 필형 토글 스위치. 값이 변경되면 true 반환.
+	bool toggle(const char *label, bool *v);
 }
