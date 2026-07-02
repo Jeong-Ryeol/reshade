@@ -352,7 +352,11 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
 	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str());
-	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked); }
+	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	  config.get("SHERBET", "EffectFilter", _sherbet_effect_filter);
+	  std::string fav; config.get("SHERBET", "Favorites", fav);
+	  _sherbet_fav.clear();
+	  for (size_t p = 0, e; p <= fav.size(); p = e + 1) { e = fav.find(',', p); if (e == std::string::npos) e = fav.size(); if (e > p) _sherbet_fav.insert(fav.substr(p, e - p)); } }
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.get("STYLE", "Alpha", imgui_style.Alpha);
@@ -460,6 +464,8 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
 	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
 	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
+	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
 
 	const ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.set("STYLE", "Alpha", imgui_style.Alpha);
@@ -4418,6 +4424,16 @@ void reshade::runtime::draw_technique_editor()
 
 	ImGui::BeginDisabled(_is_in_preset_transition);
 
+	// SHERBET: 이펙트 필터 (전체 / 켜짐 / 즐겨찾기)
+	{
+		if (sherbet::pill_button("\xEC\xA0\x84\xEC\xB2\xB4", _sherbet_effect_filter == 0)) { _sherbet_effect_filter = 0; save_config(); } // "전체"
+		ImGui::SameLine();
+		if (sherbet::pill_button("\xEC\xBC\x9C\xEC\xA7\x90", _sherbet_effect_filter == 1)) { _sherbet_effect_filter = 1; save_config(); } // "켜짐"
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_STAR " \xEC\xA6\x90\xEA\xB2\xA8\xEC\xB0\xBE\xEA\xB8\xB0", _sherbet_effect_filter == 2)) { _sherbet_effect_filter = 2; save_config(); } // "즐겨찾기"
+		ImGui::Spacing();
+	}
+
 	if (!_last_reload_successful)
 	{
 		// Add fake items at the top for effects that failed to compile
@@ -4587,6 +4603,12 @@ void reshade::runtime::draw_technique_editor()
 			if (tech.hidden || !effect.compiled)
 				continue;
 
+			// SHERBET: 필터 적용 (PushID 이전이라 ID 스택 안전)
+			if (_sherbet_effect_filter == 1 && !tech.enabled)
+				continue;
+			if (_sherbet_effect_filter == 2 && _sherbet_fav.count(tech.name) == 0)
+				continue;
+
 			bool modified = false;
 
 			ImGui::PushID(static_cast<int>(index));
@@ -4702,6 +4724,21 @@ void reshade::runtime::draw_technique_editor()
 
 				if (is_not_top || is_not_bottom || (_input != nullptr && !force_enabled))
 					ImGui::Separator();
+
+				// SHERBET: 즐겨찾기 토글
+				{
+					const bool is_fav = _sherbet_fav.count(tech.name) != 0;
+					const char *fav_label = is_fav
+						? ICON_FK_STAR "  \xEC\xA6\x90\xEA\xB2\xA8\xEC\xB0\xBE\xEA\xB8\xB0 \xED\x95\xB4\xEC\xA0\x9C" // "즐겨찾기 해제"
+						: ICON_FK_STAR "  \xEC\xA6\x90\xEA\xB2\xA8\xEC\xB0\xBE\xEA\xB8\xB0 \xEC\xB6\x94\xEA\xB0\x80"; // "즐겨찾기 추가"
+					if (ImGui::Button(fav_label, ImVec2(18.0f * ImGui::GetFontSize(), 0)))
+					{
+						if (is_fav) _sherbet_fav.erase(tech.name); else _sherbet_fav.insert(tech.name);
+						save_config();
+						ImGui::CloseCurrentPopup();
+					}
+					ImGui::Separator();
+				}
 
 				if (ImGui::Button(ICON_FK_FOLDER " " + _("Open folder in explorer"), ImVec2(18.0f * ImGui::GetFontSize(), 0)))
 					utils::open_explorer(effect.source_file);

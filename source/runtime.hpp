@@ -14,6 +14,7 @@
 #include <memory>
 #include <filesystem>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 
 namespace reshade
@@ -424,6 +425,8 @@ namespace reshade
 		bool _sherbet_preset_unlocked = false; // 개인 전용 프리셋 언락 여부
 		float _sherbet_preset_trial = 0.0f; // 프리셋 체험 남은 시간(초). >0 이면 체험 중
 		std::filesystem::path _sherbet_preset_trial_restore; // 체험 종료 시 되돌릴 프리셋 경로
+		int _sherbet_effect_filter = 0; // 이펙트 필터: 0=전체 1=켜짐 2=즐겨찾기
+		std::set<std::string> _sherbet_fav; // 즐겨찾기 이펙트(테크닉 이름)
 
 		bool _show_splash = true;
 		bool _show_overlay = false;
