@@ -411,6 +411,9 @@
     <ClCompile Include="source\sherbet_themes.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\sherbet_ui.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\state_block.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
@@ -756,6 +759,9 @@
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_theme.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_ui.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\state_block.hpp">

@@ -81,6 +81,8 @@ set(RESHADE_SOURCE
   source/sherbet_owner.h
   source/sherbet_theme.hpp
   source/sherbet_themes.cpp
+  source/sherbet_ui.cpp
+  source/sherbet_ui.hpp
   source/state_block.cpp
   source/state_block.hpp
 )

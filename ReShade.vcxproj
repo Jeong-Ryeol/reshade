@@ -661,6 +661,7 @@
     <ClCompile Include="source\runtime_manager.cpp" />
     <ClCompile Include="source\runtime_update_check.cpp" />
     <ClCompile Include="source\sherbet_themes.cpp" />
+    <ClCompile Include="source\sherbet_ui.cpp" />
     <ClCompile Include="source\state_block.cpp" />
     <ClCompile Include="source\vulkan\vulkan.cpp" />
     <ClCompile Include="source\vulkan\vulkan_hooks_command_list.cpp" />
@@ -780,6 +781,7 @@
     <ClInclude Include="source\runtime_manager.hpp" />
     <ClInclude Include="source\sherbet_owner.h" />
     <ClInclude Include="source\sherbet_theme.hpp" />
+    <ClInclude Include="source\sherbet_ui.hpp" />
     <ClInclude Include="source\state_block.hpp" />
     <ClInclude Include="source\vulkan\vulkan_hooks.hpp" />
     <ClInclude Include="source\vulkan\vulkan_impl_command_list.hpp" />
