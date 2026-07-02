@@ -87,7 +87,11 @@ upstream/main (crosire 최신)
 - **하단 상태바**: FPS 뱃지 + 활성 이펙트 수 + 리로드 버튼
 - **스플래시**: 로고 마크 + "Sherbet <테마명> 로딩 중… by 정렬" + 그라디언트 프로그레스 바
 - **이펙트/배경**: 오로라 블롭 드리프트(draw list 그라디언트), 벡터 파티클(테마별 도형), 포커스/호버 글로우
-- **아이콘**: 이모지 사용 금지. ForkAwesome(내장) + ImDrawList 커스텀 도형만 사용.
+- **아이콘**: 이모지 사용 금지. ReShade 내장 **ForkAwesome 폰트**(res/fonts/forkawesome.h, 335 글리프, ImGui 버튼에서 이미 사용 중) + ImDrawList 커스텀 도형. 필요한 글리프 전수 확인 완료:
+  - 홈 `ICON_FK_HOME` · 마켓 `ICON_FK_SHOPPING_CART` · 설정 `ICON_FK_SLIDERS` · 정보 `ICON_FK_INFO_CIRCLE`
+  - 검색 `ICON_FK_SEARCH` · 즐겨찾기 `ICON_FK_STAR`/`STAR_EMPTY` · 스크린샷 `ICON_FK_CAMERA` · 성능 `ICON_FK_BOLT` · 리로드 `ICON_FK_REFRESH`
+  - 로고/파티클 `ICON_FK_MAGIC`/`HEART` · 잠금 `ICON_FK_LOCK`/`UNLOCK` · 체험 `ICON_FK_PLAY` · 언락 `ICON_FK_KEY`
+- **커스텀 위젯 구현 근거**: 토글·그라디언트 슬라이더·카드·파티클·글로우·오로라 배경은 모두 `ImDrawList`(AddRectFilled/PathArcTo/AddConvexPolyFilled)로 그린다 — ReShade 코드에 이미 동일 API 사용처 존재(imgui_widgets.cpp). 외부 의존성 추가 없음. 애니메이션은 매 프레임 시간 기반 계산.
 - **튜토리얼**: 기존 4단계 로직은 부담 → 첫 실행 웰컴 카드 1장(테마 인사말+단축키 안내)으로 대체
 
 ## 6. 테마 6종 (SKU)
