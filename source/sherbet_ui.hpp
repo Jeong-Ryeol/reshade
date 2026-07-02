@@ -27,4 +27,6 @@ namespace sherbet
 	void end_card();
 	// 필형 버튼. 클릭 시 true.
 	bool pill_button(const char *label, bool active);
+	// 네비게이션 레일용 44x44 라운드 아이콘 버튼(활성 시 accent 배경+글로우). 클릭 시 true.
+	bool rail_button(const char *id, const char *icon, bool active);
 }

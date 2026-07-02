@@ -228,4 +228,27 @@ namespace sherbet
 		ImGui::PopStyleColor(4);
 		return pressed;
 	}
+
+	bool rail_button(const char *id, const char *icon, bool active)
+	{
+		const theme &t = default_theme();
+		const float sz = 44.0f;
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		const bool clicked = ImGui::InvisibleButton(id, ImVec2(sz, sz));
+		const bool hovered = ImGui::IsItemHovered();
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+		if (active)
+		{
+			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), t.accent, 14.0f);
+			draw_glow(dl, p, ImVec2(p.x + sz, p.y + sz), t.glow);
+		}
+		else if (hovered)
+		{
+			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), t.panel_alt, 14.0f);
+		}
+		const ImU32 col = active ? IM_COL32(20, 20, 20, 255) : (hovered ? t.text : t.text_dim);
+		const ImVec2 ts = ImGui::CalcTextSize(icon);
+		dl->AddText(ImVec2(p.x + (sz - ts.x) * 0.5f, p.y + (sz - ts.y) * 0.5f), col, icon);
+		return clicked;
+	}
 }

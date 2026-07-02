@@ -406,6 +406,7 @@ namespace reshade
 		void draw_gui_statistics();
 		void draw_gui_log();
 		void draw_gui_about();
+		void draw_gui_market();
 #if RESHADE_ADDON
 		void draw_gui_addons();
 #endif
@@ -419,6 +420,7 @@ namespace reshade
 		#pragma region Overlay
 		ImGuiContext *_imgui_context = nullptr;
 		ImFont *_sherbet_title_font = nullptr;
+		int _sherbet_tab = 0; // 0=Home 1=Market 2=Settings 3=About
 
 		bool _show_splash = true;
 		bool _show_overlay = false;

@@ -3278,6 +3278,14 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 
 	ImGui::PopTextWrapPos();
 }
+void reshade::runtime::draw_gui_market()
+{
+	sherbet::begin_card("##market_soon");
+	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Market");
+	ImGui::Spacing();
+	ImGui::TextUnformatted("\xEC\xA4\x80\xEB\xB9\x84 \xEC\xA4\x91\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4."); // "준비 중입니다."
+	sherbet::end_card();
+}
 #if RESHADE_ADDON
 void reshade::runtime::draw_gui_addons()
 {
