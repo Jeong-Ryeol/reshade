@@ -17,6 +17,8 @@
 #include "localization.hpp"
 #include "platform_utils.hpp"
 #include "fonts/forkawesome.inl"
+#include "sherbet_theme.hpp"
+#include "sherbet_owner.h"
 #include <cmath> // std::abs, std::ceil, std::floor
 #include <cctype> // std::tolower
 #include <cstdlib> // std::strtol
@@ -1066,7 +1068,11 @@ void reshade::runtime::draw_gui()
 		}
 		else
 		{
-			ImGui::TextUnformatted("ReShade " VERSION_STRING_PRODUCT);
+			// SHERBET 리브랜드 스플래시 제목
+			if (sherbet::has_owner())
+				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", sherbet::default_theme().display_name, SHERBET_OWNER);
+			else
+				ImGui::Text("Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", sherbet::default_theme().display_name);
 
 			if ((s_latest_version[0] > VERSION_MAJOR) ||
 				(s_latest_version[0] == VERSION_MAJOR && s_latest_version[1] > VERSION_MINOR) ||
@@ -1079,7 +1085,7 @@ void reshade::runtime::draw_gui()
 			}
 			else
 			{
-				ImGui::Text(_("Visit %s for news, updates, effects and discussion."), "https://reshade.me");
+				ImGui::Text(_("Visit %s for news, updates, effects and discussion."), "https://discord.gg/5NGR7XVFta");
 			}
 
 			ImGui::Spacing();
