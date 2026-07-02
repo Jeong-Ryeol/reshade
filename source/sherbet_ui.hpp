@@ -21,4 +21,10 @@ namespace sherbet
 
 	// 필형 토글 스위치. 값이 변경되면 true 반환.
 	bool toggle(const char *label, bool *v);
+
+	// 라운드 패널 차일드 시작/종료(테마 panel 배경 + border + 패딩). height 0 = 자동.
+	void begin_card(const char *id, float height = 0.0f);
+	void end_card();
+	// 필형 버튼. 클릭 시 true.
+	bool pill_button(const char *label, bool active);
 }

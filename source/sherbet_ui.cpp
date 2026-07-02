@@ -191,4 +191,41 @@ namespace sherbet
 		}
 		return clicked;
 	}
+
+	void begin_card(const char *id, float height)
+	{
+		const theme &t = default_theme();
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(t.panel));
+		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(t.border));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 12));
+		// height == 0 -> 자동 높이(AutoResizeY). height > 0 -> 고정 높이(AutoResizeY와 충돌하므로 제외).
+		const ImGuiChildFlags flags = height > 0.0f ? ImGuiChildFlags_Borders : (ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+		ImGui::BeginChild(id, ImVec2(0.0f, height), flags, ImGuiWindowFlags_None);
+	}
+
+	void end_card()
+	{
+		ImGui::EndChild();
+		ImGui::PopStyleVar(3);
+		ImGui::PopStyleColor(2);
+	}
+
+	bool pill_button(const char *label, bool active)
+	{
+		const theme &t = default_theme();
+		const ImU32 bg = active ? t.accent : t.chip;
+		const ImU32 fg = active ? IM_COL32(20, 20, 20, 255) : t.text_dim;
+		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(bg));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(active ? t.accent2 : t.panel_alt));
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::ColorConvertU32ToFloat4(t.accent));
+		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(fg));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 7));
+		const bool pressed = ImGui::Button(label);
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor(4);
+		return pressed;
+	}
 }
