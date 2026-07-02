@@ -10,6 +10,14 @@
 
 namespace sherbet
 {
+	// 레이아웃 상수 (runtime_gui.cpp 와 rail_button 이 공유)
+	constexpr float rail_width = 66.0f;
+	constexpr float rail_button_size = 44.0f;
+	constexpr float header_height = 40.0f;
+
+	// color 의 RGB 는 유지하고 알파(0..255)만 교체
+	inline ImU32 with_alpha(ImU32 color, ImU32 alpha) { return (color & 0x00FFFFFF) | (alpha << 24); }
+
 	// 현재 런타임에서 활성화된 테마 (초기값 = SHERBET_DEFAULT_THEME)
 	const theme &active_theme();
 	const char *active_theme_id();

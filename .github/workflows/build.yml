@@ -28,7 +28,7 @@ on:
         required: false
         default: false
       preset_ini:
-        description: '개인 전용 프리셋 .ini 내용 (붙여넣기, 비우면 프리셋 미포함)'
+        description: '개인 전용 프리셋 .ini (base64 인코딩 권장 — 웹 UI 붙여넣기는 줄바꿈이 사라짐. 비우면 프리셋 미포함)'
         required: false
         default: ''
 
@@ -71,10 +71,26 @@ jobs:
           $order = $env:SHERBET_INPUT_ORDER_NO -replace '\\', '\\\\' -replace '"', '\"'
           $theme = $env:SHERBET_INPUT_DEFAULT_THEME -replace '\\', '\\\\' -replace '"', '\"'
           $nodelock = if ($env:SHERBET_INPUT_NODELOCK -eq 'true') { '1' } else { '0' }
-          # 개인 전용 프리셋을 붙여넣었으면 내장 파일로 저장(프리셋 마켓에 "내 전용 프리셋" 노출)
+          # 테마 id 오타 방지 — 잘못된 id 로 빌드하면 유료 테마가 잠긴 채 배송된다
+          $valid_themes = @('mint','peach','pink','rainbow','lavender','noir')
+          if ($valid_themes -notcontains $theme) {
+            Write-Error "default_theme '$theme' 는 유효한 테마 id 가 아닙니다: $($valid_themes -join ', ')"
+            exit 1
+          }
+          # 개인 전용 프리셋을 붙여넣었으면 내장 파일로 저장(프리셋 마켓에 "내 전용 프리셋" 노출).
+          # 웹 UI 입력칸은 줄바꿈을 없애므로 base64 를 우선 시도하고, 실패하면 원문 그대로 사용.
           if (-not [string]::IsNullOrWhiteSpace($env:SHERBET_INPUT_PRESET_INI)) {
+            $preset = $env:SHERBET_INPUT_PRESET_INI
+            try {
+              $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($preset.Trim()))
+              if ($decoded -match 'Techniques') { $preset = $decoded }
+            } catch {}
+            if ($preset -notmatch "(?m)^Techniques") {
+              Write-Error "preset_ini 에 줄 시작 'Techniques' 키가 없습니다 — 줄바꿈이 사라졌다면 base64 로 인코딩해 넣어주세요 (예: base64 -i preset.ini)"
+              exit 1
+            }
             New-Item -ItemType Directory -Force -Path res/presets | Out-Null
-            Set-Content -Path res/presets/personal.ini -Value $env:SHERBET_INPUT_PRESET_INI -Encoding UTF8
+            Set-Content -Path res/presets/personal.ini -Value $preset -Encoding UTF8
           }
           $content = @"
           /*

@@ -34,12 +34,19 @@ namespace sherbet
 
 #include "sherbet_license.hpp"
 
+// min/max 매크로가 std::min/std::max 를 깨뜨리지 않도록 (runtime_gui.cpp 상단에서 포함되므로 필수)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #include <intrin.h>
 #include <string>
 #include <sstream>
 #include <fstream>
-#include <iomanip>
+#include <filesystem>
 
 namespace sherbet
 {
@@ -60,18 +67,10 @@ namespace sherbet
 		}
 
 		// sherbet.lic 을 놓을 경로(호출자가 넘긴 디렉터리 아래). 보통 설정 파일과 같은 폴더.
-		// dir 는 UTF-8 경로. 반환도 UTF-8.
-		inline std::string lic_path(const std::string &dir_utf8)
+		// UTF-8 문자열을 filesystem::path 로 변환해 한글 등 비ASCII 경로에서도 동작(와이드 API).
+		inline std::filesystem::path lic_path(const std::string &dir_utf8)
 		{
-			std::string p = dir_utf8;
-			if (!p.empty())
-			{
-				const char back = p.back();
-				if (back != '\\' && back != '/')
-					p += '\\';
-			}
-			p += "sherbet.lic";
-			return p;
+			return std::filesystem::u8path(dir_utf8) / L"sherbet.lic";
 		}
 
 		// 첫 실행이면 등록하고 true, 이후 실행이면 서명 일치 여부를 반환.
@@ -82,11 +81,11 @@ namespace sherbet
 			char sig[24];
 			sherbet::license::sign_hwid(id.c_str(), sig, sizeof(sig));
 
-			const std::string path = lic_path(dir_utf8);
+			const std::filesystem::path path = lic_path(dir_utf8);
 
-			// 이미 등록돼 있으면 비교.
+			// 이미 등록돼 있으면 비교. (path 객체로 열어야 한글 경로에서 ANSI 변환 실패가 없음)
 			{
-				std::ifstream in(path.c_str());
+				std::ifstream in(path);
 				if (in.is_open())
 				{
 					std::string stored;
@@ -100,7 +99,7 @@ namespace sherbet
 			}
 
 			// 첫 실행: 현재 PC로 고정(등록).
-			std::ofstream out(path.c_str(), std::ios::trunc);
+			std::ofstream out(path, std::ios::trunc);
 			if (out.is_open())
 			{
 				out << sig << "\n";

@@ -333,7 +333,6 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 #endif
 
 	config.get("OVERLAY", "ClockFormat", _clock_format);
-	config.get("OVERLAY", "FPSPosition", _fps_pos);
 	config.get("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.get("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
@@ -355,7 +354,9 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
 	  // 체험 중 게임이 꺼졌던 경우: 저장된 원복 경로가 남아 있으면 첫 프레임에 즉시 원복
 	  config.get("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
-	  if (!_sherbet_preset_trial_restore.empty())
+	  // 진행 중인 체험(> 0)은 유지 — 스왑체인 재생성 등으로 config 가 재로드돼도 체험이 끊기지 않게.
+	  // 시작 시점(= 0)에 원복 경로가 남아 있으면 지난 세션이 체험 중 종료된 것 → 첫 프레임에 즉시 원복.
+	  if (!_sherbet_preset_trial_restore.empty() && _sherbet_preset_trial <= 0.0f)
 		  _sherbet_preset_trial = 0.001f;
 	  config.get("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	  std::string fav; config.get("SHERBET", "Favorites", fav);
@@ -449,7 +450,6 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 #endif
 
 	config.set("OVERLAY", "ClockFormat", _clock_format);
-	config.set("OVERLAY", "FPSPosition", _fps_pos);
 	config.set("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.set("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.set("OVERLAY", "ShowClock", _show_clock);
@@ -830,10 +830,12 @@ void reshade::runtime::draw_gui()
 			if (!_sherbet_preset_trial_restore.empty())
 			{
 				const std::filesystem::path restore = _sherbet_preset_trial_restore;
-				const std::filesystem::path trial_file = _current_preset_path; // 체험용으로 풀어놨던 파일
 				_sherbet_preset_trial_restore.clear(); // 원복 완료 → 저장된 체험 상태 제거
 				set_current_preset_path(restore.u8string().c_str());
-				// 언락 전에는 체험 프리셋 파일을 디스크에 남기지 않는다(수동 로드로 우회 방지)
+				// 언락 전에는 체험 프리셋 파일을 디스크에 남기지 않는다(수동 로드로 우회 방지).
+				// 경로는 원복 프리셋 폴더의 고정 이름으로만 재구성 — 체험 중 사용자가 다른
+				// 프리셋으로 전환했어도 절대 사용자 파일을 지우지 않는다.
+				const std::filesystem::path trial_file = restore.parent_path() / L"Sherbet-Custom.ini";
 				if (!_sherbet_preset_unlocked && _current_preset_path != trial_file)
 				{
 					std::error_code ec;
@@ -1130,7 +1132,7 @@ void reshade::runtime::draw_gui()
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(splash_theme.text));
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4((splash_theme.panel & 0x00FFFFFF) | (show_spinner ? 0x00000000u : 0xE6000000u)));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(splash_theme.panel, show_spinner ? 0x00u : 0xE6u)));
 		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(splash_theme.border));
 		ImGui::Begin("Splash Window", nullptr,
 			ImGuiWindowFlags_NoDecoration |
@@ -1158,7 +1160,7 @@ void reshade::runtime::draw_gui()
 			ImGui::PopFont();
 
 			// 판매 제품이라 reshade.me 업데이트 안내는 숨기고, 디스코드만 노출
-			ImGui::TextDisabled("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C: %s", "https://discord.gg/5NGR7XVFta"); // "디스코드: ..."
+			ImGui::TextDisabled("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C: %s", SHERBET_DISCORD_URL); // "디스코드: ..."
 
 			ImGui::Spacing();
 
@@ -1422,7 +1424,6 @@ void reshade::runtime::draw_gui()
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 		ImGui::Begin("Sherbet###Viewport", nullptr,
 			ImGuiWindowFlags_NoTitleBar |
-			ImGuiWindowFlags_NoNav |
 			ImGuiWindowFlags_NoDocking |
 			ImGuiWindowFlags_NoScrollbar |
 			ImGuiWindowFlags_NoFocusOnAppearing |
@@ -1465,7 +1466,7 @@ void reshade::runtime::draw_gui()
 			ImGui::Spacing();
 			const char *btn = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
 			ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(btn).x) * 0.5f);
-			ImGui::TextLinkOpenURL(btn, "https://discord.gg/5NGR7XVFta");
+			ImGui::TextLinkOpenURL(btn, SHERBET_DISCORD_URL);
 			ImGui::End();
 		}
 		else
@@ -1474,16 +1475,19 @@ void reshade::runtime::draw_gui()
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
 			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
+			const float sherbet_title_h = ImGui::GetFontSize(); // 실제 렌더 크기(FontScaleMain 반영)
 			ImGui::TextUnformatted("Sherbet");
 			ImGui::PopFont();
 			ImGui::SameLine(0.0f, 8.0f);
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextDisabled("%s", sherbet::active_theme().display_name);
 
+			// 폰트 확대(Ctrl+휠)에도 겹치지 않게 헤더 높이/버튼 크기를 폰트 기준으로 계산
+			const float sherbet_header_h = ImMax(sherbet::header_height, sherbet_title_h + 18.0f);
 			// 우측 원클릭 버튼 3종 (기존 기능 호출만)
-			const float bw = 36.0f, bh = 26.0f, gap = 6.0f;
+			const float bh = ImGui::GetFrameHeight() * 0.9f, bw = bh * 1.4f, gap = 6.0f;
 			const float win_w = ImGui::GetWindowSize().x;
-			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 3.0f + gap * 2.0f), 7.0f));
+			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 3.0f + gap * 2.0f), (sherbet_header_h - bh) * 0.5f));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().chip));
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text));
@@ -1503,17 +1507,17 @@ void reshade::runtime::draw_gui()
 			ImGui::PopStyleColor(2);
 			ImGui::PopStyleVar();
 
-			ImGui::SetCursorPos(ImVec2(0.0f, 40.0f));
+			ImGui::SetCursorPos(ImVec2(0.0f, sherbet_header_h));
 		}
 
 		// 좌측 레일
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.28f));
-		ImGui::BeginChild("##sherbet_rail", ImVec2(66.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::BeginChild("##sherbet_rail", ImVec2(sherbet::rail_width, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		ImGui::PopStyleColor();
 		{
 			ImGui::Dummy(ImVec2(0, 8));
 			// 로고 (클릭 시 홈으로 — 반응 없던 문제 해결)
-			ImGui::SetCursorPosX((66.0f - 40.0f) * 0.5f);
+			ImGui::SetCursorPosX((sherbet::rail_width - sherbet::rail_button_size) * 0.5f);
 			if (sherbet::rail_button("##logo", ICON_FK_MAGIC, _sherbet_tab == 0))
 				_sherbet_tab = 0;
 			ImGui::SetItemTooltip("Sherbet \xED\x99\x88"); // "Sherbet 홈"
@@ -1528,7 +1532,7 @@ void reshade::runtime::draw_gui()
 			};
 			for (int i = 0; i < 4; ++i)
 			{
-				ImGui::SetCursorPosX((66.0f - 44.0f) * 0.5f);
+				ImGui::SetCursorPosX((sherbet::rail_width - sherbet::rail_button_size) * 0.5f);
 				if (sherbet::rail_button(items[i].id, items[i].icon, _sherbet_tab == i))
 					_sherbet_tab = i;
 				ImGui::Dummy(ImVec2(0, 4));
@@ -3306,7 +3310,7 @@ void reshade::runtime::draw_gui_about()
 	ImGui::PopFont();
 	ImGui::TextUnformatted("\xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEB\xA7\x8C\xEB\x93\xA0 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C"); // "정렬이 만든 커스텀 리쉐이드"
 	ImGui::Spacing();
-	ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEC\xB0\xB8\xEC\x97\xAC", "https://discord.gg/5NGR7XVFta"); // "디스코드 참여"
+	ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEC\xB0\xB8\xEC\x97\xAC", SHERBET_DISCORD_URL); // "디스코드 참여"
 	if (sherbet::has_owner())
 	{
 		ImGui::Spacing();
@@ -3491,9 +3495,11 @@ void reshade::runtime::draw_gui_market()
 	{
 		// 프리셋 마켓 — 구매자 전용 프리셋(개인 .ini 이어받기)
 		const resources::data_resource pres = resources::load_data_resource(IDR_SHERBET_PRESET_PERSONAL);
-		const std::string content(static_cast<const char *>(pres.data), pres.data_size);
-		const bool has_personal = content.find("Techniques") != std::string::npos; // 실제 프리셋 여부
-		const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : "personal";
+		const std::string_view content(static_cast<const char *>(pres.data), pres.data_size);
+		// 실제 프리셋 여부 — 줄 시작의 "Techniques=" 키만 인정(주석에 단어가 있어도 오탐 없음)
+		const bool has_personal = content.rfind("Techniques", 0) == 0 || content.find("\nTechniques") != std::string_view::npos;
+		// 언락코드 대상 id: 주문번호 → 구매자명 순. 비어 있으면 만능 코드가 생기므로 언락 입력을 숨긴다.
+		const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : SHERBET_OWNER;
 
 		// 내장 프리셋을 디스크에 써서 경로를 돌려주는 헬퍼(적용/체험 공용)
 		auto materialize = [this, &pres]() -> std::filesystem::path {
@@ -3508,7 +3514,7 @@ void reshade::runtime::draw_gui_market()
 			sherbet::begin_card("##preset_empty");
 			ImGui::TextWrapped("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB8\xB0\xEC\xA1\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C .ini \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x84 \xEB\xB3\xB4\xEB\x82\xB4\xEC\xA3\xBC\xEC\x8B\x9C\xEB\xA9\xB4, \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA7\x81\xEC\xA0\x91 \xED\x8A\x9C\xEB\x8B\x9D\xED\x95\xB4\xEC\x84\x9C \xEB\x8B\xB9\xEC\x8B\xA0\xEB\xA7\x8C\xEC\x9D\x98 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xA7\x8C\xEB\x93\xA4\xEC\x96\xB4 \xEB\x93\x9C\xEB\xA0\xA4\xEC\x9A\x94. \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEB\xB0\x9B\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEB\xB0\x94\xEB\xA1\x9C \xEC\xA0\x81\xEC\x9A\xA9\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안내
 			ImGui::Spacing();
-			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\x82\xB4 \xEC\x84\xB8\xED\x8C\x85 \xEB\xB3\xB4\xEB\x82\xB4\xEA\xB8\xB0", "https://discord.gg/5NGR7XVFta"); // "디스코드로 내 세팅 보내기"
+			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\x82\xB4 \xEC\x84\xB8\xED\x8C\x85 \xEB\xB3\xB4\xEB\x82\xB4\xEA\xB8\xB0", SHERBET_DISCORD_URL); // "디스코드로 내 세팅 보내기"
 			sherbet::end_card();
 		}
 		else
@@ -3547,6 +3553,13 @@ void reshade::runtime::draw_gui_market()
 			sherbet::end_card();
 
 			ImGui::Spacing();
+			if (preset_id[0] == '\0')
+			{
+				// 주문번호/구매자명 없이 프리셋이 내장된 비정상 빌드 — 만능 코드 발급을 막기 위해 입력을 숨긴다
+				ImGui::TextDisabled("%s", ICON_FK_WARNING " \xEC\xA3\xBC\xEB\xAC\xB8 \xEC\xA0\x95\xEB\xB3\xB4 \xEC\x97\x86\xEB\x8A\x94 \xEB\xB9\x8C\xEB\x93\x9C \xE2\x80\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "주문 정보 없는 빌드 — 디스코드로 문의해 주세요"
+			}
+			else
+			{
 			static char pcode[32] = "";
 			ImGui::SetNextItemWidth(220.0f);
 			ImGui::InputTextWithHint("##punlock", "PRE-XXXX-XXXX", pcode, sizeof(pcode));
@@ -3561,6 +3574,7 @@ void reshade::runtime::draw_gui_market()
 					save_config();
 					set_current_preset_path(materialize().u8string().c_str());
 				}
+			}
 			}
 		}
 	}

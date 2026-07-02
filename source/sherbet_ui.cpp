@@ -7,7 +7,7 @@
 #include "sherbet_license.hpp"
 
 #include <cmath>
-#include <cstdio>
+#include <cstring>
 #include <set>
 #include <string>
 
@@ -18,8 +18,10 @@ namespace sherbet
 		return ImGui::ColorConvertU32ToFloat4(c);
 	}
 
-	static std::string s_active_id = SHERBET_DEFAULT_THEME;
-	static std::set<std::string> s_unlocked = { SHERBET_DEFAULT_THEME };
+	// 빌드 인자로 잘못된 테마 id 가 들어와도(오타 등) mint 로 안전 폴백 — 유료 테마가 잠긴 채 배송되는 사고 방지
+	static const char *safe_default_id() { return find_theme(SHERBET_DEFAULT_THEME) != nullptr ? SHERBET_DEFAULT_THEME : "mint"; }
+	static std::string s_active_id = safe_default_id();
+	static std::set<std::string> s_unlocked = { safe_default_id() };
 
 	const theme &active_theme()
 	{
@@ -125,20 +127,19 @@ namespace sherbet
 		// 둥근 모서리 베이스 패널 (창 영역에만 채움 — 게임은 창 밖에서 그대로 보임)
 		dl->AddRectFilled(min, max, t.bg1, rounding);
 		// 위→아래 은은한 톤 변화 (상단 bg0, 하단 bg2 를 반투명으로 덧칠)
+		// 그라디언트는 rounding 만큼 안쪽에만 — 둥근 모서리 밖으로 각진 틴트가 새지 않게
 		dl->AddRectFilledMultiColor(
-			min, ImVec2(max.x, min.y + h * 0.5f),
-			(t.bg0 & 0x00FFFFFF) | 0xB0000000, (t.bg0 & 0x00FFFFFF) | 0xB0000000,
-			(t.bg0 & 0x00FFFFFF) | 0x00000000, (t.bg0 & 0x00FFFFFF) | 0x00000000);
+			ImVec2(min.x + rounding, min.y + rounding), ImVec2(max.x - rounding, min.y + h * 0.5f),
+			with_alpha(t.bg0, 0xB0), with_alpha(t.bg0, 0xB0),
+			with_alpha(t.bg0, 0x00), with_alpha(t.bg0, 0x00));
 		dl->AddRectFilledMultiColor(
-			ImVec2(min.x, min.y + h * 0.5f), max,
-			(t.bg2 & 0x00FFFFFF) | 0x00000000, (t.bg2 & 0x00FFFFFF) | 0x00000000,
-			(t.bg2 & 0x00FFFFFF) | 0x88000000, (t.bg2 & 0x00FFFFFF) | 0x88000000);
+			ImVec2(min.x + rounding, min.y + h * 0.5f), ImVec2(max.x - rounding, max.y - rounding),
+			with_alpha(t.bg2, 0x00), with_alpha(t.bg2, 0x00),
+			with_alpha(t.bg2, 0x88), with_alpha(t.bg2, 0x88));
 
 		// 아주 은은한 상단 코너 글로우(작게, 저알파) — 큰 블롭은 제거해 시안처럼 깔끔하게
 		const float t1 = time * 0.12f;
-		const ImU32 g1 = (t.glow & 0x00FFFFFF) | ((ImU32)26 << 24);
-		dl->AddCircleFilled(ImVec2(min.x + w * 0.16f, min.y + h * (0.10f + 0.01f * sinf(t1))), w * 0.12f, g1, 32);
-		(void)h;
+		dl->AddCircleFilled(ImVec2(min.x + w * 0.16f, min.y + h * (0.10f + 0.01f * sinf(t1))), w * 0.12f, with_alpha(t.glow, 26), 32);
 	}
 
 	static void draw_shape(ImDrawList *dl, particle shape, ImVec2 p, float s, ImU32 col)
@@ -177,7 +178,7 @@ namespace sherbet
 			const float x = min.x + fx * w;
 			const float y = max.y - phase * h;
 			const float alpha = (phase < 0.15f ? phase / 0.15f : (phase > 0.8f ? (1.0f - phase) / 0.2f : 1.0f)) * 0.7f;
-			ImU32 col = (t.accent & 0x00FFFFFF) | ((ImU32)(alpha * 255) << 24);
+			ImU32 col = with_alpha(t.accent, (ImU32)(alpha * 255));
 			draw_shape(dl, t.particle_shape, ImVec2(x, y), 6.0f, col);
 		}
 	}
@@ -188,7 +189,7 @@ namespace sherbet
 		for (int i = 3; i >= 1; --i)
 		{
 			const float e = i * 4.0f;
-			ImU32 a = (glow_color & 0x00FFFFFF) | ((ImU32)(30 / i) << 24);
+			ImU32 a = with_alpha(glow_color, (ImU32)(30 / i));
 			dl->AddRect(ImVec2(min.x - e, min.y - e), ImVec2(max.x + e, max.y + e), a, 16.0f, 0, 3.0f);
 		}
 	}
@@ -203,8 +204,9 @@ namespace sherbet
 		const ImGuiStyle &style = ImGui::GetStyle();
 		const float label_w = (label && label[0] != '\0' && label[0] != '#') ? ImGui::CalcTextSize(label, NULL, true).x : 0.0f;
 
-		// 토글 트랙만 클릭 영역으로(라벨 너비를 더하면 라벨이 오른쪽으로 밀리는 버그)
-		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width, height));
+		// 아이템 하나가 트랙+라벨 전체를 덮는다 — 라벨을 SameLine+Text 로 그리면 별도 아이템이 되어
+		// 소비자 쪽 IsItemActive(드래그 재정렬)/우클릭 컨텍스트/툴팁이 라벨에서만 동작하는 버그가 있었음
+		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width + (label_w > 0.0f ? style.ItemInnerSpacing.x + label_w : 0.0f), height));
 		if (clicked)
 			*v = !*v;
 
@@ -223,9 +225,10 @@ namespace sherbet
 
 		if (label_w > 0.0f)
 		{
-			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-			ImGui::AlignTextToFramePadding();
-			ImGui::TextUnformatted(label);
+			// 라벨은 draw list 로 직접 — 트랙 높이에 수직 중앙 정렬, "##" 이후는 표시 안 함
+			const char *label_end = strstr(label, "##");
+			const ImVec2 tp(p.x + width + style.ItemInnerSpacing.x, p.y + (height - ImGui::GetTextLineHeight()) * 0.5f);
+			dl->AddText(tp, ImGui::GetColorU32(ImGuiCol_Text), label, label_end);
 		}
 		return clicked;
 	}
@@ -270,7 +273,7 @@ namespace sherbet
 	bool rail_button(const char *id, const char *icon, bool active)
 	{
 		const theme &t = active_theme();
-		const float sz = 44.0f;
+		const float sz = rail_button_size;
 		const ImVec2 p = ImGui::GetCursorScreenPos();
 		const bool clicked = ImGui::InvisibleButton(id, ImVec2(sz, sz));
 		const bool hovered = ImGui::IsItemHovered();
