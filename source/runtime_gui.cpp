@@ -1127,7 +1127,8 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 테마색 둥근 패널 스플래시 (기본 회색 바 → 브랜드 패널)
 		const sherbet::theme &splash_theme = sherbet::default_theme();
 		ImGui::SetNextWindowPos(_imgui_context->Style.WindowPadding);
-		ImGui::SetNextWindowSize(ImVec2(ImMin(imgui_io.DisplaySize.x - 20.0f, 720.0f), 0.0f));
+		// 전체 폭 배너 — 좁게 자르면 긴 문구가 잘려서 안 예쁨(사용자 피드백)
+		ImGui::SetNextWindowSize(ImVec2(imgui_io.DisplaySize.x - 20.0f, 0.0f));
 		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -1415,12 +1416,15 @@ void reshade::runtime::draw_gui()
 
 		// SHERBET: 아담한 플로팅 오버레이 창 — 전체화면이 아니라 게임 위에 뜨는 카드형 창.
 		// 이동/크기조절 가능하며, 옮긴 위치·크기는 ImGui 설정으로 유지된다.
-		const ImVec2 sherbet_win_size(770.0f, ImClamp(viewport->Size.y * 0.78f, 440.0f, 880.0f));
+		// 기본/최소 높이를 넉넉히 — 리쉐이드 원본 홈의 하단바(다시 로드/성능 모드)가
+		// 낮은 창에서 화면 밖으로 밀려 잘리던 문제(사용자 피드백) 방지
+		const ImVec2 sherbet_win_size(770.0f, ImClamp(viewport->Size.y * 0.84f, 560.0f, 900.0f));
 		ImGui::SetNextWindowPos(
-			viewport->Pos + ImVec2((viewport->Size.x - sherbet_win_size.x) * 0.5f, viewport->Size.y * 0.09f),
+			viewport->Pos + ImVec2((viewport->Size.x - sherbet_win_size.x) * 0.5f, viewport->Size.y * 0.07f),
 			ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(sherbet_win_size, ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowSizeConstraints(ImVec2(540.0f, 400.0f), viewport->Size);
+		// 최소 높이도 하단바가 항상 보이도록 상향(단, 화면보다 크게는 안 되게 max=viewport)
+		ImGui::SetNextWindowSizeConstraints(ImVec2(540.0f, ImMin(560.0f, viewport->Size.y)), viewport->Size);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 		ImGui::Begin("Sherbet###Viewport", nullptr,
 			ImGuiWindowFlags_NoTitleBar |
