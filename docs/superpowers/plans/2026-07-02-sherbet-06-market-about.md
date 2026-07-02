@@ -37,7 +37,7 @@
 	if (sherbet::has_owner())
 	{
 		ImGui::Spacing();
-		ImGui::Text(ICON_FK_CHECK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90 : %s", SHERBET_OWNER); // "등록 소유자 :"
+		ImGui::Text(ICON_FK_OK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90 : %s", SHERBET_OWNER); // "등록 소유자 :"
 		if (SHERBET_ORDER_NO[0] != '\0')
 			ImGui::Text("   \xEC\xA3\xBC\xEB\xAC\xB8 #%s", SHERBET_ORDER_NO); // "주문 #"
 	}
@@ -45,18 +45,18 @@
 
 	sherbet::begin_card("##about_warn");
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.7f, 1.0f));
-	ImGui::TextWrapped(ICON_FK_EXCLAMATION_TRIANGLE " \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA0\x9C\xEC\x9E\x91\xED\x95\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xEC\x9E\x90 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB9\x8C\xEB\x93\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4. \xEB\xAC\xB4\xEB\x8B\xA8 \xEB\xB0\xB0\xED\x8F\xAC\xC2\xB7\xEA\xB3\xB5\xEC\x9C\xA0 \xEC\x8B\x9C \xEB\xB8\x94\xEB\x9E\x99\xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8 \xEC\xB6\x94\xEA\xB0\x80 \xEB\xB0\x8F \xED\x8C\x8C\xEC\x9D\xBC \xEC\x9E\xA0\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xB9\x98\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4.");
+	ImGui::TextWrapped(ICON_FK_WARNING " \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA0\x9C\xEC\x9E\x91\xED\x95\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xEC\x9E\x90 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB9\x8C\xEB\x93\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4. \xEB\xAC\xB4\xEB\x8B\xA8 \xEB\xB0\xB0\xED\x8F\xAC\xC2\xB7\xEA\xB3\xB5\xEC\x9C\xA0 \xEC\x8B\x9C \xEB\xB8\x94\xEB\x9E\x99\xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8 \xEC\xB6\x94\xEA\xB0\x80 \xEB\xB0\x8F \xED\x8C\x8C\xEC\x9D\xBC \xEC\x9E\xA0\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xB9\x98\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4.");
 	ImGui::PopStyleColor();
 	sherbet::end_card();
 	ImGui::Spacing();
 ```
-(UTF-8 이스케이프 = "정렬이 만든 커스텀 리쉐이드", "디스코드 참여", "등록 소유자 :", "주문 #", 경고문. `ICON_FK_COMMENTS`/`ICON_FK_CHECK`/`ICON_FK_EXCLAMATION_TRIANGLE`는 forkawesome.h 존재 여부 확인 후 사용 — 없으면 `ICON_FK_COMMENT`/`ICON_FK_OK`/`ICON_FK_WARNING` 등 존재하는 것으로 대체.)
+(UTF-8 이스케이프 = "정렬이 만든 커스텀 리쉐이드", "디스코드 참여", "등록 소유자 :", "주문 #", 경고문. `ICON_FK_COMMENTS`/`ICON_FK_OK`/`ICON_FK_WARNING`는 forkawesome.h 존재 여부 확인 후 사용 — 없으면 `ICON_FK_COMMENT`/`ICON_FK_OK`/`ICON_FK_WARNING` 등 존재하는 것으로 대체.)
 
 주의: `ImGui::PushFont(_sherbet_title_font, 0.0f)` — 1.92 PushFont는 (ImFont*, float) 시그니처. `_sherbet_title_font`가 nullptr여도 안전(기본 폰트). `TextLinkOpenURL(label, url)` 2인자 오버로드 존재 확인(3472행에서 사용됨).
 
 - [ ] **Step 2: 아이콘 상수 확인 + Commit(push 안 함)**
 
-`grep -n "ICON_FK_COMMENTS\|ICON_FK_COMMENT\|ICON_FK_CHECK\|ICON_FK_EXCLAMATION_TRIANGLE\|ICON_FK_WARNING\|ICON_FK_OK" res/fonts/forkawesome.h` 로 존재하는 이름 확인 후 코드 반영.
+`grep -n "ICON_FK_COMMENTS\|ICON_FK_COMMENT\|ICON_FK_OK\|ICON_FK_WARNING\|ICON_FK_WARNING\|ICON_FK_OK" res/fonts/forkawesome.h` 로 존재하는 이름 확인 후 코드 반영.
 ```bash
 git add source/runtime_gui.cpp
 git commit -m "feat(sherbet): About 탭 크레딧·디스코드·구매자·경고"
@@ -227,10 +227,10 @@ void reshade::runtime::draw_gui_market()
 		ImGui::Dummy(ImVec2(bw, 30.0f));
 		ImGui::Text("%s", th.display_name);
 		if (active)
-			ImGui::TextDisabled("%s", ICON_FK_CHECK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+			ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
 		else if (unlocked)
 		{
-			if (sherbet::pill_button(ICON_FK_CHECK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
+			if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
 			{ sherbet::set_active_theme(th.id); save_config(); }
 		}
 		else
