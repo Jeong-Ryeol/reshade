@@ -349,6 +349,22 @@ namespace reshade
 		float _sherbet_compare_split = 0.5f; // 0..1, 분할선 x 위치 비율
 		bool _sherbet_compare_dragging = false;
 
+		// SHERBET: 커스텀 조준점(크로스헤어). Sherbet-Crosshairs 폴더의 PNG 를 골라 화면 중앙에
+		// 표시하거나, 내장 도형(점/십자/원/십자+점)을 그린다. ImGui 오버레이라 렌더 파이프라인 무영향.
+		api::resource _sherbet_crosshair_tex = {};
+		api::resource_view _sherbet_crosshair_srv = {};
+		int _sherbet_crosshair_w = 0, _sherbet_crosshair_h = 0;
+		bool _sherbet_crosshair_on = false;
+		int _sherbet_crosshair_builtin = 1;      // 0=커스텀이미지, 1=점, 2=십자, 3=원, 4=십자+점
+		std::string _sherbet_crosshair_file;     // 커스텀 이미지 파일명(폴더 기준)
+		float _sherbet_crosshair_size = 24.0f;   // 픽셀 크기(도형 지름 / 이미지 폭)
+		float _sherbet_crosshair_thick = 2.0f;   // 도형 선 두께
+		float _sherbet_crosshair_gap = 6.0f;     // 십자 중앙 간격
+		float _sherbet_crosshair_opacity = 1.0f; // 0..1
+		float _sherbet_crosshair_off[2] = { 0.0f, 0.0f };            // 중앙 기준 오프셋(px)
+		float _sherbet_crosshair_col[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // 도형 색(딸기 핑크 기본)
+		bool _sherbet_crosshair_dirty = false;   // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+
 		api::state_block _app_state = {};
 		#pragma endregion
 
@@ -423,6 +439,7 @@ namespace reshade
 #endif
 		void draw_variable_editor();
 		void draw_technique_editor();
+		void sherbet_load_crosshair(); // 선택된 커스텀 조준점 이미지를 텍스처로 로딩(파일 없으면 해제)
 
 		bool init_imgui_resources();
 		void render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::resource_view rtv);

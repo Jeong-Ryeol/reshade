@@ -22,7 +22,10 @@
 #include "sherbet_owner.h"
 #include "sherbet_nodelock.hpp"
 #include "sherbet_license.hpp"
+#include <stb_image.h> // 커스텀 조준점 PNG 로딩
 #include <fstream>
+#include <iterator> // std::istreambuf_iterator (조준점 파일 읽기)
+#include <vector> // 조준점 폴더 파일 목록
 #include <cmath> // std::abs, std::ceil, std::floor
 #include <cctype> // std::tolower
 #include <cstdlib> // std::strtol
@@ -384,7 +387,18 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	  std::string fav; config.get("SHERBET", "Favorites", fav);
 	  _sherbet_fav.clear();
-	  for (size_t p = 0, e; p <= fav.size(); p = e + 1) { e = fav.find(',', p); if (e == std::string::npos) e = fav.size(); if (e > p) _sherbet_fav.insert(fav.substr(p, e - p)); } }
+	  for (size_t p = 0, e; p <= fav.size(); p = e + 1) { e = fav.find(',', p); if (e == std::string::npos) e = fav.size(); if (e > p) _sherbet_fav.insert(fav.substr(p, e - p)); }
+	  // 커스텀 조준점 설정
+	  config.get("SHERBET", "CrosshairOn", _sherbet_crosshair_on);
+	  config.get("SHERBET", "CrosshairBuiltin", _sherbet_crosshair_builtin);
+	  config.get("SHERBET", "CrosshairFile", _sherbet_crosshair_file);
+	  config.get("SHERBET", "CrosshairSize", _sherbet_crosshair_size);
+	  config.get("SHERBET", "CrosshairThick", _sherbet_crosshair_thick);
+	  config.get("SHERBET", "CrosshairGap", _sherbet_crosshair_gap);
+	  config.get("SHERBET", "CrosshairOpacity", _sherbet_crosshair_opacity);
+	  config.get("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
+	  config.get("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
+	  _sherbet_crosshair_dirty = true; } // 로드 후 이미지 재로딩 예약
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.get("STYLE", "Alpha", imgui_style.Alpha);
@@ -494,6 +508,15 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
+	config.set("SHERBET", "CrosshairOn", _sherbet_crosshair_on);
+	config.set("SHERBET", "CrosshairBuiltin", _sherbet_crosshair_builtin);
+	config.set("SHERBET", "CrosshairFile", _sherbet_crosshair_file);
+	config.set("SHERBET", "CrosshairSize", _sherbet_crosshair_size);
+	config.set("SHERBET", "CrosshairThick", _sherbet_crosshair_thick);
+	config.set("SHERBET", "CrosshairGap", _sherbet_crosshair_gap);
+	config.set("SHERBET", "CrosshairOpacity", _sherbet_crosshair_opacity);
+	config.set("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
+	config.set("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
 
 	const ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.set("STYLE", "Alpha", imgui_style.Alpha);
@@ -1163,6 +1186,51 @@ void reshade::runtime::draw_gui()
 				_sherbet_compare_dragging = false;
 			if (_sherbet_compare_dragging && sz.x > 1.0f)
 				_sherbet_compare_split = ImClamp((m.x - p0.x) / sz.x, 0.0f, 1.0f);
+		}
+	}
+
+	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
+	// ForegroundDrawList 라 항상 최상단에 보이며, 렌더 파이프라인은 건드리지 않는다.
+	if (_sherbet_crosshair_on)
+	{
+		if (_sherbet_crosshair_dirty)
+			sherbet_load_crosshair();
+
+		const ImGuiViewport *const xh_vp = ImGui::GetMainViewport();
+		const ImVec2 c(xh_vp->Pos.x + xh_vp->Size.x * 0.5f + _sherbet_crosshair_off[0],
+		               xh_vp->Pos.y + xh_vp->Size.y * 0.5f + _sherbet_crosshair_off[1]);
+		ImDrawList *const xh = ImGui::GetForegroundDrawList();
+		const float op = ImClamp(_sherbet_crosshair_opacity, 0.0f, 1.0f);
+
+		if (_sherbet_crosshair_builtin == 0 && _sherbet_crosshair_srv != 0 && _sherbet_crosshair_w > 0)
+		{
+			const float iw = _sherbet_crosshair_size;
+			const float ih = iw * static_cast<float>(_sherbet_crosshair_h) / static_cast<float>(_sherbet_crosshair_w);
+			const ImU32 tint = IM_COL32(255, 255, 255, static_cast<int>(op * 255.0f));
+			xh->AddImage(_sherbet_crosshair_srv.handle, ImVec2(c.x - iw * 0.5f, c.y - ih * 0.5f), ImVec2(c.x + iw * 0.5f, c.y + ih * 0.5f), ImVec2(0, 0), ImVec2(1, 1), tint);
+		}
+		else
+		{
+			const ImU32 col = IM_COL32(
+				static_cast<int>(_sherbet_crosshair_col[0] * 255.0f), static_cast<int>(_sherbet_crosshair_col[1] * 255.0f),
+				static_cast<int>(_sherbet_crosshair_col[2] * 255.0f), static_cast<int>(_sherbet_crosshair_col[3] * op * 255.0f));
+			const float s = _sherbet_crosshair_size * 0.5f; // 반길이/반지름
+			const float g = _sherbet_crosshair_gap;
+			const float th = ImMax(1.0f, _sherbet_crosshair_thick);
+			const bool draw_cross = (_sherbet_crosshair_builtin == 2 || _sherbet_crosshair_builtin == 4);
+			const bool draw_dot   = (_sherbet_crosshair_builtin == 1 || _sherbet_crosshair_builtin == 4);
+			const bool draw_circle = (_sherbet_crosshair_builtin == 3);
+			if (draw_cross)
+			{
+				xh->AddLine(ImVec2(c.x - s, c.y), ImVec2(c.x - g, c.y), col, th);
+				xh->AddLine(ImVec2(c.x + g, c.y), ImVec2(c.x + s, c.y), col, th);
+				xh->AddLine(ImVec2(c.x, c.y - s), ImVec2(c.x, c.y - g), col, th);
+				xh->AddLine(ImVec2(c.x, c.y + g), ImVec2(c.x, c.y + s), col, th);
+			}
+			if (draw_circle)
+				xh->AddCircle(c, s, col, 0, th);
+			if (draw_dot)
+				xh->AddCircleFilled(c, ImMax(1.5f, th), col);
 		}
 	}
 
@@ -2309,6 +2377,58 @@ void reshade::runtime::draw_gui_home()
 		}
 	}
 }
+// 선택된 커스텀 조준점 PNG 를 텍스처로 로딩한다. 내장 도형 모드거나 파일이 없으면 텍스처를 해제만 한다.
+// 렌더 스레드(draw_gui)에서만 호출 — _device 사용이 안전한 시점.
+void reshade::runtime::sherbet_load_crosshair()
+{
+	_sherbet_crosshair_dirty = false;
+	if (_sherbet_crosshair_srv != 0) { _device->destroy_resource_view(_sherbet_crosshair_srv); _sherbet_crosshair_srv = {}; }
+	if (_sherbet_crosshair_tex != 0) { _device->destroy_resource(_sherbet_crosshair_tex); _sherbet_crosshair_tex = {}; }
+	_sherbet_crosshair_w = _sherbet_crosshair_h = 0;
+
+	if (_sherbet_crosshair_builtin != 0 || _sherbet_crosshair_file.empty())
+		return; // 내장 도형 모드거나 선택 파일 없음 → 이미지 불필요
+
+	const std::filesystem::path path = _config_path.parent_path() / L"Sherbet-Crosshairs" / std::filesystem::u8path(_sherbet_crosshair_file);
+	std::error_code ec;
+	if (!std::filesystem::exists(path, ec))
+		return;
+
+	std::ifstream file(path, std::ios::binary);
+	if (!file)
+		return;
+	const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	if (data.empty())
+		return;
+
+	int w = 0, h = 0, ch = 0;
+	stbi_uc *const pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(data.data()), static_cast<int>(data.size()), &w, &h, &ch, STBI_rgb_alpha);
+	if (pixels == nullptr)
+		return;
+
+	const api::subresource_data initial = { pixels, static_cast<uint32_t>(w * 4), static_cast<uint32_t>(w * 4 * h) };
+	if (_device->create_resource(
+			api::resource_desc(w, h, 1, 1, api::format::r8g8b8a8_unorm, 1, api::memory_heap::default_, api::resource_usage::shader_resource | api::resource_usage::copy_dest),
+			&initial, api::resource_usage::shader_resource, &_sherbet_crosshair_tex))
+	{
+		if (_device->create_resource_view(_sherbet_crosshair_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format::r8g8b8a8_unorm), &_sherbet_crosshair_srv))
+		{
+			_sherbet_crosshair_w = w;
+			_sherbet_crosshair_h = h;
+		}
+		else
+		{
+			_device->destroy_resource(_sherbet_crosshair_tex);
+			_sherbet_crosshair_tex = {};
+		}
+	}
+	else
+	{
+		_sherbet_crosshair_tex = {};
+	}
+
+	stbi_image_free(pixels);
+}
 void reshade::runtime::draw_gui_settings()
 {
 	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
@@ -2318,6 +2438,89 @@ void reshade::runtime::draw_gui_settings()
 
 	bool modified = false;
 	bool modified_custom_style = false;
+
+	// SHERBET: 커스텀 조준점 — 사용자가 Sherbet-Crosshairs 폴더에 넣은 PNG 를 골라 화면 중앙에 표시
+	if (ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90")) // "커스텀 조준점"
+	{
+		bool xh_changed = false;
+		xh_changed |= ImGui::Checkbox("\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\xBC\x9C\xEA\xB8\xB0", &_sherbet_crosshair_on); // "조준점 켜기"
+		ImGui::TextDisabled("%s", ICON_FK_WARNING " \xEC\x98\xA8\xEB\x9D\xBC\xEC\x9D\xB8 \xEA\xB2\xBD\xEC\x9F\x81 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\xA0 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\xB4 \xEC\xA0\x9C\xEC\x9E\xAC \xEB\x8C\x80\xEC\x83\x81\xEC\x9D\xBC \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94"); // 경고
+
+		const char *const xh_shapes[] = {
+			"\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80", // "커스텀 이미지"
+			"\xEC\xA0\x90", "\xEC\x8B\xAD\xEC\x9E\x90", "\xEC\x9B\x90", "\xEC\x8B\xAD\xEC\x9E\x90+\xEC\xA0\x90" }; // 점/십자/원/십자+점
+		const int prev_builtin = _sherbet_crosshair_builtin;
+		if (ImGui::BeginCombo("\xEB\xAA\xA8\xEC\x96\x91", xh_shapes[ImClamp(_sherbet_crosshair_builtin, 0, 4)])) // "모양"
+		{
+			for (int i = 0; i < 5; ++i)
+				if (ImGui::Selectable(xh_shapes[i], _sherbet_crosshair_builtin == i))
+				{ _sherbet_crosshair_builtin = i; xh_changed = true; }
+			ImGui::EndCombo();
+		}
+		if (_sherbet_crosshair_builtin != prev_builtin)
+			_sherbet_crosshair_dirty = true;
+
+		if (_sherbet_crosshair_builtin == 0) // 커스텀 이미지 모드
+		{
+			const std::filesystem::path xh_dir = _config_path.parent_path() / L"Sherbet-Crosshairs";
+			static std::vector<std::string> xh_files;
+			static bool xh_need_scan = true;
+			if (xh_need_scan)
+			{
+				xh_need_scan = false;
+				xh_files.clear();
+				std::error_code ec;
+				std::filesystem::create_directories(xh_dir, ec); // 없으면 폴더 생성
+				for (std::filesystem::directory_iterator it(xh_dir, ec), end; it != end; it.increment(ec))
+				{
+					if (!it->is_regular_file(ec)) continue;
+					std::filesystem::path ext = it->path().extension();
+					std::string e = ext.u8string();
+					std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+					if (e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga")
+						xh_files.push_back(it->path().filename().u8string());
+				}
+			}
+
+			if (ImGui::BeginCombo("\xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80 \xED\x8C\x8C\xEC\x9D\xBC", _sherbet_crosshair_file.empty() ? "-" : _sherbet_crosshair_file.c_str())) // "이미지 파일"
+			{
+				for (const std::string &f : xh_files)
+					if (ImGui::Selectable(f.c_str(), f == _sherbet_crosshair_file))
+					{ _sherbet_crosshair_file = f; _sherbet_crosshair_dirty = true; xh_changed = true; }
+				ImGui::EndCombo();
+			}
+			if (xh_files.empty())
+				ImGui::TextDisabled("%s", "\xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 PNG \xEC\x97\x86\xEC\x9D\x8C \xE2\x80\x94 '\xED\x8F\xB4\xEB\x8D\x94 \xEC\x97\xB4\xEA\xB8\xB0'\xEB\xA1\x9C \xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80\xEB\xA5\xBC \xEB\x84\xA3\xEC\x9C\xBC\xEC\x84\xB8\xEC\x9A\x94"); // 없음 안내
+			else
+				ImGui::TextDisabled("%s", "PNG(\xED\x88\xAC\xEB\xAA\x85 \xEB\xB0\xB0\xEA\xB2\xBD)\xEB\xA5\xBC \xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEB\x84\xA3\xEA\xB3\xA0 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEC\x84\xB8\xEC\x9A\x94"); // 안내
+
+			if (ImGui::Button("\xED\x8F\xB4\xEB\x8D\x94 \xEC\x97\xB4\xEA\xB8\xB0")) // "폴더 열기"
+			{
+				std::error_code ec;
+				std::filesystem::create_directories(xh_dir, ec);
+				utils::open_explorer(xh_dir);
+				xh_need_scan = true;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("\xEC\x83\x88\xEB\xA1\x9C\xEA\xB3\xA0\xEC\xB9\xA8")) // "새로고침"
+				xh_need_scan = true;
+		}
+
+		xh_changed |= ImGui::SliderFloat("\xED\x81\xAC\xEA\xB8\xB0", &_sherbet_crosshair_size, 4.0f, 256.0f, "%.0f"); // "크기"
+		if (_sherbet_crosshair_builtin != 0)
+		{
+			xh_changed |= ImGui::SliderFloat("\xEB\x91\x90\xEA\xBB\x98", &_sherbet_crosshair_thick, 1.0f, 12.0f, "%.1f"); // "두께"
+			if (_sherbet_crosshair_builtin == 2 || _sherbet_crosshair_builtin == 4)
+				xh_changed |= ImGui::SliderFloat("\xEC\xA4\x91\xEC\x95\x99 \xEA\xB0\x84\xEA\xB2\xA9", &_sherbet_crosshair_gap, 0.0f, 40.0f, "%.0f"); // "중앙 간격"
+			xh_changed |= ImGui::ColorEdit4("\xEC\x83\x89\xEC\x83\x81", _sherbet_crosshair_col, ImGuiColorEditFlags_AlphaBar); // "색상"
+		}
+		xh_changed |= ImGui::SliderFloat("\xED\x88\xAC\xEB\xAA\x85\xEB\x8F\x84", &_sherbet_crosshair_opacity, 0.0f, 1.0f, "%.2f"); // "투명도"
+		xh_changed |= ImGui::SliderFloat2("\xEC\x9C\x84\xEC\xB9\x98 X/Y", _sherbet_crosshair_off, -400.0f, 400.0f, "%.0f"); // "위치 X/Y"
+
+		if (xh_changed)
+			modified = true;
+		ImGui::Spacing();
+	}
 
 	if (ImGui::CollapsingHeader(_("General"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
