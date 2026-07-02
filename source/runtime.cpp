@@ -472,6 +472,31 @@ bool reshade::runtime::on_init()
 		}
 	}
 
+	// SHERBET: 반반 비교용 '효과 적용 전' 스냅샷 텍스처. 백버퍼와 같은 크기/포맷(typeless)로
+	// 만들고, ImGui 가 샘플링할 수 있게 typed shader_resource 뷰를 붙인다.
+	// 실패해도 비교 기능만 비활성화되고 본 렌더는 계속되도록 치명적 에러로 취급하지 않는다.
+	if (_sherbet_before_tex == 0)
+	{
+		if (_device->create_resource(
+				api::resource_desc(_width, _height, 1, 1, api::format_to_typeless(_back_buffer_format), 1, api::memory_heap::default_, api::resource_usage::copy_dest | api::resource_usage::shader_resource),
+				nullptr, api::resource_usage::shader_resource, &_sherbet_before_tex))
+		{
+			if (!_device->create_resource_view(
+					_sherbet_before_tex,
+					api::resource_usage::shader_resource,
+					api::resource_view_desc(api::format_to_default_typed(_back_buffer_format, 0)),
+					&_sherbet_before_srv))
+			{
+				_device->destroy_resource(_sherbet_before_tex);
+				_sherbet_before_tex = {};
+			}
+		}
+		else
+		{
+			_sherbet_before_tex = {};
+		}
+	}
+
 	// Create an empty texture, which is bound to shader resource view slots with an unknown semantic (since it is not valid to bind a zero handle in Vulkan, unless the 'VK_EXT_robustness2' extension is enabled)
 	if (_empty_tex == 0)
 	{
@@ -609,6 +634,11 @@ exit_failure:
 	_device->destroy_resource_view(_back_buffer_resolved_srv);
 	_back_buffer_resolved_srv = {};
 
+	_device->destroy_resource(_sherbet_before_tex);
+	_sherbet_before_tex = {};
+	_device->destroy_resource_view(_sherbet_before_srv);
+	_sherbet_before_srv = {};
+
 	for (const api::resource_view view : _back_buffer_targets)
 		_device->destroy_resource_view(view);
 	_back_buffer_targets.clear();
@@ -663,6 +693,11 @@ void reshade::runtime::on_reset()
 	_back_buffer_resolved = {};
 	_device->destroy_resource_view(_back_buffer_resolved_srv);
 	_back_buffer_resolved_srv = {};
+
+	_device->destroy_resource(_sherbet_before_tex);
+	_sherbet_before_tex = {};
+	_device->destroy_resource_view(_sherbet_before_srv);
+	_sherbet_before_srv = {};
 
 	for (const api::resource_view view : _back_buffer_targets)
 		_device->destroy_resource_view(view);
@@ -720,6 +755,20 @@ void reshade::runtime::on_present()
 			cmd_list->resolve_texture_region(back_buffer_resource, 0, nullptr, _back_buffer_resolved, 0, 0, 0, 0, _back_buffer_format);
 			cmd_list->barrier(_back_buffer_resolved, api::resource_usage::resolve_dest, api::resource_usage::render_target);
 		}
+	}
+
+	// SHERBET: 반반 비교가 켜져 있을 때만 '효과 적용 전' 프레임을 스냅샷.
+	// 소스는 효과가 곧 렌더될(= '적용 후'가 될) 리소스와 동일 — 리졸브 텍스처가 있으면 그것, 없으면 백버퍼.
+	// 여기서 뜬 스냅샷을 draw_gui() 에서 ImGui 위에 왼쪽 절반만 겹쳐 그린다.
+	if (_sherbet_compare_active && _sherbet_before_tex != 0 && !is_loading() && !_techniques.empty())
+	{
+		const api::resource before_src = (_back_buffer_resolved != 0) ? _back_buffer_resolved : back_buffer_resource;
+		const api::resource_usage before_src_state = (_back_buffer_resolved != 0) ? api::resource_usage::render_target : api::resource_usage::present;
+		cmd_list->barrier(before_src, before_src_state, api::resource_usage::copy_source);
+		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
+		cmd_list->copy_texture_region(before_src, 0, nullptr, _sherbet_before_tex, 0, nullptr);
+		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
+		cmd_list->barrier(before_src, api::resource_usage::copy_source, before_src_state);
 	}
 
 	// Lock input so it cannot be modified by other threads while we are reading it here

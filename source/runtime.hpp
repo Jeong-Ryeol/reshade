@@ -339,6 +339,16 @@ namespace reshade
 		api::resource_view _back_buffer_resolved_srv = {};
 		std::vector<api::resource_view> _back_buffer_targets;
 
+		// SHERBET: 효과 적용 전/후 반반 비교 슬라이더.
+		// _sherbet_before_tex 에 '효과 적용 전' 프레임을 스냅샷해두고, 오버레이(ImGui) 위에
+		// 왼쪽 절반을 겹쳐 그린다. 렌더 타깃 상태머신은 건드리지 않아 안전하며,
+		// _sherbet_compare_active 가 꺼져 있으면(기본) 스냅샷/합성 모두 완전히 스킵된다.
+		api::resource _sherbet_before_tex = {};
+		api::resource_view _sherbet_before_srv = {};
+		bool _sherbet_compare_active = false;
+		float _sherbet_compare_split = 0.5f; // 0..1, 분할선 x 위치 비율
+		bool _sherbet_compare_dragging = false;
+
 		api::state_block _app_state = {};
 		#pragma endregion
 

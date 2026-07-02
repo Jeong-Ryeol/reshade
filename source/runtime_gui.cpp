@@ -1128,6 +1128,40 @@ void reshade::runtime::draw_gui()
 
 	ImGui::NewFrame();
 
+	// SHERBET: 반반 비교 슬라이더. on_present() 에서 떠 둔 '효과 적용 전' 스냅샷의 왼쪽 split
+	// 영역을 게임 위(오버레이 아래)에 겹쳐 그리고, 가운데에 드래그 가능한 분할선을 표시한다.
+	// 비교가 꺼져 있으면(기본) 전부 스킵되어 렌더에 영향 없음.
+	if (_sherbet_compare_active && _sherbet_before_srv != 0 && !is_loading() && !_techniques.empty())
+	{
+		const ImGuiViewport *const cmp_vp = ImGui::GetMainViewport();
+		const ImVec2 p0 = cmp_vp->Pos, sz = cmp_vp->Size;
+		const float split = ImClamp(_sherbet_compare_split, 0.02f, 0.98f);
+		const float split_x = p0.x + sz.x * split;
+
+		ImDrawList *const dl = ImGui::GetBackgroundDrawList();
+		dl->AddImage(_sherbet_before_srv.handle, p0, ImVec2(split_x, p0.y + sz.y), ImVec2(0, 0), ImVec2(split, 1));
+		dl->AddLine(ImVec2(split_x, p0.y), ImVec2(split_x, p0.y + sz.y), IM_COL32(255, 255, 255, 235), 2.0f);
+		const ImVec2 handle(split_x, p0.y + sz.y * 0.5f);
+		dl->AddCircleFilled(handle, 13.0f, IM_COL32(255, 255, 255, 240));
+		dl->AddCircle(handle, 13.0f, IM_COL32(0, 0, 0, 90), 0, 2.0f);
+		dl->AddText(ImVec2(p0.x + 14, p0.y + 12), IM_COL32(255, 255, 255, 220), "BEFORE");
+		const char *const cmp_after = "AFTER";
+		dl->AddText(ImVec2(p0.x + sz.x - ImGui::CalcTextSize(cmp_after).x - 14, p0.y + 12), IM_COL32(255, 255, 255, 220), cmp_after);
+
+		// 드래그 — 오버레이가 열려 있을 때만. 분할선 근처를 누르면 잡고, 마우스를 따라 이동.
+		if (_input != nullptr && show_overlay)
+		{
+			const ImVec2 m = _imgui_context->IO.MousePos;
+			const bool near_line = (m.x > split_x ? m.x - split_x : split_x - m.x) < 26.0f;
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && near_line && !_imgui_context->IO.WantCaptureMouse)
+				_sherbet_compare_dragging = true;
+			if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+				_sherbet_compare_dragging = false;
+			if (_sherbet_compare_dragging && sz.x > 1.0f)
+				_sherbet_compare_split = ImClamp((m.x - p0.x) / sz.x, 0.0f, 1.0f);
+		}
+	}
+
 	// Reset input source to mouse when the cursor is moved
 	if (_input != nullptr && (_input->mouse_movement_delta_x() != 0 || _input->mouse_movement_delta_y() != 0))
 		_imgui_context->NavInputSource = ImGuiInputSource_Mouse;
@@ -1521,10 +1555,20 @@ void reshade::runtime::draw_gui()
 			// 우측 원클릭 버튼 3종 (기존 기능 호출만)
 			const float bh = ImGui::GetFrameHeight() * 0.9f, bw = bh * 1.4f, gap = 6.0f;
 			const float win_w = ImGui::GetWindowSize().x;
-			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 3.0f + gap * 2.0f), (sherbet_header_h - bh) * 0.5f));
+			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 4.0f + gap * 3.0f), (sherbet_header_h - bh) * 0.5f));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().chip));
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text));
+			// 반반 비교 토글 — 켜져 있으면 액센트 색으로 강조
+			const bool cmp_on = _sherbet_compare_active;
+			if (cmp_on)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().accent));
+			if (ImGui::Button(ICON_FK_ADJUST "##sherbet_compare", ImVec2(bw, bh)))
+				_sherbet_compare_active = !_sherbet_compare_active;
+			if (cmp_on)
+				ImGui::PopStyleColor();
+			ImGui::SetItemTooltip("\xEB\xB0\x98\xEB\xB0\x98 \xEB\xB9\x84\xEA\xB5\x90(\xEC\xA0\x81\xEC\x9A\xA9 \xEC\xA0\x84/\xED\x9B\x84)"); // "반반 비교(적용 전/후)"
+			ImGui::SameLine(0.0f, gap);
 			if (ImGui::Button(ICON_FK_CAMERA "##sherbet_shot", ImVec2(bw, bh)))
 				save_screenshot(nullptr);
 			ImGui::SetItemTooltip("\xEC\x8A\xA4\xED\x81\xAC\xEB\xA6\xB0\xEC\x83\xB7"); // "스크린샷"
