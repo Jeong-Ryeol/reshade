@@ -1341,70 +1341,23 @@ void reshade::runtime::draw_gui()
 			ImGui::PopStyleVar();
 		}
 
-		const std::pair<std::string, void(runtime::*)()> overlay_callbacks[] = {
-			{ _("Home###home"), &runtime::draw_gui_home },
-#if RESHADE_ADDON
-			{ _("Add-ons###addons"), &runtime::draw_gui_addons },
-#endif
-			{ _("Settings###settings"), &runtime::draw_gui_settings },
-			{ _("Statistics###statistics"), &runtime::draw_gui_statistics },
-			{ _("Log###log"), &runtime::draw_gui_log },
-			{ _("About###about"), &runtime::draw_gui_about }
-		};
-
-		const ImGuiID root_space_id = ImGui::GetID("ViewportDockspace");
-
-		// Set up default dock layout if this was not done yet
-		const bool init_window_layout = !ImGui::DockBuilderGetNode(root_space_id);
-		if (init_window_layout)
-		{
-			// Add the root node
-			ImGui::DockBuilderAddNode(root_space_id, ImGuiDockNodeFlags_DockSpace);
-			ImGui::DockBuilderSetNodeSize(root_space_id, viewport->Size);
-
-			// Split root node into two spaces
-			ImGuiID main_space_id = 0;
-			ImGuiID right_space_id = 0;
-			ImGui::DockBuilderSplitNode(root_space_id, ImGuiDir_Left, 0.35f, &main_space_id, &right_space_id);
-
-			// Attach most windows to the main dock space
-			for (const std::pair<std::string, void(runtime::*)()> &widget : overlay_callbacks)
-				ImGui::DockBuilderDockWindow(widget.first.c_str(), main_space_id);
-
-#if RESHADE_ADDON
-			for (const addon_info &info : addon_loaded_info)
-			{
-				for (const addon_info::overlay_callback &widget : info.overlay_callbacks)
-				{
-					if (widget.title == "OSD")
-						continue;
-
-					ImGui::DockBuilderDockWindow(widget.title.c_str(), main_space_id);
-				}
-			}
-#endif
-
-			// Attach editor window to the remaining dock space
-			ImGui::DockBuilderDockWindow("###editor", right_space_id);
-
-			// Commit the layout
-			ImGui::DockBuilderFinish(root_space_id);
-		}
-
+		// SHERBET: 단일 오버레이 창 — 좌측 아이콘 레일 + 콘텐츠
 		ImGui::SetNextWindowPos(viewport->Pos + viewport_offset);
 		ImGui::SetNextWindowSize(viewport->Size - viewport_offset);
 		ImGui::SetNextWindowViewport(viewport->ID);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 		ImGui::Begin("Viewport", nullptr,
 			ImGuiWindowFlags_NoDecoration |
 			ImGuiWindowFlags_NoNav |
 			ImGuiWindowFlags_NoMove |
-			ImGuiWindowFlags_NoDocking | // This is the background viewport, the docking space is a child of it
+			ImGuiWindowFlags_NoDocking |
 			ImGuiWindowFlags_NoFocusOnAppearing |
 			ImGuiWindowFlags_NoBringToFrontOnFocus |
 			ImGuiWindowFlags_NoBackground);
+		ImGui::PopStyleVar();
 
 		{
-			// Sherbet: animated themed background + rising particles, drawn behind all overlay windows
+			// 애니메이션 배경 + 파티클 (오버레이 창들 뒤)
 			ImDrawList *const sherbet_bg = ImGui::GetBackgroundDrawList();
 			const ImVec2 sherbet_vmin = viewport->Pos;
 			const ImVec2 sherbet_vmax = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
@@ -1413,19 +1366,49 @@ void reshade::runtime::draw_gui()
 			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::default_theme(), s_sherbet_time);
 		}
 
-		ImGui::DockSpace(root_space_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
-		ImGui::End();
-
-		// Ensure there is always a window that has navigation focus when keyboard or gamepad navigation is used (choose the first overlay window created next)
-		if (_imgui_context->NavInputSource > ImGuiInputSource_Mouse && _imgui_context->NavWindowingTarget == nullptr && !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow))
-			ImGui::SetNextWindowFocus();
-
-		for (const std::pair<std::string, void(runtime:: *)()> &widget : overlay_callbacks)
+		// 좌측 레일
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.28f));
+		ImGui::BeginChild("##sherbet_rail", ImVec2(66.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PopStyleColor();
 		{
-			if (ImGui::Begin(widget.first.c_str(), nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) // No focus so that window state is preserved between opening/closing the GUI
-				(this->*widget.second)();
-			ImGui::End();
+			ImGui::Dummy(ImVec2(0, 8));
+			// 로고
+			ImGui::SetCursorPosX((66.0f - 40.0f) * 0.5f);
+			sherbet::rail_button("##logo", ICON_FK_MAGIC, false);
+			ImGui::Dummy(ImVec2(0, 10));
+
+			struct RailItem { const char *id; const char *icon; };
+			const RailItem items[] = {
+				{ "##tab_home", ICON_FK_HOME },
+				{ "##tab_market", ICON_FK_SHOPPING_CART },
+				{ "##tab_settings", ICON_FK_SLIDERS },
+				{ "##tab_about", ICON_FK_INFO_CIRCLE },
+			};
+			for (int i = 0; i < 4; ++i)
+			{
+				ImGui::SetCursorPosX((66.0f - 44.0f) * 0.5f);
+				if (sherbet::rail_button(items[i].id, items[i].icon, _sherbet_tab == i))
+					_sherbet_tab = i;
+				ImGui::Dummy(ImVec2(0, 4));
+			}
 		}
+		ImGui::EndChild();
+
+		ImGui::SameLine(0.0f, 0.0f);
+
+		// 콘텐츠
+		ImGui::BeginChild("##sherbet_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoFocusOnAppearing);
+		switch (_sherbet_tab)
+		{
+		case 0: draw_gui_home(); break;
+		case 1: draw_gui_market(); break;
+		case 2: draw_gui_settings(); break;
+		case 3: draw_gui_about(); break;
+		default: draw_gui_home(); break;
+		}
+		ImGui::EndChild();
+
+		ImGui::End();
 
 		if (!_editors.empty())
 		{
