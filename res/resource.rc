@@ -115,6 +115,8 @@ IDR_LICENSE_S_JXL       RCDATA                  "..\\deps\\jxl_simple_lossless\\
 IDR_FONT_SHERBET_BODY   RCDATA                  "fonts\\Jua-Regular.ttf"
 
 IDR_FONT_SHERBET_TITLE  RCDATA                  "fonts\\Gaegu-Bold.ttf"
+
+IDR_SHERBET_PRESET_PERSONAL RCDATA              "presets\\personal.ini"
 #endif
 
 #endif    // Neutral (Default) resources
