@@ -1118,7 +1118,7 @@ void reshade::runtime::draw_gui()
 		else
 		{
 			// SHERBET 리브랜드 스플래시 제목 (타이틀 폰트 + 액센트 색)
-			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(splash_theme.accent));
 			if (sherbet::has_owner())
 				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", splash_theme.display_name, SHERBET_OWNER);
@@ -1414,7 +1414,7 @@ void reshade::runtime::draw_gui()
 		// 상단 헤더 = 브랜드 + 원클릭 버튼(스샷·성능·리로드) + 드래그 핸들(빈 공간을 끌면 창 이동)
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
-			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
 			ImGui::TextUnformatted("Sherbet");
 			ImGui::PopFont();
 			ImGui::SameLine(0.0f, 8.0f);
@@ -1469,7 +1469,7 @@ void reshade::runtime::draw_gui()
 				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
 				ImGui::TextUnformatted(text);
 			};
-			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
 			centered(ICON_FK_LOCK "  \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x8B\xA4\xEB\xA5\xB8 PC\xEC\x97\x90 \xEB\x93\xB1\xEB\xA1\x9D\xEB\x90\x98\xEC\x96\xB4 \xEC\x9E\x88\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // "이 빌드는 다른 PC에 등록되어 있습니다"
 			ImGui::PopFont();
 			ImGui::Spacing();
@@ -3278,7 +3278,7 @@ void reshade::runtime::draw_gui_about()
 {
 	// SHERBET 크레딧 블록
 	sherbet::begin_card("##about_credit");
-	ImGui::PushFont(_sherbet_title_font, 0.0f);
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.9f);
 	ImGui::Text("Sherbet %s", sherbet::active_theme().display_name);
 	ImGui::PopFont();
 	ImGui::TextUnformatted("\xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEB\xA7\x8C\xEB\x93\xA0 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C"); // "정렬이 만든 커스텀 리쉐이드"
@@ -3406,7 +3406,7 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 }
 void reshade::runtime::draw_gui_market()
 {
-	ImGui::PushFont(_sherbet_title_font, 0.0f);
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
 	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Market");
 	ImGui::PopFont();
 	ImGui::Spacing();
@@ -3491,7 +3491,7 @@ void reshade::runtime::draw_gui_market()
 		else
 		{
 			sherbet::begin_card("##preset_personal");
-			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
 			ImGui::TextUnformatted(ICON_FK_MAGIC "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B"); // "내 전용 프리셋"
 			ImGui::PopFont();
 			if (sherbet::has_owner())
