@@ -779,6 +779,8 @@
     <ClInclude Include="source\runtime.hpp" />
     <ClInclude Include="source\runtime_internal.hpp" />
     <ClInclude Include="source\runtime_manager.hpp" />
+    <ClInclude Include="source\sherbet_license.hpp" />
+    <ClInclude Include="source\sherbet_nodelock.hpp" />
     <ClInclude Include="source\sherbet_owner.h" />
     <ClInclude Include="source\sherbet_theme.hpp" />
     <ClInclude Include="source\sherbet_ui.hpp" />

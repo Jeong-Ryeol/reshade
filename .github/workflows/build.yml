@@ -22,6 +22,15 @@ on:
         description: '기본 테마 (mint/peach/pink/rainbow/lavender/noir)'
         required: false
         default: 'mint'
+      nodelock:
+        description: '노드락(첫 실행 PC 고정) 켜기'
+        type: boolean
+        required: false
+        default: false
+      preset_ini:
+        description: '개인 전용 프리셋 .ini 내용 (붙여넣기, 비우면 프리셋 미포함)'
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -55,10 +64,18 @@ jobs:
           SHERBET_INPUT_OWNER: ${{ github.event.inputs.owner }}
           SHERBET_INPUT_ORDER_NO: ${{ github.event.inputs.order_no }}
           SHERBET_INPUT_DEFAULT_THEME: ${{ github.event.inputs.default_theme }}
+          SHERBET_INPUT_NODELOCK: ${{ github.event.inputs.nodelock }}
+          SHERBET_INPUT_PRESET_INI: ${{ github.event.inputs.preset_ini }}
         run: |
           $owner = $env:SHERBET_INPUT_OWNER -replace '\\', '\\\\' -replace '"', '\"'
           $order = $env:SHERBET_INPUT_ORDER_NO -replace '\\', '\\\\' -replace '"', '\"'
           $theme = $env:SHERBET_INPUT_DEFAULT_THEME -replace '\\', '\\\\' -replace '"', '\"'
+          $nodelock = if ($env:SHERBET_INPUT_NODELOCK -eq 'true') { '1' } else { '0' }
+          # 개인 전용 프리셋을 붙여넣었으면 내장 파일로 저장(프리셋 마켓에 "내 전용 프리셋" 노출)
+          if (-not [string]::IsNullOrWhiteSpace($env:SHERBET_INPUT_PRESET_INI)) {
+            New-Item -ItemType Directory -Force -Path res/presets | Out-Null
+            Set-Content -Path res/presets/personal.ini -Value $env:SHERBET_INPUT_PRESET_INI -Encoding UTF8
+          }
           $content = @"
           /*
            * Copyright (C) 2026 정렬 (Jeong-Ryeol)
@@ -80,6 +97,9 @@ jobs:
           #endif
           #ifndef SHERBET_DEFAULT_THEME
           #define SHERBET_DEFAULT_THEME "$theme" // 기본으로 열려 있는 테마 id
+          #endif
+          #ifndef SHERBET_NODELOCK
+          #define SHERBET_NODELOCK $nodelock // 노드락(첫 실행 PC 고정): 1=켬, 0=끔
           #endif
 
           namespace sherbet

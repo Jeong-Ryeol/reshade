@@ -78,6 +78,8 @@ set(RESHADE_SOURCE
   source/runtime_manager.cpp
   source/runtime_manager.hpp
   source/runtime_update_check.cpp
+  source/sherbet_license.hpp
+  source/sherbet_nodelock.hpp
   source/sherbet_owner.h
   source/sherbet_theme.hpp
   source/sherbet_themes.cpp
