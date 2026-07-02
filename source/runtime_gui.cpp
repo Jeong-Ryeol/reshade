@@ -370,7 +370,11 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
 	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str());
-	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	  // 프리셋 언락도 "1" 이 아니라 실제 코드를 저장/재검증 — ini 에 1 만 적는 우회를 막는다.
+	  { std::string pc; config.get("SHERBET", "PresetUnlocked", pc);
+	    const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : SHERBET_OWNER;
+	    if (!pc.empty() && sherbet::license::verify_preset(preset_id, pc.c_str())) { _sherbet_preset_unlocked = true; _sherbet_preset_code = pc; }
+	    else { _sherbet_preset_unlocked = false; _sherbet_preset_code.clear(); } }
 	  // 체험 중 게임이 꺼졌던 경우: 저장된 원복 경로가 남아 있으면 첫 프레임에 즉시 원복
 	  config.get("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	  // 진행 중인 체험(> 0)은 유지 — 스왑체인 재생성 등으로 config 가 재로드돼도 체험이 끊기지 않게.
@@ -486,7 +490,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
 	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
-	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_code); // 실제 코드 저장(재검증용)
 	config.set("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
@@ -3566,7 +3570,7 @@ void reshade::runtime::draw_gui_market()
 		{
 			for (std::size_t i = 0; i < count; ++i)
 				if (sherbet::check_theme_code(all[i].id, code_buf))
-				{ sherbet::unlock_theme(all[i].id); code_buf[0] = '\0'; save_config(); break; }
+				{ sherbet::unlock_theme(all[i].id, code_buf); code_buf[0] = '\0'; save_config(); break; }
 		}
 	}
 	else
@@ -3646,6 +3650,7 @@ void reshade::runtime::draw_gui_market()
 			{
 				if (sherbet::license::verify_preset(preset_id, pcode))
 				{
+					_sherbet_preset_code = pcode; // 재검증용 실제 코드 저장
 					_sherbet_preset_unlocked = true; pcode[0] = '\0';
 					_sherbet_preset_trial = 0.0f; // 체험 중이었다면 종료(적용 상태 유지)
 					_sherbet_preset_trial_restore.clear(); // 원복 예약 취소 — 언락됐으니 되돌리지 않음

@@ -23,11 +23,12 @@ namespace sherbet
 	const char *active_theme_id();
 	void set_active_theme(const char *id);
 
-	// 테마 언락 상태
+	// 테마 언락 상태 — 변조 방지: 언락된 테마마다 "입력했던 실제 코드"를 함께 저장하고,
+	// 로드 시 코드를 재검증한다. ini 에 테마 이름만 손으로 적어넣는 우회를 막는다.
 	bool is_unlocked(const char *id);
-	void unlock_theme(const char *id);
-	std::string unlocked_csv();
-	void load_unlocked_csv(const char *csv);
+	void unlock_theme(const char *id, const char *code); // 검증 통과한 코드와 함께 언락
+	std::string unlocked_csv();                          // "id=CODE,id=CODE" 로 직렬화
+	void load_unlocked_csv(const char *csv);             // 각 항목의 코드를 재검증 후에만 언락
 	// 오프라인 언락코드 검증
 	bool check_theme_code(const char *id, const char *code);
 
