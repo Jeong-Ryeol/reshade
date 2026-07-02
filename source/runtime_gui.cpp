@@ -347,6 +347,9 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "AutoSavePreset", _auto_save_preset);
 	config.get("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
+	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
+	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str()); }
+
 	ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.get("STYLE", "Alpha", imgui_style.Alpha);
 	config.get("STYLE", "ChildRounding", imgui_style.ChildRounding);
@@ -449,6 +452,9 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "VariableListUseTabs", _variable_editor_tabs);
 	config.set("OVERLAY", "AutoSavePreset", _auto_save_preset);
 	config.set("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
+
+	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
+	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
 
 	const ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.set("STYLE", "Alpha", imgui_style.Alpha);
@@ -1342,7 +1348,7 @@ void reshade::runtime::draw_gui()
 	{
 		const ImGuiViewport *const viewport = ImGui::GetMainViewport();
 
-		sherbet::apply_style(_imgui_context->Style, sherbet::default_theme());
+		sherbet::apply_style(_imgui_context->Style, sherbet::active_theme());
 
 		// Change font size if user presses the control key and moves the mouse wheel
 		if (!_no_font_scaling && imgui_io.KeyCtrl && imgui_io.MouseWheel != 0 && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
@@ -1387,8 +1393,8 @@ void reshade::runtime::draw_gui()
 			const ImVec2 sherbet_vmin = viewport->Pos;
 			const ImVec2 sherbet_vmax = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
 			static float s_sherbet_time = 0.0f; s_sherbet_time += _imgui_context->IO.DeltaTime;
-			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::default_theme(), s_sherbet_time);
-			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::default_theme(), s_sherbet_time);
+			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
+			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
 		}
 
 		// 좌측 레일
@@ -3311,11 +3317,54 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 }
 void reshade::runtime::draw_gui_market()
 {
-	sherbet::begin_card("##market_soon");
-	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Market");
+	ImGui::PushFont(_sherbet_title_font, 0.0f);
+	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Theme Market");
+	ImGui::PopFont();
+	ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEC\x9E\xA0\xEA\xB8\xB4 \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEC\x96\xB8\xEB\xA0\x9D\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xED\x95\xB4\xEC\xA0\x9C\xED\x95\xB4\xEC\x9A\x94."); // "오버레이 테마. 잠긴 테마는 언락코드로 해제해요."
 	ImGui::Spacing();
-	ImGui::TextUnformatted("\xEC\xA4\x80\xEB\xB9\x84 \xEC\xA4\x91\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4."); // "준비 중입니다."
-	sherbet::end_card();
+
+	std::size_t count = 0; const sherbet::theme *all = sherbet::all_themes(count);
+	for (std::size_t i = 0; i < count; ++i)
+	{
+		const sherbet::theme &th = all[i];
+		const bool unlocked = sherbet::is_unlocked(th.id);
+		const bool active = std::strcmp(th.id, sherbet::active_theme_id()) == 0;
+		ImGui::PushID((int)i);
+		sherbet::begin_card("##theme_card");
+		// 색 미리보기 바
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		const float bw = ImGui::GetContentRegionAvail().x;
+		dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + 26.0f), th.bg1, th.accent, th.accent, th.bg1);
+		ImGui::Dummy(ImVec2(bw, 30.0f));
+		ImGui::Text("%s", th.display_name);
+		if (active)
+			ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+		else if (unlocked)
+		{
+			if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
+			{ sherbet::set_active_theme(th.id); save_config(); }
+		}
+		else
+		{
+			ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
+		}
+		sherbet::end_card();
+		ImGui::PopID();
+	}
+
+	ImGui::Spacing();
+	// 언락코드 입력
+	static char code_buf[32] = "";
+	ImGui::SetNextItemWidth(220.0f);
+	ImGui::InputTextWithHint("##unlock", "SHRB-XXXX-XXXX", code_buf, sizeof(code_buf));
+	ImGui::SameLine();
+	if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
+	{
+		for (std::size_t i = 0; i < count; ++i)
+			if (sherbet::check_theme_code(all[i].id, code_buf))
+			{ sherbet::unlock_theme(all[i].id); code_buf[0] = '\0'; save_config(); break; }
+	}
 }
 #if RESHADE_ADDON
 void reshade::runtime::draw_gui_addons()

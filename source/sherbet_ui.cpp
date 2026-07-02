@@ -3,14 +3,51 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "sherbet_ui.hpp"
+#include "sherbet_owner.h"
 
 #include <cmath>
+#include <cstdio>
+#include <set>
+#include <string>
 
 namespace sherbet
 {
 	static ImVec4 to_vec4(ImU32 c)
 	{
 		return ImGui::ColorConvertU32ToFloat4(c);
+	}
+
+	static std::string s_active_id = SHERBET_DEFAULT_THEME;
+	static std::set<std::string> s_unlocked = { SHERBET_DEFAULT_THEME };
+
+	const theme &active_theme()
+	{
+		const theme *t = find_theme(s_active_id.c_str());
+		return t != nullptr ? *t : default_theme();
+	}
+	const char *active_theme_id() { return s_active_id.c_str(); }
+	void set_active_theme(const char *id) { if (find_theme(id)) s_active_id = id; }
+	bool is_unlocked(const char *id) { return id && s_unlocked.count(id) > 0; }
+	void unlock_theme(const char *id) { if (find_theme(id)) s_unlocked.insert(id); }
+	std::string unlocked_csv() { std::string o; for (const auto &s : s_unlocked) { if (!o.empty()) o += ','; o += s; } return o; }
+	void load_unlocked_csv(const char *csv)
+	{
+		if (!csv) return; std::string cur; for (const char *p = csv; ; ++p) {
+			if (*p == ',' || *p == '\0') { if (!cur.empty() && find_theme(cur.c_str())) s_unlocked.insert(cur); cur.clear(); if (*p == '\0') break; }
+			else cur += *p; }
+	}
+	// 오프라인 언락코드: FNV-1a(SECRET:id) → "SHRB-XXXX-XXXX"
+	static unsigned int fnv1a(const char *s) { unsigned int h = 2166136261u; for (; *s; ++s) { h ^= (unsigned char)*s; h *= 16777619u; } return h; }
+	bool check_theme_code(const char *id, const char *code)
+	{
+		if (!id || !code) return false;
+		static const char *SECRET = "sherbet-by-jeongryeol-2026";
+		char buf[128]; snprintf(buf, sizeof(buf), "%s:theme:%s", SECRET, id);
+		unsigned int h = fnv1a(buf);
+		char expect[16]; snprintf(expect, sizeof(expect), "SHRB-%04X-%04X", (h >> 16) & 0xFFFF, h & 0xFFFF);
+		// 대소문자 무시 비교
+		for (int i = 0; expect[i] || code[i]; ++i) { char a = expect[i], b = code[i]; if (a >= 'a' && a <= 'z') a -= 32; if (b >= 'a' && b <= 'z') b -= 32; if (a != b) return false; }
+		return true;
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
@@ -157,7 +194,7 @@ namespace sherbet
 
 	bool toggle(const char *label, bool *v)
 	{
-		const theme &t = default_theme();
+		const theme &t = active_theme();
 		const float height = ImGui::GetFrameHeight() * 0.78f;
 		const float width = height * 1.85f;
 		const float radius = height * 0.5f;
@@ -194,7 +231,7 @@ namespace sherbet
 
 	void begin_card(const char *id, float height)
 	{
-		const theme &t = default_theme();
+		const theme &t = active_theme();
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(t.panel));
 		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(t.border));
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 16.0f);
@@ -214,7 +251,7 @@ namespace sherbet
 
 	bool pill_button(const char *label, bool active)
 	{
-		const theme &t = default_theme();
+		const theme &t = active_theme();
 		const ImU32 bg = active ? t.accent : t.chip;
 		const ImU32 fg = active ? IM_COL32(20, 20, 20, 255) : t.text_dim;
 		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(bg));
@@ -231,7 +268,7 @@ namespace sherbet
 
 	bool rail_button(const char *id, const char *icon, bool active)
 	{
-		const theme &t = default_theme();
+		const theme &t = active_theme();
 		const float sz = 44.0f;
 		const ImVec2 p = ImGui::GetCursorScreenPos();
 		const bool clicked = ImGui::InvisibleButton(id, ImVec2(sz, sz));

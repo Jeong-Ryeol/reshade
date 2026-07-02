@@ -5,10 +5,24 @@
 #pragma once
 
 #include <imgui.h>
+#include <string>
 #include "sherbet_theme.hpp"
 
 namespace sherbet
 {
+	// 현재 런타임에서 활성화된 테마 (초기값 = SHERBET_DEFAULT_THEME)
+	const theme &active_theme();
+	const char *active_theme_id();
+	void set_active_theme(const char *id);
+
+	// 테마 언락 상태
+	bool is_unlocked(const char *id);
+	void unlock_theme(const char *id);
+	std::string unlocked_csv();
+	void load_unlocked_csv(const char *csv);
+	// 오프라인 언락코드 검증
+	bool check_theme_code(const char *id, const char *code);
+
 	// 테마 색/라운드/간격을 ImGui 스타일에 적용 (매 프레임 또는 테마 변경 시 호출)
 	void apply_style(ImGuiStyle &style, const theme &t);
 
