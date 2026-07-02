@@ -9,6 +9,19 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      owner:
+        description: '구매자 닉네임 (파일 곳곳 각인)'
+        required: false
+        default: ''
+      order_no:
+        description: '주문번호'
+        required: false
+        default: ''
+      default_theme:
+        description: '기본 테마 (mint/peach/pink/rainbow/lavender/noir)'
+        required: false
+        default: 'mint'
 
 permissions: {}
 
@@ -34,6 +47,50 @@ jobs:
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v3
+
+      - name: Apply Sherbet owner
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          SHERBET_INPUT_OWNER: ${{ github.event.inputs.owner }}
+          SHERBET_INPUT_ORDER_NO: ${{ github.event.inputs.order_no }}
+          SHERBET_INPUT_DEFAULT_THEME: ${{ github.event.inputs.default_theme }}
+        run: |
+          $owner = $env:SHERBET_INPUT_OWNER -replace '\\', '\\\\' -replace '"', '\"'
+          $order = $env:SHERBET_INPUT_ORDER_NO -replace '\\', '\\\\' -replace '"', '\"'
+          $theme = $env:SHERBET_INPUT_DEFAULT_THEME -replace '\\', '\\\\' -replace '"', '\"'
+          $content = @"
+          /*
+           * Copyright (C) 2026 정렬 (Jeong-Ryeol)
+           * SPDX-License-Identifier: BSD-3-Clause
+           */
+
+          /*
+           * SHERBET — 구매자 개인화 상수.
+           * 빌드 시 CI(workflow_dispatch)가 이 파일의 #define 값을 덮어써 주문별 빌드를 만든다.
+           * 값이 비어 있으면(기본) 데모 빌드로 취급되어 개인화 문구가 숨겨진다.
+           */
+          #pragma once
+
+          #ifndef SHERBET_OWNER
+          #define SHERBET_OWNER "$owner" // 구매자 닉네임 (UTF-8)
+          #endif
+          #ifndef SHERBET_ORDER_NO
+          #define SHERBET_ORDER_NO "$order" // 주문번호
+          #endif
+          #ifndef SHERBET_DEFAULT_THEME
+          #define SHERBET_DEFAULT_THEME "$theme" // 기본으로 열려 있는 테마 id
+          #endif
+
+          namespace sherbet
+          {
+          	inline bool has_owner()
+          	{
+          		return SHERBET_OWNER[0] != '\0';
+          	}
+          }
+          "@
+          Set-Content -Path source/sherbet_owner.h -Value $content -Encoding UTF8
 
       - name: Build ReShade (32-bit)
         run: |
