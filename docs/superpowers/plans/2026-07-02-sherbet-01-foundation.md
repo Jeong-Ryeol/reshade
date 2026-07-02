@@ -215,11 +215,15 @@ namespace sherbet
 
 - [ ] **Step 3: 컴파일 sanity (ImGui 헤더 경로 포함 파싱)**
 
-Run:
+ImGui는 서브모듈이라 로컬에 없을 수 있다. 먼저 확인:
+```bash
+cd ~/reshade && test -f deps/imgui/imgui.h || git submodule update --init deps/imgui
+```
+그다음 파싱:
 ```bash
 cd ~/reshade && clang -std=c++17 -fsyntax-only -Ideps/imgui source/sherbet_themes.cpp
 ```
-Expected: 에러 없이 종료. (`deps/imgui/imgui.h` 존재 확인 후. 없으면 `find deps -name imgui.h`로 경로 조정하고 그 경로로 `-I`.)
+Expected: 에러 없이 종료. (서브모듈 체크아웃이 불가한 환경이면 이 스텝은 건너뛰고 Task 3의 CI green으로 대체 검증.)
 
 - [ ] **Step 4: Commit**
 
@@ -355,10 +359,10 @@ Expected: 워크플로 `build`가 32/64비트 모두 green. (신규 파일은 �
 ```
 (reshade.me 노출 제거, 디스코드로 대체. 기능 영향 없음 — 단순 텍스트.)
 
-- [ ] **Step 4: 컴파일 sanity (문법만)**
+- [ ] **Step 4: 컴파일 sanity (신규 헤더만 재파싱)**
 
 Run: `cd ~/reshade && clang -std=c++17 -fsyntax-only -Ideps/imgui -Isource source/sherbet_themes.cpp`
-Expected: OK. (runtime_gui.cpp 전체는 Mac에서 의존성 때문에 단독 파싱 불가 — CI로 검증.)
+Expected: OK (imgui 서브모듈 있을 때). runtime_gui.cpp 전체는 Windows 전용 의존성 때문에 Mac 단독 파싱 불가 — 실제 검증은 Step 5 CI.
 
 - [ ] **Step 5: Commit + push + CI 확인**
 
