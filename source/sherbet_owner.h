@@ -20,6 +20,13 @@
 #define SHERBET_DEFAULT_THEME "mint" // 기본으로 열려 있는 테마 id
 #endif
 
+// 노드락(첫 실행 PC 고정). 기본 0(꺼짐) — 실제 PC에서 검증 후 주문 빌드에서만 1로 켠다.
+// 켜져 있으면 첫 실행 시 DLL 옆 sherbet.lic 에 HWID 서명을 기록하고,
+// 이후 다른 PC에서는 오버레이 대신 안내문만 표시한다(게임/DLL 자체는 정상 동작).
+#ifndef SHERBET_NODELOCK
+#define SHERBET_NODELOCK 0
+#endif
+
 namespace sherbet
 {
 	inline bool has_owner()

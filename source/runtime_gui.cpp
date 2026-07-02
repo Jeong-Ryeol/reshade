@@ -20,6 +20,7 @@
 #include "sherbet_theme.hpp"
 #include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
+#include "sherbet_nodelock.hpp"
 #include <cmath> // std::abs, std::ceil, std::floor
 #include <cctype> // std::tolower
 #include <cstdlib> // std::strtol
@@ -1397,6 +1398,30 @@ void reshade::runtime::draw_gui()
 			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
 		}
 
+		// SHERBET: 노드락 — 등록되지 않은 PC면 오버레이 콘텐츠 대신 안내문만 표시
+		if (!sherbet::nodelock::is_authorized(_config_path.parent_path().u8string()))
+		{
+			const float avail_w = ImGui::GetContentRegionAvail().x;
+			ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.32f));
+			auto centered = [avail_w](const char *text) {
+				const float tw = ImGui::CalcTextSize(text).x;
+				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
+				ImGui::TextUnformatted(text);
+			};
+			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			centered(ICON_FK_LOCK "  \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x8B\xA4\xEB\xA5\xB8 PC\xEC\x97\x90 \xEB\x93\xB1\xEB\xA1\x9D\xEB\x90\x98\xEC\x96\xB4 \xEC\x9E\x88\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // "이 빌드는 다른 PC에 등록되어 있습니다"
+			ImGui::PopFont();
+			ImGui::Spacing();
+			centered("\xEC\xB2\x98\xEC\x9D\x8C \xEC\x8B\xA4\xED\x96\x89\xED\x95\x9C PC\xEC\x97\x90\xEC\x84\x9C\xEB\xA7\x8C \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEA\xB0\x80 \xEC\x97\xB4\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // "처음 실행한 PC에서만 오버레이가 열립니다"
+			centered("PC \xEB\xB3\x80\xEA\xB2\xBD/\xEC\x9E\xAC\xEC\x84\xA4\xEC\xB9\x98\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "PC 변경/재설치는 디스코드로 문의해 주세요"
+			ImGui::Spacing();
+			const char *btn = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
+			ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(btn).x) * 0.5f);
+			ImGui::TextLinkOpenURL(btn, "https://discord.gg/5NGR7XVFta");
+			ImGui::End();
+		}
+		else
+		{
 		// 좌측 레일
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.28f));
 		ImGui::BeginChild("##sherbet_rail", ImVec2(66.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -1440,6 +1465,7 @@ void reshade::runtime::draw_gui()
 		ImGui::EndChild();
 
 		ImGui::End();
+		} // SHERBET: 노드락 else 블록 끝
 
 		if (!_editors.empty())
 		{
