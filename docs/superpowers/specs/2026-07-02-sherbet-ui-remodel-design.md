@@ -194,7 +194,7 @@ Sherbet를 "예쁜 스킨"이 아니라 **판매·보호·부가매출까지 되
 
 ## 9. 빌드 / CI
 
-- `.github/workflows/build.yml` 수정: `sherbet-base`, `sherbet/**` push 시 트리거
+- `.github/workflows/build.yml` 수정: `sherbet-base` push 시 트리거(데모 빌드)
 - **주문용 빌드 워크플로**(`workflow_dispatch`): 입력 칸 `owner`(구매자 닉), `order_no`, `default_theme`(mint/peach/…) → `sherbet_owner.h` 덮어쓰고 빌드 → 아티팩트 `Sherbet_<테마>_<owner>_x64.dll`. 손님 전용 프리셋이 있으면 `res/presets/`에 넣고 빌드. 님은 칸만 채우고 Run 클릭.
 - 기본 push 빌드는 owner 공란·default_theme=mint(데모 빌드) 산출. 32/64비트 모두.
 - 로컬 검증: Parallels Windows VM + VS2022 또는 GitHub Actions 아티팩트 다운로드 후 게임 테스트
@@ -204,11 +204,11 @@ Sherbet를 "예쁜 스킨"이 아니라 **판매·보호·부가매출까지 되
 - ⚠️ Mac에서는 코드 작성만 가능, 컴파일/실행 검증은 CI(Actions) + Windows 환경에서 수행
 - ImGui는 ReShade 번들 버전(deps/imgui) API만 사용, 보수적으로 작성해 컴파일 에러 최소화
 - 각 단계 커밋 → CI 빌드 통과 확인 → 다음 단계 진행 (빨간 CI 위에 쌓지 않기)
-- 기능 검증 체크리스트: 오버레이 토글, 이펙트 켜기/끄기, 변수 조정, 프리셋 저장/로드, 스크린샷, OSD 드래그, 링크 버튼
+- 기능 검증 체크리스트: 오버레이 토글, 이펙트 켜기/끄기, 변수 조정, 프리셋 저장/로드, 스크린샷, OSD 드래그, 링크 버튼(디스코드), 테마 10초 체험·언락, 프리셋 10초 체험·언락, 개인화 각인 표시(owner), 노드 락(다른 PC 거부)
 
 ## 11. 범위 밖 (YAGNI)
 
-- 인게임 테마 선택기 (테마 = 컴파일 타임 고정, 판매 모델의 전제)
+- 무제한 테마 자유 선택 (기본 테마만 열림, 나머지는 언락 필요 — 판매 모델의 전제)
 - 자동 판매 봇/자동 발송 (판매는 수동 — 티켓 문의 시 님이 직접 처리)
 - 인생샷 모드(UI 숨김+로고 각인 스샷) — 2차 버전으로 보류
 - 애드온 탭/통계 탭 (제거), 튜토리얼 4단계 (웰컴 카드로 대체)
@@ -219,7 +219,7 @@ Sherbet를 "예쁜 스킨"이 아니라 **판매·보호·부가매출까지 되
 
 ## 12. 오픈 이슈
 
-- `sku_owner_name` / `discord_url` 실제 값: 브랜치·주문별로 판매 시 기입 (디스코드는 https://discord.gg/5NGR7XVFta 고정)
+- `SHERBET_OWNER` / `order_no` 실제 값: 주문별로 빌드 시 기입 (디스코드는 https://discord.gg/5NGR7XVFta 고정)
 - 언락코드 서명 알고리즘·키 관리 구체화(생성기 형태: CLI vs 디스코드 봇)는 구현 단계에서 확정
 - 프리셋 마켓 초기 상품 목록(어떤 감성 프리셋을 진열할지)은 판매 준비 시 채움
 - Noir Gold 프리미엄 SKU의 차별 요소(전용 파티클 밀도 등)는 구현하며 조정
