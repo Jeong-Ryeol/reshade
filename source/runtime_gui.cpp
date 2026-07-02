@@ -353,6 +353,10 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
 	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str());
 	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	  // 체험 중 게임이 꺼졌던 경우: 저장된 원복 경로가 남아 있으면 첫 프레임에 즉시 원복
+	  config.get("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
+	  if (!_sherbet_preset_trial_restore.empty())
+		  _sherbet_preset_trial = 0.001f;
 	  config.get("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	  std::string fav; config.get("SHERBET", "Favorites", fav);
 	  _sherbet_fav.clear();
@@ -464,6 +468,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
 	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
 	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
+	config.set("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
 
@@ -813,6 +818,24 @@ void reshade::runtime::save_custom_style() const
 void reshade::runtime::draw_gui()
 {
 	assert(_is_initialized);
+
+	// SHERBET: 프리셋 체험 카운트다운 — 오버레이가 닫혀 있어도 매 프레임 진행되고,
+	// 끝나면 체험 전 프리셋으로 자동 원복한다. (early-out 이전이라 항상 실행됨)
+	if (_sherbet_preset_trial > 0.0f && !is_loading())
+	{
+		_sherbet_preset_trial -= _last_frame_duration.count() * 1e-9f;
+		if (_sherbet_preset_trial <= 0.0f)
+		{
+			_sherbet_preset_trial = 0.0f;
+			if (!_sherbet_preset_trial_restore.empty())
+			{
+				const std::filesystem::path restore = _sherbet_preset_trial_restore;
+				_sherbet_preset_trial_restore.clear(); // 원복 완료 → 저장된 체험 상태 제거
+				set_current_preset_path(restore.u8string().c_str());
+				save_config();
+			}
+		}
+	}
 
 	bool show_overlay = _show_overlay;
 	api::input_source show_overlay_source = _imgui_context->NavInputSource == ImGuiInputSource_Mouse ? api::input_source::mouse : api::input_source::keyboard;
@@ -1411,6 +1434,35 @@ void reshade::runtime::draw_gui()
 			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
 		}
 
+		// SHERBET: 노드락 — 등록되지 않은 PC면 오버레이 콘텐츠 대신 안내문만 표시
+		// (헤더의 원클릭 버튼도 인증 통과 후에만 그려져, 미승인 PC에서 기능이 눌리지 않음)
+		if (!sherbet::nodelock::is_authorized(_config_path.parent_path().u8string()))
+		{
+			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
+			ImGui::TextUnformatted("Sherbet");
+			ImGui::PopFont();
+			const float avail_w = ImGui::GetContentRegionAvail().x;
+			ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.32f));
+			auto centered = [avail_w](const char *text) {
+				const float tw = ImGui::CalcTextSize(text).x;
+				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
+				ImGui::TextUnformatted(text);
+			};
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
+			centered(ICON_FK_LOCK "  \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x8B\xA4\xEB\xA5\xB8 PC\xEC\x97\x90 \xEB\x93\xB1\xEB\xA1\x9D\xEB\x90\x98\xEC\x96\xB4 \xEC\x9E\x88\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // "이 빌드는 다른 PC에 등록되어 있습니다"
+			ImGui::PopFont();
+			ImGui::Spacing();
+			centered("\xEC\xB2\x98\xEC\x9D\x8C \xEC\x8B\xA4\xED\x96\x89\xED\x95\x9C PC\xEC\x97\x90\xEC\x84\x9C\xEB\xA7\x8C \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEA\xB0\x80 \xEC\x97\xB4\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // "처음 실행한 PC에서만 오버레이가 열립니다"
+			centered("PC \xEB\xB3\x80\xEA\xB2\xBD/\xEC\x9E\xAC\xEC\x84\xA4\xEC\xB9\x98\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "PC 변경/재설치는 디스코드로 문의해 주세요"
+			ImGui::Spacing();
+			const char *btn = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
+			ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(btn).x) * 0.5f);
+			ImGui::TextLinkOpenURL(btn, "https://discord.gg/5NGR7XVFta");
+			ImGui::End();
+		}
+		else
+		{
 		// 상단 헤더 = 브랜드 + 원클릭 버튼(스샷·성능·리로드) + 드래그 핸들(빈 공간을 끌면 창 이동)
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
@@ -1447,42 +1499,6 @@ void reshade::runtime::draw_gui()
 			ImGui::SetCursorPos(ImVec2(0.0f, 40.0f));
 		}
 
-		// SHERBET: 프리셋 체험 카운트다운 — 끝나면 체험 전 프리셋으로 자동 원복
-		if (_sherbet_preset_trial > 0.0f)
-		{
-			_sherbet_preset_trial -= _imgui_context->IO.DeltaTime;
-			if (_sherbet_preset_trial <= 0.0f)
-			{
-				_sherbet_preset_trial = 0.0f;
-				if (!_sherbet_preset_trial_restore.empty())
-					set_current_preset_path(_sherbet_preset_trial_restore.u8string().c_str());
-			}
-		}
-
-		// SHERBET: 노드락 — 등록되지 않은 PC면 오버레이 콘텐츠 대신 안내문만 표시
-		if (!sherbet::nodelock::is_authorized(_config_path.parent_path().u8string()))
-		{
-			const float avail_w = ImGui::GetContentRegionAvail().x;
-			ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.32f));
-			auto centered = [avail_w](const char *text) {
-				const float tw = ImGui::CalcTextSize(text).x;
-				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
-				ImGui::TextUnformatted(text);
-			};
-			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
-			centered(ICON_FK_LOCK "  \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x8B\xA4\xEB\xA5\xB8 PC\xEC\x97\x90 \xEB\x93\xB1\xEB\xA1\x9D\xEB\x90\x98\xEC\x96\xB4 \xEC\x9E\x88\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // "이 빌드는 다른 PC에 등록되어 있습니다"
-			ImGui::PopFont();
-			ImGui::Spacing();
-			centered("\xEC\xB2\x98\xEC\x9D\x8C \xEC\x8B\xA4\xED\x96\x89\xED\x95\x9C PC\xEC\x97\x90\xEC\x84\x9C\xEB\xA7\x8C \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEA\xB0\x80 \xEC\x97\xB4\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // "처음 실행한 PC에서만 오버레이가 열립니다"
-			centered("PC \xEB\xB3\x80\xEA\xB2\xBD/\xEC\x9E\xAC\xEC\x84\xA4\xEC\xB9\x98\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "PC 변경/재설치는 디스코드로 문의해 주세요"
-			ImGui::Spacing();
-			const char *btn = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
-			ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(btn).x) * 0.5f);
-			ImGui::TextLinkOpenURL(btn, "https://discord.gg/5NGR7XVFta");
-			ImGui::End();
-		}
-		else
-		{
 		// 좌측 레일
 		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.28f));
 		ImGui::BeginChild("##sherbet_rail", ImVec2(66.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -3534,6 +3550,7 @@ void reshade::runtime::draw_gui_market()
 				{
 					_sherbet_preset_unlocked = true; pcode[0] = '\0';
 					_sherbet_preset_trial = 0.0f; // 체험 중이었다면 종료(적용 상태 유지)
+					_sherbet_preset_trial_restore.clear(); // 원복 예약 취소 — 언락됐으니 되돌리지 않음
 					save_config();
 					set_current_preset_path(materialize().u8string().c_str());
 				}
