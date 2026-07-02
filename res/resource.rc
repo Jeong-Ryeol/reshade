@@ -111,6 +111,10 @@ IDR_LICENSE_UTFCPP      RCDATA                  "..\\deps\\utfcpp\\LICENSE"
 IDR_LICENSE_VMA         RCDATA                  "..\\deps\\vma\\LICENSE.txt"
 
 IDR_LICENSE_S_JXL       RCDATA                  "..\\deps\\jxl_simple_lossless\\LICENSE"
+
+IDR_FONT_SHERBET_BODY   RCDATA                  "fonts\\Jua-Regular.ttf"
+
+IDR_FONT_SHERBET_TITLE  RCDATA                  "fonts\\Gaegu-Bold.ttf"
 #endif
 
 #endif    // Neutral (Default) resources

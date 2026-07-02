@@ -26,12 +26,14 @@
 #define IDR_LICENSE_UTFCPP              709
 #define IDR_LICENSE_VMA                 710
 #define IDR_LICENSE_S_JXL               711
+#define IDR_FONT_SHERBET_BODY           720
+#define IDR_FONT_SHERBET_TITLE          721
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        115
+#define _APS_NEXT_RESOURCE_VALUE        722
 #define _APS_NEXT_COMMAND_VALUE         40001
 #define _APS_NEXT_CONTROL_VALUE         1001
 #define _APS_NEXT_SYMED_VALUE           115
