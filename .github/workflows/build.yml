@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - sherbet-base
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 permissions: {}
 
@@ -48,13 +50,13 @@ jobs:
       - name: Upload ReShade (32-bit)
         uses: actions/upload-artifact@v7
         with:
-          name: ReShade (32-bit)
+          name: Sherbet_Demo (32-bit)
           path: './bin/Win32/Release/ReShade32.dll'
 
       - name: Upload ReShade (64-bit)
         uses: actions/upload-artifact@v7
         with:
-          name: ReShade (64-bit)
+          name: Sherbet_Demo (64-bit)
           path: './bin/x64/Release/ReShade64.dll'
 
       - name: Upload ReShade Setup
