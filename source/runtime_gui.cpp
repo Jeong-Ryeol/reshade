@@ -21,6 +21,8 @@
 #include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
 #include "sherbet_nodelock.hpp"
+#include "sherbet_license.hpp"
+#include <fstream>
 #include <cmath> // std::abs, std::ceil, std::floor
 #include <cctype> // std::tolower
 #include <cstdlib> // std::strtol
@@ -1405,7 +1407,7 @@ void reshade::runtime::draw_gui()
 			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
 		}
 
-		// 상단 헤더 = 브랜드 + 드래그 핸들(빈 공간을 끌면 창 이동)
+		// 상단 헤더 = 브랜드 + 원클릭 버튼(스샷·성능·리로드) + 드래그 핸들(빈 공간을 끌면 창 이동)
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
 			ImGui::PushFont(_sherbet_title_font, 0.0f);
@@ -1414,6 +1416,30 @@ void reshade::runtime::draw_gui()
 			ImGui::SameLine(0.0f, 8.0f);
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextDisabled("%s", sherbet::active_theme().display_name);
+
+			// 우측 원클릭 버튼 3종 (기존 기능 호출만)
+			const float bw = 36.0f, bh = 26.0f, gap = 6.0f;
+			const float win_w = ImGui::GetWindowSize().x;
+			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 3.0f + gap * 2.0f), 7.0f));
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().chip));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text));
+			if (ImGui::Button(ICON_FK_CAMERA "##sherbet_shot", ImVec2(bw, bh)))
+				save_screenshot(nullptr);
+			ImGui::SetItemTooltip("\xEC\x8A\xA4\xED\x81\xAC\xEB\xA6\xB0\xEC\x83\xB7"); // "스크린샷"
+			ImGui::SameLine(0.0f, gap);
+			ImGui::BeginDisabled(is_loading());
+			if (ImGui::Button(ICON_FK_BOLT "##sherbet_perf", ImVec2(bw, bh)))
+			{ _performance_mode = !_performance_mode; save_config(); reload_effects(); }
+			ImGui::SetItemTooltip("\xEC\x84\xB1\xEB\x8A\xA5 \xEB\xAA\xA8\xEB\x93\x9C"); // "성능 모드"
+			ImGui::SameLine(0.0f, gap);
+			if (ImGui::Button(ICON_FK_REFRESH "##sherbet_reload", ImVec2(bw, bh)))
+				reload_effects();
+			ImGui::SetItemTooltip("\xEB\x8B\xA4\xEC\x8B\x9C \xEB\xA1\x9C\xEB\x93\x9C"); // "다시 로드"
+			ImGui::EndDisabled();
+			ImGui::PopStyleColor(2);
+			ImGui::PopStyleVar();
+
 			ImGui::SetCursorPos(ImVec2(0.0f, 40.0f));
 		}
 
@@ -3375,52 +3401,138 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 void reshade::runtime::draw_gui_market()
 {
 	ImGui::PushFont(_sherbet_title_font, 0.0f);
-	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Theme Market");
+	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Market");
 	ImGui::PopFont();
-	ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEC\x9E\xA0\xEA\xB8\xB4 \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEC\x96\xB8\xEB\xA0\x9D\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xED\x95\xB4\xEC\xA0\x9C\xED\x95\xB4\xEC\x9A\x94."); // "오버레이 테마. 잠긴 테마는 언락코드로 해제해요."
 	ImGui::Spacing();
 
-	std::size_t count = 0; const sherbet::theme *all = sherbet::all_themes(count);
-	for (std::size_t i = 0; i < count; ++i)
+	// 세그먼트: 테마 마켓 / 프리셋 마켓
+	static int seg = 0;
+	if (sherbet::pill_button("\xED\x85\x8C\xEB\xA7\x88 \xEB\xA7\x88\xEC\xBC\x93", seg == 0)) seg = 0; // "테마 마켓"
+	ImGui::SameLine();
+	if (sherbet::pill_button("\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B \xEB\xA7\x88\xEC\xBC\x93", seg == 1)) seg = 1; // "프리셋 마켓"
+	ImGui::Spacing();
+
+	if (seg == 0)
 	{
-		const sherbet::theme &th = all[i];
-		const bool unlocked = sherbet::is_unlocked(th.id);
-		const bool active = std::strcmp(th.id, sherbet::active_theme_id()) == 0;
-		ImGui::PushID((int)i);
-		sherbet::begin_card("##theme_card");
-		// 색 미리보기 바
-		ImDrawList *dl = ImGui::GetWindowDrawList();
-		const ImVec2 p = ImGui::GetCursorScreenPos();
-		const float bw = ImGui::GetContentRegionAvail().x;
-		dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + 26.0f), th.bg1, th.accent, th.accent, th.bg1);
-		ImGui::Dummy(ImVec2(bw, 30.0f));
-		ImGui::Text("%s", th.display_name);
-		if (active)
-			ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
-		else if (unlocked)
+		ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEC\x9E\xA0\xEA\xB8\xB4 \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xED\x95\xB4\xEC\xA0\x9C\xED\x95\xB4\xEC\x9A\x94."); // "오버레이 테마. 잠긴 테마는 언락코드로 해제해요."
+		ImGui::Spacing();
+
+		std::size_t count = 0; const sherbet::theme *all = sherbet::all_themes(count);
+		for (std::size_t i = 0; i < count; ++i)
 		{
-			if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
-			{ sherbet::set_active_theme(th.id); save_config(); }
+			const sherbet::theme &th = all[i];
+			const bool unlocked = sherbet::is_unlocked(th.id);
+			const bool active = std::strcmp(th.id, sherbet::active_theme_id()) == 0;
+			ImGui::PushID((int)i);
+			sherbet::begin_card("##theme_card");
+			ImDrawList *dl = ImGui::GetWindowDrawList();
+			const ImVec2 p = ImGui::GetCursorScreenPos();
+			const float bw = ImGui::GetContentRegionAvail().x;
+			dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + 26.0f), th.bg1, th.accent, th.accent, th.bg1);
+			ImGui::Dummy(ImVec2(bw, 30.0f));
+			ImGui::Text("%s", th.display_name);
+			if (active)
+				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+			else if (unlocked)
+			{
+				if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
+				{ sherbet::set_active_theme(th.id); save_config(); }
+			}
+			else
+			{
+				ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
+			}
+			sherbet::end_card();
+			ImGui::PopID();
+		}
+
+		ImGui::Spacing();
+		static char code_buf[32] = "";
+		ImGui::SetNextItemWidth(220.0f);
+		ImGui::InputTextWithHint("##unlock", "SHRB-XXXX-XXXX", code_buf, sizeof(code_buf));
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
+		{
+			for (std::size_t i = 0; i < count; ++i)
+				if (sherbet::check_theme_code(all[i].id, code_buf))
+				{ sherbet::unlock_theme(all[i].id); code_buf[0] = '\0'; save_config(); break; }
+		}
+	}
+	else
+	{
+		// 프리셋 마켓 — 구매자 전용 프리셋(개인 .ini 이어받기)
+		const resources::data_resource pres = resources::load_data_resource(IDR_SHERBET_PRESET_PERSONAL);
+		const std::string content(static_cast<const char *>(pres.data), pres.data_size);
+		const bool has_personal = content.find("Techniques") != std::string::npos; // 실제 프리셋 여부
+		const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : "personal";
+
+		// 내장 프리셋을 디스크에 써서 경로를 돌려주는 헬퍼(적용/체험 공용)
+		auto materialize = [this, &pres]() -> std::filesystem::path {
+			std::filesystem::path out = _current_preset_path.parent_path() / L"Sherbet-Custom.ini";
+			std::ofstream f(out, std::ios::binary | std::ios::trunc);
+			if (f.is_open()) { f.write(static_cast<const char *>(pres.data), pres.data_size); f.close(); }
+			return out;
+		};
+
+		if (!has_personal)
+		{
+			sherbet::begin_card("##preset_empty");
+			ImGui::TextWrapped("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB8\xB0\xEC\xA1\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C .ini \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x84 \xEB\xB3\xB4\xEB\x82\xB4\xEC\xA3\xBC\xEC\x8B\x9C\xEB\xA9\xB4, \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA7\x81\xEC\xA0\x91 \xED\x8A\x9C\xEB\x8B\x9D\xED\x95\xB4\xEC\x84\x9C \xEB\x8B\xB9\xEC\x8B\xA0\xEB\xA7\x8C\xEC\x9D\x98 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xA7\x8C\xEB\x93\xA4\xEC\x96\xB4 \xEB\x93\x9C\xEB\xA0\xA4\xEC\x9A\x94. \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEB\xB0\x9B\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEB\xB0\x94\xEB\xA1\x9C \xEC\xA0\x81\xEC\x9A\xA9\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안내
+			ImGui::Spacing();
+			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\x82\xB4 \xEC\x84\xB8\xED\x8C\x85 \xEB\xB3\xB4\xEB\x82\xB4\xEA\xB8\xB0", "https://discord.gg/5NGR7XVFta"); // "디스코드로 내 세팅 보내기"
+			sherbet::end_card();
 		}
 		else
 		{
-			ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
-		}
-		sherbet::end_card();
-		ImGui::PopID();
-	}
+			sherbet::begin_card("##preset_personal");
+			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::TextUnformatted(ICON_FK_MAGIC "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B"); // "내 전용 프리셋"
+			ImGui::PopFont();
+			if (sherbet::has_owner())
+				ImGui::TextDisabled("%s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEB\xA7\x9E\xEC\xB6\xA4 \xEB\xB3\xB4\xEC\xA0\x95", SHERBET_OWNER); // "%s님을 위한 맞춤 보정"
+			ImGui::Spacing();
 
-	ImGui::Spacing();
-	// 언락코드 입력
-	static char code_buf[32] = "";
-	ImGui::SetNextItemWidth(220.0f);
-	ImGui::InputTextWithHint("##unlock", "SHRB-XXXX-XXXX", code_buf, sizeof(code_buf));
-	ImGui::SameLine();
-	if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
-	{
-		for (std::size_t i = 0; i < count; ++i)
-			if (sherbet::check_theme_code(all[i].id, code_buf))
-			{ sherbet::unlock_theme(all[i].id); code_buf[0] = '\0'; save_config(); break; }
+			if (_sherbet_preset_unlocked)
+			{
+				if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", true)) // "적용"
+					set_current_preset_path(materialize().u8string().c_str());
+				ImGui::SameLine();
+				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x96\xB8\xEB\x9D\xBD\xEB\x90\xA8"); // "언락됨"
+			}
+			else
+			{
+				if (_sherbet_preset_trial > 0.0f)
+				{
+					ImGui::Text("%s", ICON_FK_BOLT); ImGui::SameLine();
+					ImGui::Text("\xEC\xB2\xB4\xED\x97\x98 \xEC\xA4\x91\xE2\x80\xA6 %.0f\xEC\xB4\x88", _sherbet_preset_trial); // "체험 중… %.0f초"
+				}
+				else if (sherbet::pill_button(ICON_FK_BOLT "  10\xEC\xB4\x88 \xEC\xB2\xB4\xED\x97\x98", false)) // "10초 체험"
+				{
+					_sherbet_preset_trial_restore = _current_preset_path;
+					set_current_preset_path(materialize().u8string().c_str());
+					_sherbet_preset_trial = 10.0f;
+				}
+				ImGui::Spacing();
+				ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80 \xE2\x80\x94 \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C(PRE-\xE2\x80\xA6)\xEA\xB0\x80 \xED\x95\x84\xEC\x9A\x94\xED\x95\xB4\xEC\x9A\x94"); // "잠김 — 언락코드(PRE-…)가 필요해요"
+			}
+			sherbet::end_card();
+
+			ImGui::Spacing();
+			static char pcode[32] = "";
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::InputTextWithHint("##punlock", "PRE-XXXX-XXXX", pcode, sizeof(pcode));
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
+			{
+				if (sherbet::license::verify_preset(preset_id, pcode))
+				{
+					_sherbet_preset_unlocked = true; pcode[0] = '\0';
+					_sherbet_preset_trial = 0.0f; // 체험 중이었다면 종료(적용 상태 유지)
+					save_config();
+					set_current_preset_path(materialize().u8string().c_str());
+				}
+			}
+		}
 	}
 }
 #if RESHADE_ADDON
