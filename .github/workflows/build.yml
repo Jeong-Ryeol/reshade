@@ -92,41 +92,19 @@ jobs:
             New-Item -ItemType Directory -Force -Path res/presets | Out-Null
             Set-Content -Path res/presets/personal.ini -Value $preset -Encoding UTF8
           }
-          $content = @"
-          /*
-           * Copyright (C) 2026 정렬 (Jeong-Ryeol)
-           * SPDX-License-Identifier: BSD-3-Clause
-           */
-
-          /*
-           * SHERBET — 구매자 개인화 상수.
-           * 빌드 시 CI(workflow_dispatch)가 이 파일의 #define 값을 덮어써 주문별 빌드를 만든다.
-           * 값이 비어 있으면(기본) 데모 빌드로 취급되어 개인화 문구가 숨겨진다.
-           */
-          #pragma once
-
-          #ifndef SHERBET_OWNER
-          #define SHERBET_OWNER "$owner" // 구매자 닉네임 (UTF-8)
-          #endif
-          #ifndef SHERBET_ORDER_NO
-          #define SHERBET_ORDER_NO "$order" // 주문번호
-          #endif
-          #ifndef SHERBET_DEFAULT_THEME
-          #define SHERBET_DEFAULT_THEME "$theme" // 기본으로 열려 있는 테마 id
-          #endif
-          #ifndef SHERBET_NODELOCK
-          #define SHERBET_NODELOCK $nodelock // 노드락(첫 실행 PC 고정): 1=켬, 0=끔
-          #endif
-
-          namespace sherbet
-          {
-          	inline bool has_owner()
-          	{
-          		return SHERBET_OWNER[0] != '\0';
-          	}
+          # 커밋된 sherbet_owner.h 에서 기본값만 치환한다 — 파일을 템플릿으로 재생성하면
+          # 헤더에 define 을 추가할 때마다 워크플로도 같이 고쳐야 해서(이중 관리) 빌드가 깨진다.
+          $content = Get-Content -Raw source/sherbet_owner.h
+          $content = $content -replace '#define SHERBET_OWNER ""', "#define SHERBET_OWNER `"$owner`""
+          $content = $content -replace '#define SHERBET_ORDER_NO ""', "#define SHERBET_ORDER_NO `"$order`""
+          $content = $content -replace '#define SHERBET_DEFAULT_THEME "mint"', "#define SHERBET_DEFAULT_THEME `"$theme`""
+          $content = $content -replace '#define SHERBET_NODELOCK 0', "#define SHERBET_NODELOCK $nodelock"
+          Set-Content -Path source/sherbet_owner.h -Value $content -Encoding UTF8 -NoNewline
+          # 치환 결과 확인(치환 실패를 조용히 지나치지 않게)
+          if ($nodelock -eq '1' -and (Get-Content -Raw source/sherbet_owner.h) -notmatch 'SHERBET_NODELOCK 1') {
+            Write-Error "SHERBET_NODELOCK 치환 실패 — sherbet_owner.h 의 기본값 라인이 바뀌었는지 확인하세요"
+            exit 1
           }
-          "@
-          Set-Content -Path source/sherbet_owner.h -Value $content -Encoding UTF8
 
       - name: Build ReShade (32-bit)
         run: |
