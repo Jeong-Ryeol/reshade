@@ -418,6 +418,7 @@ namespace reshade
 
 		#pragma region Overlay
 		ImGuiContext *_imgui_context = nullptr;
+		ImFont *_sherbet_title_font = nullptr;
 
 		bool _show_splash = true;
 		bool _show_overlay = false;

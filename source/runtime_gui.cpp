@@ -257,16 +257,28 @@ void reshade::runtime::build_font_atlas()
 	}
 #endif
 
-	// Add main font
-	resolved_font_path = _font_path.empty() ? _default_font_path : _font_path;
+	// Add main font — SHERBET: 사용자 지정 폰트가 없으면 임베드 Jua 사용(한글 포함)
+	if (_font_path.empty())
 	{
+		ImFontConfig jua_cfg = cfg;
+		const resources::data_resource jua = resources::load_data_resource(IDR_FONT_SHERBET_BODY);
+		// 아틀라스는 데이터를 소유하지 않으므로 복사본을 넘긴다
+		void *jua_data = IM_ALLOC(jua.data_size);
+		memcpy(jua_data, jua.data, jua.data_size);
+		atlas->AddFontFromMemoryTTF(jua_data, static_cast<int>(jua.data_size), 0.0f, &jua_cfg, atlas->GetGlyphRangesKorean());
+
+		cfg.MergeMode = true;
+		cfg.PixelSnapH = true;
+		atlas->AddFontFromMemoryCompressedBase85TTF(FONT_ICON_BUFFER_NAME_FK, 0.0f, &cfg);
+	}
+	else
+	{
+		resolved_font_path = _font_path;
 		if (!add_font_from_file(resolved_font_path, &cfg, ec))
 			log::message(log::level::error, "Failed to load font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
 
-		// Merge icons into main font
 		cfg.MergeMode = true;
 		cfg.PixelSnapH = true;
-
 		atlas->AddFontFromMemoryCompressedBase85TTF(FONT_ICON_BUFFER_NAME_FK, 0.0f, &cfg);
 	}
 
@@ -276,6 +288,16 @@ void reshade::runtime::build_font_atlas()
 	{
 		if (!add_font_from_file(resolved_font_path, nullptr, ec))
 			log::message(log::level::error, "Failed to load editor font from '%s' with error code %d!", resolved_font_path.u8string().c_str(), ec.value());
+	}
+
+	// SHERBET 제목 폰트(Gaegu) — merge 아님, 별도 폰트
+	{
+		ImFontConfig title_cfg;
+		title_cfg.MergeMode = false;
+		const resources::data_resource gaegu = resources::load_data_resource(IDR_FONT_SHERBET_TITLE);
+		void *gaegu_data = IM_ALLOC(gaegu.data_size);
+		memcpy(gaegu_data, gaegu.data, gaegu.data_size);
+		_sherbet_title_font = atlas->AddFontFromMemoryTTF(gaegu_data, static_cast<int>(gaegu.data_size), _font_size * 1.4f, &title_cfg, atlas->GetGlyphRangesKorean());
 	}
 
 	ImGui::SetCurrentContext(backup_context);
