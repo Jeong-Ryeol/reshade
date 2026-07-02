@@ -118,20 +118,29 @@ namespace sherbet
 		c[ImGuiCol_DragDropTarget] = to_vec4(t.accent2);
 	}
 
-	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const theme &t, float time)
+	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const theme &t, float time, float rounding)
 	{
-		// 대각선 그라디언트 (bg0 -> bg1 -> bg2)
-		dl->AddRectFilledMultiColor(min, max, t.bg0, t.bg1, t.bg2, t.bg1);
-
-		// 오로라 블롭 2개 — 부드럽게 드리프트하는 반투명 원(글로우색)
 		const float w = max.x - min.x, h = max.y - min.y;
-		ImU32 g = t.glow;
-		auto blob = [&](float px, float py, float r) {
-			dl->AddCircleFilled(ImVec2(min.x + px, min.y + py), r, g, 48);
-		};
+
+		// 둥근 모서리 베이스 패널 (창 영역에만 채움 — 게임은 창 밖에서 그대로 보임)
+		dl->AddRectFilled(min, max, t.bg1, rounding);
+		// 위→아래 은은한 톤 변화 (상단 bg0, 하단 bg2 를 반투명으로 덧칠)
+		dl->AddRectFilledMultiColor(
+			min, ImVec2(max.x, min.y + h * 0.5f),
+			(t.bg0 & 0x00FFFFFF) | 0xB0000000, (t.bg0 & 0x00FFFFFF) | 0xB0000000,
+			(t.bg0 & 0x00FFFFFF) | 0x00000000, (t.bg0 & 0x00FFFFFF) | 0x00000000);
+		dl->AddRectFilledMultiColor(
+			ImVec2(min.x, min.y + h * 0.5f), max,
+			(t.bg2 & 0x00FFFFFF) | 0x00000000, (t.bg2 & 0x00FFFFFF) | 0x00000000,
+			(t.bg2 & 0x00FFFFFF) | 0x88000000, (t.bg2 & 0x00FFFFFF) | 0x88000000);
+
+		// 은은한 오로라 블롭 2개 — 창 크기에 비례(작은 쪽 기준), 저알파로 부드럽게
+		const float R = (w < h ? w : h);
 		const float t1 = time * 0.12f;
-		blob(w * (0.20f + 0.05f * sinf(t1)), h * (0.15f + 0.06f * cosf(t1)), h * 0.32f);
-		blob(w * (0.82f + 0.05f * cosf(t1 * 0.8f)), h * (0.85f + 0.05f * sinf(t1 * 0.8f)), h * 0.30f);
+		const ImU32 g1 = (t.glow & 0x00FFFFFF) | ((ImU32)70 << 24);
+		const ImU32 g2 = (t.accent2 & 0x00FFFFFF) | ((ImU32)55 << 24);
+		dl->AddCircleFilled(ImVec2(min.x + w * (0.30f + 0.04f * sinf(t1)), min.y + h * (0.30f + 0.05f * cosf(t1))), R * 0.30f, g1, 40);
+		dl->AddCircleFilled(ImVec2(min.x + w * (0.72f + 0.04f * cosf(t1 * 0.8f)), min.y + h * (0.70f + 0.04f * sinf(t1 * 0.8f))), R * 0.26f, g2, 40);
 	}
 
 	static void draw_shape(ImDrawList *dl, particle shape, ImVec2 p, float s, ImU32 col)

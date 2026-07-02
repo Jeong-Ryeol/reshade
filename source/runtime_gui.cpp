@@ -349,7 +349,8 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
-	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str()); }
+	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str());
+	  config.get("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked); }
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.get("STYLE", "Alpha", imgui_style.Alpha);
@@ -456,6 +457,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
 	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
+	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_unlocked);
 
 	const ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.set("STYLE", "Alpha", imgui_style.Alpha);
@@ -1373,29 +1375,58 @@ void reshade::runtime::draw_gui()
 			ImGui::PopStyleVar();
 		}
 
-		// SHERBET: 단일 오버레이 창 — 좌측 아이콘 레일 + 콘텐츠
-		ImGui::SetNextWindowPos(viewport->Pos + viewport_offset);
-		ImGui::SetNextWindowSize(viewport->Size - viewport_offset);
-		ImGui::SetNextWindowViewport(viewport->ID);
+		// SHERBET: 아담한 플로팅 오버레이 창 — 전체화면이 아니라 게임 위에 뜨는 카드형 창.
+		// 이동/크기조절 가능하며, 옮긴 위치·크기는 ImGui 설정으로 유지된다.
+		const ImVec2 sherbet_win_size(770.0f, ImClamp(viewport->Size.y * 0.78f, 440.0f, 880.0f));
+		ImGui::SetNextWindowPos(
+			viewport->Pos + ImVec2((viewport->Size.x - sherbet_win_size.x) * 0.5f, viewport->Size.y * 0.09f),
+			ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(sherbet_win_size, ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(540.0f, 400.0f), viewport->Size);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-		ImGui::Begin("Viewport", nullptr,
-			ImGuiWindowFlags_NoDecoration |
+		ImGui::Begin("Sherbet###Viewport", nullptr,
+			ImGuiWindowFlags_NoTitleBar |
 			ImGuiWindowFlags_NoNav |
-			ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoDocking |
+			ImGuiWindowFlags_NoScrollbar |
 			ImGuiWindowFlags_NoFocusOnAppearing |
-			ImGuiWindowFlags_NoBringToFrontOnFocus |
 			ImGuiWindowFlags_NoBackground);
 		ImGui::PopStyleVar();
 
 		{
-			// 애니메이션 배경 + 파티클 (오버레이 창들 뒤)
-			ImDrawList *const sherbet_bg = ImGui::GetBackgroundDrawList();
-			const ImVec2 sherbet_vmin = viewport->Pos;
-			const ImVec2 sherbet_vmax = ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
+			// 애니메이션 배경 + 파티클 — '창 영역'에만 그린다(게임은 창 밖에서 그대로 보임)
+			ImDrawList *const sherbet_bg = ImGui::GetWindowDrawList();
+			const ImVec2 sherbet_vmin = ImGui::GetWindowPos();
+			const ImVec2 sherbet_vmax = ImVec2(sherbet_vmin.x + ImGui::GetWindowSize().x, sherbet_vmin.y + ImGui::GetWindowSize().y);
 			static float s_sherbet_time = 0.0f; s_sherbet_time += _imgui_context->IO.DeltaTime;
-			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
+			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time, 12.0f);
 			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
+			// 얇은 테두리(카드 느낌)
+			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
+		}
+
+		// 상단 헤더 = 브랜드 + 드래그 핸들(빈 공간을 끌면 창 이동)
+		{
+			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
+			ImGui::PushFont(_sherbet_title_font, 0.0f);
+			ImGui::TextUnformatted("Sherbet");
+			ImGui::PopFont();
+			ImGui::SameLine(0.0f, 8.0f);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextDisabled("%s", sherbet::active_theme().display_name);
+			ImGui::SetCursorPos(ImVec2(0.0f, 40.0f));
+		}
+
+		// SHERBET: 프리셋 체험 카운트다운 — 끝나면 체험 전 프리셋으로 자동 원복
+		if (_sherbet_preset_trial > 0.0f)
+		{
+			_sherbet_preset_trial -= _imgui_context->IO.DeltaTime;
+			if (_sherbet_preset_trial <= 0.0f)
+			{
+				_sherbet_preset_trial = 0.0f;
+				if (!_sherbet_preset_trial_restore.empty())
+					set_current_preset_path(_sherbet_preset_trial_restore.u8string().c_str());
+			}
 		}
 
 		// SHERBET: 노드락 — 등록되지 않은 PC면 오버레이 콘텐츠 대신 안내문만 표시
