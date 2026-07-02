@@ -1489,9 +1489,11 @@ void reshade::runtime::draw_gui()
 		ImGui::PopStyleColor();
 		{
 			ImGui::Dummy(ImVec2(0, 8));
-			// 로고
+			// 로고 (클릭 시 홈으로 — 반응 없던 문제 해결)
 			ImGui::SetCursorPosX((66.0f - 40.0f) * 0.5f);
-			sherbet::rail_button("##logo", ICON_FK_MAGIC, false);
+			if (sherbet::rail_button("##logo", ICON_FK_MAGIC, _sherbet_tab == 0))
+				_sherbet_tab = 0;
+			ImGui::SetItemTooltip("Sherbet \xED\x99\x88"); // "Sherbet 홈"
 			ImGui::Dummy(ImVec2(0, 10));
 
 			struct RailItem { const char *id; const char *icon; };

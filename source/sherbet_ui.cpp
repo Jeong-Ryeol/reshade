@@ -134,13 +134,11 @@ namespace sherbet
 			(t.bg2 & 0x00FFFFFF) | 0x00000000, (t.bg2 & 0x00FFFFFF) | 0x00000000,
 			(t.bg2 & 0x00FFFFFF) | 0x88000000, (t.bg2 & 0x00FFFFFF) | 0x88000000);
 
-		// 은은한 오로라 블롭 2개 — 창 크기에 비례(작은 쪽 기준), 저알파로 부드럽게
-		const float R = (w < h ? w : h);
+		// 아주 은은한 상단 코너 글로우(작게, 저알파) — 큰 블롭은 제거해 시안처럼 깔끔하게
 		const float t1 = time * 0.12f;
-		const ImU32 g1 = (t.glow & 0x00FFFFFF) | ((ImU32)70 << 24);
-		const ImU32 g2 = (t.accent2 & 0x00FFFFFF) | ((ImU32)55 << 24);
-		dl->AddCircleFilled(ImVec2(min.x + w * (0.30f + 0.04f * sinf(t1)), min.y + h * (0.30f + 0.05f * cosf(t1))), R * 0.30f, g1, 40);
-		dl->AddCircleFilled(ImVec2(min.x + w * (0.72f + 0.04f * cosf(t1 * 0.8f)), min.y + h * (0.70f + 0.04f * sinf(t1 * 0.8f))), R * 0.26f, g2, 40);
+		const ImU32 g1 = (t.glow & 0x00FFFFFF) | ((ImU32)26 << 24);
+		dl->AddCircleFilled(ImVec2(min.x + w * 0.16f, min.y + h * (0.10f + 0.01f * sinf(t1))), w * 0.12f, g1, 32);
+		(void)h;
 	}
 
 	static void draw_shape(ImDrawList *dl, particle shape, ImVec2 p, float s, ImU32 col)
@@ -205,8 +203,8 @@ namespace sherbet
 		const ImGuiStyle &style = ImGui::GetStyle();
 		const float label_w = (label && label[0] != '\0' && label[0] != '#') ? ImGui::CalcTextSize(label, NULL, true).x : 0.0f;
 
-		// InvisibleButton은 SkipItems를 내부 처리하고 클릭 시 true 반환(공개 API만 사용)
-		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width + (label_w > 0 ? style.ItemInnerSpacing.x + label_w : 0.0f), height));
+		// 토글 트랙만 클릭 영역으로(라벨 너비를 더하면 라벨이 오른쪽으로 밀리는 버그)
+		const bool clicked = ImGui::InvisibleButton(label, ImVec2(width, height));
 		if (clicked)
 			*v = !*v;
 
