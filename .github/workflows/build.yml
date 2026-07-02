@@ -19,7 +19,7 @@ on:
         required: false
         default: ''
       default_theme:
-        description: '기본 테마 (mint/peach/pink/rainbow/lavender/noir)'
+        description: '기본 테마 (mint/peach/pink/rainbow/lavender/noir/strawberry)'
         required: false
         default: 'mint'
       nodelock:
@@ -72,7 +72,7 @@ jobs:
           $theme = $env:SHERBET_INPUT_DEFAULT_THEME -replace '\\', '\\\\' -replace '"', '\"'
           $nodelock = if ($env:SHERBET_INPUT_NODELOCK -eq 'true') { '1' } else { '0' }
           # 테마 id 오타 방지 — 잘못된 id 로 빌드하면 유료 테마가 잠긴 채 배송된다
-          $valid_themes = @('mint','peach','pink','rainbow','lavender','noir')
+          $valid_themes = @('mint','peach','pink','rainbow','lavender','noir','strawberry')
           if ($valid_themes -notcontains $theme) {
             Write-Error "default_theme '$theme' 는 유효한 테마 id 가 아닙니다: $($valid_themes -join ', ')"
             exit 1

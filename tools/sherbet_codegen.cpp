@@ -51,7 +51,7 @@ int main(int argc, char **argv)
 	}
 
 	// 인자 없음: 자주 쓰는 테마 목록 코드 일괄 출력
-	static const char *themes[] = { "mint", "peach", "pink", "rainbow", "lavender", "noir" };
+	static const char *themes[] = { "mint", "peach", "pink", "rainbow", "lavender", "noir", "strawberry" };
 	std::printf("== 테마 언락코드 (SHRB) ==\n");
 	for (const char *t : themes)
 	{
