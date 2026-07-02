@@ -1661,7 +1661,8 @@ void reshade::runtime::draw_gui()
 		}
 
 		// 좌측 레일
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.28f));
+		// 레일 배경은 테마의 bg0 를 살짝 얹는다 — 검정 고정이면 라이트 테마(딸기)에서 회색 띠로 떠 보임
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(sherbet::active_theme().bg0, 110)));
 		ImGui::BeginChild("##sherbet_rail", ImVec2(sherbet::rail_width, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		ImGui::PopStyleColor();
 		{
