@@ -4364,7 +4364,7 @@ void reshade::runtime::draw_technique_editor()
 				label += " [" + effect.source_file.filename().u8string() + ']';
 
 				if (bool status = tech.enabled;
-					ImGui::Checkbox(label.c_str(), &status) && !force_enabled)
+					sherbet::toggle(label.c_str(), &status) && !force_enabled)
 				{
 					modified = true;
 
