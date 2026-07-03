@@ -1,11 +1,13 @@
+import os
 import secrets
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
+from app.content import entitled_themes, load_themes
 from app.discord_roles import get_member_role_ids, roles_snapshot
 from app.oauth import build_authorize_url, exchange_code, get_user_id
 from app.store import PendingStore
@@ -13,6 +15,10 @@ from app.tokens import issue_token, verify_token
 
 app = FastAPI(title="Sherbet Auth")
 store = PendingStore()
+
+# 원격 테마 정의 파일 경로 + mtime 캐시(요청마다 파일 stat, 안 바뀌면 캐시)
+THEMES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content", "themes.json")
+THEMES_CACHE: dict = {}
 
 
 class StartBody(BaseModel):
@@ -81,6 +87,25 @@ def auth_poll(state: str) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail="unknown_state")
     return result
+
+
+@app.get("/content/me")
+async def content_me(
+    authorization: str | None = Header(default=None),
+    settings: Settings = Depends(get_settings),
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_bearer")
+    token = authorization[len("Bearer "):]
+    payload = verify_token(settings, token, hwid=None)  # 콘텐츠는 신원만 검증
+    if payload is None:
+        raise HTTPException(status_code=401, detail="invalid_token")
+    try:
+        role_ids = await get_member_role_ids(settings, payload["sub"])
+    except (httpx.HTTPError, KeyError, ValueError):
+        return JSONResponse(status_code=503, content={"error": "upstream_unavailable"})
+    themes = load_themes(THEMES_PATH, THEMES_CACHE)
+    return {"themes": entitled_themes(themes, role_ids or [])}
 
 
 @app.post("/auth/verify")

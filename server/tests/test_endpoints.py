@@ -241,3 +241,70 @@ def test_verify_member_404_returns_valid_false(settings):
         assert r.json() == {"valid": False}
     finally:
         _reset()
+
+
+def _themes_file(tmp_path, data):
+    import json
+    p = tmp_path / "themes.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return str(p)
+
+
+@respx.mock
+def test_content_me_returns_entitled(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        path = _themes_file(tmp_path, [
+            {"id": "free", "role": None, "display_name": "F", "colors": {}, "particle": "leaf", "hue_cycle": False},
+            {"id": "gold", "role": "role-gold", "display_name": "G", "colors": {}, "particle": "spark", "hue_cycle": False},
+            {"id": "plat", "role": "role-plat", "display_name": "P", "colors": {}, "particle": "heart", "hue_cycle": False},
+        ])
+        monkeypatch.setattr(main_module, "THEMES_PATH", path)
+        main_module.THEMES_CACHE.clear()
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-gold"]}))
+        client = TestClient(app)
+        r = client.get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+        ids = [t["id"] for t in r.json()["themes"]]
+        assert ids == ["free", "gold"]
+        assert all("role" not in t for t in r.json()["themes"])
+    finally:
+        _reset()
+
+
+def test_content_me_no_bearer_401(settings):
+    _reset(); _override(settings)
+    try:
+        client = TestClient(app)
+        assert client.get("/content/me").status_code == 401
+    finally:
+        _reset()
+
+
+def test_content_me_bad_token_401(settings):
+    _reset(); _override(settings)
+    try:
+        client = TestClient(app)
+        r = client.get("/content/me", headers={"Authorization": "Bearer not.a.jwt"})
+        assert r.status_code == 401
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_discord_down_503(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        path = _themes_file(tmp_path, [{"id": "free", "role": None}])
+        monkeypatch.setattr(main_module, "THEMES_PATH", path)
+        main_module.THEMES_CACHE.clear()
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(500, json={"error": "boom"}))
+        client = TestClient(app)
+        r = client.get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 503
+    finally:
+        _reset()
