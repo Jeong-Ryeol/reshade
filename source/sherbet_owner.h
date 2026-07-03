@@ -32,6 +32,12 @@
 #define SHERBET_NODELOCK 0
 #endif
 
+// 온라인 인증 게이트. 기본 0(꺼짐/개발) — 배포 빌드에서만 1로 켠다.
+// 켜져 있으면 네트워크를 통해 주문 유효성을 검증한다.
+#ifndef SHERBET_ONLINE_AUTH
+#define SHERBET_ONLINE_AUTH 0
+#endif
+
 namespace sherbet
 {
 	inline bool has_owner()
