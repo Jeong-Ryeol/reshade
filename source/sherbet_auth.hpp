@@ -38,6 +38,7 @@ namespace sherbet
 			std::atomic<bool> _authed{ false };
 			std::atomic<bool> _login_active{ false };
 			std::atomic<bool> _worker_done{ false };
+			std::atomic<bool> _stop{ false }; // 파괴 시 워커(폴링 루프) 조기 종료 신호
 			std::thread _worker;
 			mutable std::mutex _mtx;
 			std::string _status;          // _mtx 보호

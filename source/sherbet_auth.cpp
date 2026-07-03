@@ -40,7 +40,7 @@ bool sherbet::auth::enabled()
 }
 
 sherbet::auth::controller::controller() {}
-sherbet::auth::controller::~controller() { join_worker(); }
+sherbet::auth::controller::~controller() { _stop = true; join_worker(); }
 
 void sherbet::auth::controller::join_worker()
 {
@@ -158,6 +158,7 @@ void sherbet::auth::controller::begin_login()
 		const std::string poll_path = kPollBase + sr.state;
 		const std::wstring wpoll(poll_path.begin(), poll_path.end());
 		for (int i = 0; i < 150; ++i) {
+			if (_stop.load()) { _login_active = false; _worker_done = true; return; }
 			std::string presp;
 			const int pstatus = sherbet::http::get(kHost, wpoll.c_str(), presp, nullptr);
 			if (pstatus == 200) {
@@ -179,7 +180,9 @@ void sherbet::auth::controller::begin_login()
 					_login_active = false; _worker_done = true; return;
 				}
 			}
-			Sleep(2000);
+			// 2초 대기를 100ms 슬라이스로 나눠 취소에 빠르게 반응
+			for (int s = 0; s < 20 && !_stop.load(); ++s)
+				Sleep(100);
 		}
 		{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEC\x8B\x9C\xEA\xB0\x84 \xEC\xB4\x88\xEA\xB3\xBC"; } // "시간 초과"
 		_login_active = false; _worker_done = true;

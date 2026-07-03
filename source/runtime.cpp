@@ -3523,6 +3523,11 @@ bool reshade::runtime::reload_effect(size_t effect_index)
 }
 void reshade::runtime::reload_effects(bool force_load_all)
 {
+	// SHERBET: 인증 안 됐으면 이펙트 재로드(컴파일) 자체를 막는다.
+	// update_effects 밖 경로(리로드 핫키/프리셋 전환/오버레이 버튼)까지 단일 깔때기에서 차단.
+	if (sherbet::auth::enabled() && !_sherbet_auth.is_authed())
+		return;
+
 	// Clear out any previous effects
 	destroy_effects();
 
