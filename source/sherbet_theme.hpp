@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 #include <imgui.h>
 
 namespace sherbet
@@ -29,4 +30,9 @@ namespace sherbet
 	const theme &default_theme();
 	const theme *find_theme(const char *id);
 	const theme *all_themes(std::size_t &count);
+
+	struct parsed_theme; // forward (sherbet_theme_json.hpp)
+	std::vector<const theme *> themes_snapshot();
+	void add_dynamic_theme(const parsed_theme &pt);
+	void clear_dynamic_themes();
 }

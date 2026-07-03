@@ -4,8 +4,12 @@
  */
 
 #include "sherbet_theme.hpp"
+#include "sherbet_theme_json.hpp"
 #include "sherbet_owner.h"
 #include <cstring>
+#include <vector>
+#include <memory>
+#include <string>
 
 namespace sherbet
 {
@@ -65,6 +69,11 @@ namespace sherbet
 	};
 	static const std::size_t s_theme_count = sizeof(s_themes) / sizeof(s_themes[0]);
 
+	// 동적 테마 — 서버(/content/me)에서 받은 신규 테마. unique_ptr 로 소유해 벡터 성장에도
+	// owned_theme 주소·내부 문자열 포인터가 안정(view.id/display_name 이 std::string 를 가리킴).
+	struct owned_theme { std::string id, display_name; theme view; };
+	static std::vector<std::unique_ptr<owned_theme>> s_dynamic;
+
 	const theme *all_themes(std::size_t &count)
 	{
 		count = s_theme_count;
@@ -78,7 +87,48 @@ namespace sherbet
 		for (std::size_t i = 0; i < s_theme_count; ++i)
 			if (std::strcmp(s_themes[i].id, id) == 0)
 				return &s_themes[i];
+		for (const auto &d : s_dynamic)
+			if (d->id == id)
+				return &d->view;
 		return nullptr;
+	}
+
+	std::vector<const theme *> themes_snapshot()
+	{
+		std::vector<const theme *> out;
+		out.reserve(s_theme_count + s_dynamic.size());
+		for (std::size_t i = 0; i < s_theme_count; ++i)
+			out.push_back(&s_themes[i]);
+		for (const auto &d : s_dynamic)
+			out.push_back(&d->view);
+		return out;
+	}
+
+	void add_dynamic_theme(const parsed_theme &pt)
+	{
+		if (!pt.ok)
+			return;
+		if (find_theme(pt.id.c_str()) != nullptr) // 정적/동적 중복 → 무시(정적 우선)
+			return;
+		auto o = std::make_unique<owned_theme>();
+		o->id = pt.id;
+		o->display_name = pt.display_name.empty() ? pt.id : pt.display_name;
+		theme &v = o->view;
+		v.id = o->id.c_str();
+		v.display_name = o->display_name.c_str();
+		v.bg0 = pt.bg0; v.bg1 = pt.bg1; v.bg2 = pt.bg2;
+		v.panel = pt.panel; v.panel_alt = pt.panel_alt;
+		v.chip = pt.chip; v.border = pt.border;
+		v.text = pt.text; v.text_dim = pt.text_dim;
+		v.accent = pt.accent; v.accent2 = pt.accent2; v.glow = pt.glow;
+		v.particle_shape = pt.particle_shape;
+		v.hue_cycle = pt.hue_cycle;
+		s_dynamic.push_back(std::move(o));
+	}
+
+	void clear_dynamic_themes()
+	{
+		s_dynamic.clear();
 	}
 
 	const theme &default_theme()
