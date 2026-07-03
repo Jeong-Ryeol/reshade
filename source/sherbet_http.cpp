@@ -48,11 +48,14 @@ namespace
 			static_cast<DWORD>(wheaders.size()), const_cast<void *>(body_ptr), body_len))
 			return 0;
 
-		// 상태 코드
+		// 상태 코드. HttpSendRequestW 성공 후 HttpQueryInfoW가 실패하면 status는 0으로 유지됨.
+		// WinInet의 상태라인 조회는 응답 수신 후 거의 항상 성공하지만, 실패 시 의도적으로
+		// status=0으로 둬서 호출자가 "서버 사용 불가"로 처리하게 함(오프라인 은폐 경로로 라우팅됨, 잘못된 인증 절대 없음).
 		DWORD status = 0, slen = sizeof(status);
 		HttpQueryInfoW(req, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &slen, nullptr);
 
-		// 바디 읽기(루프)
+		// 바디 읽기(루프). InternetReadFile이 false 반환 시(중간 네트워크 오류) EOF로 처리되어 out이 절단될 수 있음.
+		// 호출자는 JSON 파싱으로 유효성 검증(절단된 바디는 파싱 실패 → 오류로 처리됨).
 		char buf[2048];
 		DWORD read = 0;
 		while (InternetReadFile(req, buf, sizeof(buf), &read) && read > 0)
