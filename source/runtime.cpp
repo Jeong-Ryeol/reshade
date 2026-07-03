@@ -769,20 +769,6 @@ void reshade::runtime::on_present()
 		}
 	}
 
-	// SHERBET: 반반 비교가 켜져 있을 때만 '효과 적용 전' 프레임을 스냅샷.
-	// 소스는 효과가 곧 렌더될(= '적용 후'가 될) 리소스와 동일 — 리졸브 텍스처가 있으면 그것, 없으면 백버퍼.
-	// 여기서 뜬 스냅샷을 draw_gui() 에서 ImGui 위에 왼쪽 절반만 겹쳐 그린다.
-	if (_sherbet_compare_active && _sherbet_before_tex != 0 && !is_loading() && !_techniques.empty())
-	{
-		const api::resource before_src = (_back_buffer_resolved != 0) ? _back_buffer_resolved : back_buffer_resource;
-		const api::resource_usage before_src_state = (_back_buffer_resolved != 0) ? api::resource_usage::render_target : api::resource_usage::present;
-		cmd_list->barrier(before_src, before_src_state, api::resource_usage::copy_source);
-		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
-		cmd_list->copy_texture_region(before_src, 0, nullptr, _sherbet_before_tex, 0, nullptr);
-		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
-		cmd_list->barrier(before_src, api::resource_usage::copy_source, before_src_state);
-	}
-
 	// Lock input so it cannot be modified by other threads while we are reading it here
 	std::unique_lock<std::recursive_mutex> input_lock;
 	if (_input != nullptr)
@@ -3873,6 +3859,20 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 		return;
 	if (!_effects_enabled && std::all_of(_effects.cbegin(), _effects.cend(), [](const effect &effect) { return !effect.addon; }))
 		return;
+
+	// SHERBET: 반반 비교용 '효과 적용 전' 스냅샷 — 효과가 실제로 렌더되기 직전, 렌더 대상
+	// 리소스에서 직접 뜬다. (on_present 에서 뜨면 게임이 리렌더 없이 Present 를 두 번 하는
+	// 프레임에 이미 효과 입혀진 화면이 '원본'으로 캡처되는 누수가 있었음 — 위의
+	// _effects_rendered_this_frame 가드 덕에 여기는 프레임당 한 번만 실행된다)
+	if (_sherbet_compare_active && _sherbet_before_tex != 0)
+	{
+		const api::resource compare_src = _device->get_resource_from_view(rtv);
+		cmd_list->barrier(compare_src, api::resource_usage::render_target, api::resource_usage::copy_source);
+		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
+		cmd_list->copy_texture_region(compare_src, 0, nullptr, _sherbet_before_tex, 0, nullptr);
+		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
+		cmd_list->barrier(compare_src, api::resource_usage::copy_source, api::resource_usage::render_target);
+	}
 
 	// Lock input so it cannot be modified by other threads while we are reading it here
 	std::unique_lock<std::recursive_mutex> input_lock;
