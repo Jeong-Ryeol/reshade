@@ -5,10 +5,11 @@
 #include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
 #include "sherbet_license.hpp"
+#include "sherbet_auth.hpp"
+#include "sherbet_theme_json.hpp"
 
 #include <cmath>
 #include <cstring>
-#include <map>
 #include <set>
 #include <string>
 
@@ -22,8 +23,8 @@ namespace sherbet
 	// 빌드 인자로 잘못된 테마 id 가 들어와도(오타 등) mint 로 안전 폴백 — 유료 테마가 잠긴 채 배송되는 사고 방지
 	static const char *safe_default_id() { return find_theme(SHERBET_DEFAULT_THEME) != nullptr ? SHERBET_DEFAULT_THEME : "mint"; }
 	static std::string s_active_id = safe_default_id();
-	// id -> 언락에 사용된 실제 코드. 기본(구매) 테마는 코드 없이 항상 열림(is_unlocked 에서 별도 처리).
-	static std::map<std::string, std::string> s_unlocked;
+	// 서버(/content/me)가 내려준 엔타이틀 테마 id 집합. 기본(구매) 테마는 별도 처리(항상 열림).
+	static std::set<std::string> s_entitled;
 
 	const theme &active_theme()
 	{
@@ -35,45 +36,35 @@ namespace sherbet
 	bool is_unlocked(const char *id)
 	{
 		if (!id) return false;
-		if (license::iequals(id, safe_default_id())) return true; // 기본(구매) 테마는 코드 없이 항상 열림
-		return s_unlocked.count(id) > 0;
+		if (!auth::enabled()) return true; // 개발 빌드: 전부 열림
+		if (license::iequals(id, safe_default_id())) return true; // 기본(구매) 테마 항상 열림
+		return s_entitled.count(id) > 0;
 	}
-	// 검증 통과한 코드와 함께만 언락 — 코드가 실제로 맞을 때만 상태를 저장한다.
-	void unlock_theme(const char *id, const char *code)
+	void mark_entitled(const char *id)
 	{
-		if (find_theme(id) && code != nullptr && license::verify_theme(id, code))
-			s_unlocked[id] = code;
+		if (id && id[0] != '\0') s_entitled.insert(id);
 	}
-	std::string unlocked_csv()
+	void clear_entitlements()
 	{
-		std::string o;
-		for (const auto &kv : s_unlocked) { if (!o.empty()) o += ','; o += kv.first; o += '='; o += kv.second; }
-		return o;
+		s_entitled.clear();
 	}
-	// "id=CODE,id=CODE" 파싱. 각 항목의 코드를 재검증해 통과한 것만 언락 —
-	// ini 에 테마 이름만(코드 없이) 손으로 적거나 위조 코드를 넣으면 무시된다.
-	void load_unlocked_csv(const char *csv)
+	// /content/me 응답(JSON)을 반영: 동적 테마 재구성 + 엔타이틀 집합 재구성.
+	// 렌더 스레드에서만 호출(레지스트리/엔타이틀은 렌더 루프가 읽음).
+	void apply_content(const std::string &body)
 	{
-		if (!csv) return;
-		std::string cur;
-		auto commit = [](const std::string &entry) {
-			const std::size_t eq = entry.find('=');
-			if (eq == std::string::npos) return; // 코드 없는 항목 → 무시
-			const std::string id = entry.substr(0, eq);
-			const std::string code = entry.substr(eq + 1);
-			if (find_theme(id.c_str()) && license::verify_theme(id.c_str(), code.c_str()))
-				s_unlocked[id] = code;
-		};
-		for (const char *p = csv; ; ++p) {
-			if (*p == ',' || *p == '\0') { if (!cur.empty()) commit(cur); cur.clear(); if (*p == '\0') break; }
-			else cur += *p;
+		const std::vector<parsed_theme> themes = parse_themes_manifest(body);
+		clear_dynamic_themes();
+		clear_entitlements();
+		for (const parsed_theme &pt : themes)
+		{
+			if (pt.id.empty()) continue;
+			mark_entitled(pt.id.c_str());
+			if (find_theme(pt.id.c_str()) == nullptr) // 내장에 없는 신규 → 동적 등록
+				add_dynamic_theme(pt);
 		}
-	}
-	// 오프라인 언락코드 검증은 통합 모듈(sherbet_license.hpp)로 위임한다.
-	// 형식/공식은 그대로라 기존 SHRB-XXXX-XXXX 코드와 100% 호환.
-	bool check_theme_code(const char *id, const char *code)
-	{
-		return license::verify_theme(id, code);
+		// 활성 테마가 사라진 동적 테마였다면 기본으로 폴백
+		if (find_theme(active_theme_id()) == nullptr)
+			set_active_theme(safe_default_id());
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
