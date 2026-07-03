@@ -268,28 +268,54 @@ Phase 0(인증) 완료 후, 테마 언락을 오프라인 FNV 코드에서 **디
   - `add_dynamic_theme(...)` — id 중복 시 무시(정적 우선). 색/필드 세팅 후 `view` 포인터 연결.
 - **파싱:** 작은 JSON(테마 소수)을 전용 파서로 처리. `#rrggbbaa` → `IM_COL32`. particle 문자열 → enum. (Phase 0b `sherbet_auth_core.hpp` 파서 스타일 재활용 또는 별도 `sherbet_theme_json`.)
 
-### 13.4 클라 — 역할 스냅샷 + `is_unlocked` 교체
+### 13.4 클라 — 엔타이틀먼트 = 서버 단일 소스 + `is_unlocked` 교체
 
-- **역할 노출:** `sherbet::auth::controller` 가 최근 역할 스냅샷을 보관(verify/poll 응답의 `roles`)하고 `bool has_role(const char *role) const` 제공(락 보호).
-- **`is_unlocked(id)` 재구현:**
+> **설계 정정(2026-07-04):** 초기안은 클라에서 `has_role("sherbet-theme-<id>")` 로 언락을
+> 판정했으나, 디스코드 역할은 **숫자 ID**로 오고 클라의 역할 스냅샷도 (buyer 매핑 외에는) 숫자
+> ID라 이름 매칭이 성립하지 않는다. 따라서 **역할→테마 매칭은 전적으로 서버(`/content/me`,
+> `themes.json`의 숫자 role ID)가 담당**하고, 클라는 서버가 내려준 **엔타이틀 id 집합**만
+> 소비한다. 클라에 `has_role` 는 두지 않는다(더 단순·서버 권위·더 안전).
+
+- **`themes.json`(서버)의 역할:** 게이트 대상 테마를 나열한다. **내장 테마 id**(mint/peach/… 중
+  게이트할 것)는 `id`+`role`만 있으면 되고(colors 생략 가능 — 클라가 이미 렌더 데이터 보유),
+  **동적(신규) 테마**는 전체 색 JSON(§13.1)을 담는다. `role:null` = 무료.
+- **`/content/me` 응답 = 이 사용자가 볼 자격이 있는 테마 목록**(내장+동적 혼재, `role` 필드는
+  서버가 제거하고 내려줌).
+- **클라 적용(`apply_content`, 렌더 스레드):** 응답 배열의 각 테마에 대해
+  - `id` 를 **엔타이틀 집합**(`mark_entitled`)에 추가.
+  - `id` 가 정적 내장 테마면 → 언락 표시만(색 무시).
+  - `id` 가 신규면 → 색 파싱해 **동적 테마로 등록**(`add_dynamic_theme`).
+- **`is_unlocked(id)` 재구현(엔타이틀 집합 기반):**
+  - `!sherbet::auth::enabled()`(개발 빌드) → 모두 열림(현행 개발 편의 유지).
   - 기본(구매) 테마(`SHERBET_DEFAULT_THEME`) → 항상 열림.
-  - 내장 테마 → `_sherbet_auth.has_role("sherbet-theme-<id>")` (소프트 게이트, UI만).
-  - 동적 테마 → 서버가 권한자에게만 내려주므로 목록에 존재하면 열림(true).
-  - `SHERBET_ONLINE_AUTH==0`(개발) → 모두 열림(현행 개발 편의 유지).
-- **제거:** `s_unlocked` map + FNV 테마코드 경로(`sherbet_ui.cpp` `unlock_theme`/`load_unlocked_csv`/`unlocked_csv`/`check_theme_code`), 마켓의 SHRB- InputText(`runtime_gui.cpp:3825` 부근)와 config `Unlocked` 저장/로드. **프리셋(PRE-) 경로는 Phase 2까지 유지.**
+  - 그 외 → **엔타이틀 집합에 `id` 존재 시 열림**(내장·동적 동일 규칙).
+- **오프라인/재시작 지속:** `/content/me` 원문 JSON을 로컬 캐시 파일(`<config_dir>/sherbet.themes`)에
+  저장. `init()` 시 캐시를 읽어 레지스트리+엔타이틀 집합을 복원 → 동적 테마가 재시작/오프라인
+  유예 중에도 렌더된다(§인증 24h 유예와 정합).
+- **제거:** `s_unlocked` map + FNV 테마코드 경로(`sherbet_ui.cpp` `unlock_theme`/
+  `load_unlocked_csv`/`unlocked_csv`/`check_theme_code`), 마켓의 SHRB- InputText
+  (`runtime_gui.cpp:3825` 부근)와 config `Unlocked` 저장/로드. **프리셋(PRE-) 경로는 Phase 2까지 유지.**
 
-### 13.5 클라 — "내 전용 불러오기" 버튼
+### 13.5 클라 — "내 전용 불러오기" 버튼 + 콘텐츠 페치
 
-- 위치: 테마 마켓 상단(또는 홈). 인증된 상태에서만 노출.
-- 동작: `sherbet::http::get(host, "/sherbet-auth/content/me", resp, bearer)` (Phase 0b `sherbet_http` 재활용) → 파싱 → `add_dynamic_theme` 병합 → 마켓 그리드 갱신. 백그라운드 스레드(오버레이 논블로킹, Phase 0b 컨트롤러 패턴).
-- 실패(401/503/전송실패) → 조용히 상태 텍스트만.
+- 위치: 테마 마켓 상단. 인증된 상태(`is_authed()`)에서만 노출.
+- **비동기 페치:** 컨트롤러에 `begin_fetch_content()` 추가 — Phase 0b `begin_login` 과 동일한
+  워커 패턴으로 `sherbet::http::get(host, "/sherbet-auth/content/me", resp, bearer)` 실행
+  (bearer = 캐시 토큰). 200이면 응답 바디를 뮤텍스 보호 버퍼에 저장 + `sherbet.themes` 캐시
+  파일 기록. **레지스트리 변형은 렌더 스레드에서만** — 워커는 네트워크/파일 IO만, `tick()`/프레임
+  루프에서 `take_content(body)` 로 바디를 꺼내 `sherbet::apply_content(body)` 적용.
+- **토큰 노출:** 컨트롤러에 `std::string token() const`(락 보호) 추가 — bearer 로 사용.
+- **init 캐시 반영:** `init()` 은 `sherbet.themes` 를 읽어 같은 pending 버퍼에 넣고, 첫 프레임의
+  `take_content`→`apply_content` 가 레지스트리에 복원한다.
+- 실패(401/503/전송실패) → 조용히 상태 텍스트만(캐시 유지).
 
 ### 13.6 위협 모델 (Phase 1)
 
 - **동적 테마 = 하드 게이트:** 서버가 역할 없는 사용자에게 JSON 자체를 주지 않음 → 변조 클라도 미권한 테마 콘텐츠를 얻지 못한다. FNV 코드보다 강함.
-- **내장 7테마 = 소프트 게이트:** 이미 바이너리에 존재 → 역할 체크는 UI 표시뿐(노드락 수준). 그러나 **위조 가능한 평문 오프라인 코드는 완전 제거**된다(§13.4). 이 트레이드오프는 §12.3 클라 신뢰 모델 한계로 감수.
+- **내장 7테마 = 소프트 게이트:** 이미 바이너리에 존재 → 엔타이틀 집합 체크는 UI 표시뿐(노드락 수준). 그러나 **위조 가능한 평문 오프라인 코드는 완전 제거**된다(§13.4). 이 트레이드오프는 §12.3 클라 신뢰 모델 한계로 감수.
+- **엔타이틀 판정은 서버:** 클라는 역할→테마 매핑을 모른다(숫자 role ID는 `themes.json`에만). 변조 클라가 `is_unlocked` 를 우회해도 소프트 게이트 특성상 이득은 내장 테마 UI 표시뿐이며, 동적 테마는 여전히 서버 응답이 없으면 색 데이터 자체가 없다.
 
 ### 13.7 Phase 1 분해
 
 - **1a-server:** `/content/me` 엔드포인트 + `themes.json` 로더 + 역할 필터 (FastAPI, host 테스트).
-- **1b-client:** 동적 테마 레지스트리 + JSON 파서(host 테스트) + `has_role`/`is_unlocked` 교체 + "내 전용 불러오기" + 마켓 UI 정리(FNV 제거). Mac 컴파일 불가 부분은 CI.
+- **1b-client:** 동적 테마 레지스트리 + JSON 파서(host 테스트, `imgui.h` 호스트 컴파일 가능 확인됨) + 엔타이틀 집합 기반 `is_unlocked` 교체 + `begin_fetch_content`/`take_content`/`token()` + `apply_content` + "내 전용 불러오기" 버튼 + `sherbet.themes` 캐시 + 마켓 UI 정리(FNV 제거). Mac 컴파일 불가 부분(WinInet/스레드/ImGui glue)은 CI.
