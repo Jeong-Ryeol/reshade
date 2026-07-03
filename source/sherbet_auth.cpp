@@ -8,6 +8,7 @@
 #include "sherbet_nodelock.hpp" // hwid()
 #include <Windows.h>
 #include <shellapi.h>
+#include <objbase.h> // CoInitializeEx/CoUninitialize
 #include <fstream>
 #include <filesystem>
 #include <chrono>
@@ -71,6 +72,7 @@ void sherbet::auth::controller::init(const std::string &config_dir_utf8)
 	// 시작 시 비동기 verify (토큰이 있을 때만)
 	if (_cache.token.empty()) { _authed = false; return; }
 
+	join_worker();
 	_worker_done = false;
 	_worker = std::thread([this]() {
 		const std::string body = std::string("{\"token\":\"") + json_escape(_cache.token) +
@@ -78,9 +80,10 @@ void sherbet::auth::controller::init(const std::string &config_dir_utf8)
 		std::string resp;
 		const int status = sherbet::http::post_json(kHost, kVerifyPath, body, resp, nullptr);
 		const verify_result vr = parse_verify(resp, status);
-		const gate g = decide(vr, _cache, now_unix(), 86400);
+		gate g;
 		{
 			std::lock_guard<std::mutex> lk(_mtx);
+			g = decide(vr, _cache, now_unix(), 86400);
 			if (vr.ok) { _cache.last_verified_unix = now_unix(); _pending_save = true; }
 		}
 		_authed = (g == gate::authed);
@@ -99,10 +102,10 @@ bool sherbet::auth::controller::login_active() const
 	return _login_active.load();
 }
 
-const char *sherbet::auth::controller::status_text() const
+std::string sherbet::auth::controller::status_text() const
 {
 	std::lock_guard<std::mutex> lk(_mtx);
-	return _status.c_str();
+	return _status; // 락 안에서 값 복사 — 반환 후 워커가 _status를 바꿔도 안전
 }
 
 void sherbet::auth::controller::tick()
@@ -145,7 +148,9 @@ void sherbet::auth::controller::begin_login()
 		// 2) 브라우저 열기
 		{
 			std::wstring wurl(sr.authorize_url.begin(), sr.authorize_url.end()); // URL은 ASCII
+			CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 			ShellExecuteW(nullptr, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			CoUninitialize();
 		}
 		{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xEB\x8C\x80\xEA\xB8\xB0\xEC\xA4\x91\xE2\x80\xA6"; } // "로그인 대기중…"
 

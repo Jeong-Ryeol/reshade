@@ -26,7 +26,7 @@ namespace sherbet
 			void tick();
 			void begin_login();
 			bool login_active() const;
-			const char *status_text() const;
+			std::string status_text() const;
 
 		private:
 			void join_worker();
@@ -34,7 +34,7 @@ namespace sherbet
 
 			std::string _config_dir;
 			std::string _hwid;
-			token_cache _cache;
+			token_cache _cache;           // _mtx 보호
 			std::atomic<bool> _authed{ false };
 			std::atomic<bool> _login_active{ false };
 			std::atomic<bool> _worker_done{ false };
@@ -42,7 +42,6 @@ namespace sherbet
 			mutable std::mutex _mtx;
 			std::string _status;          // _mtx 보호
 			bool _pending_save = false;   // _mtx 보호: tick()에서 캐시 파일 기록 트리거
-			std::string _login_state;     // 진행 중 로그인의 state
 		};
 	}
 }
