@@ -4,7 +4,6 @@
  */
 #pragma once
 #include "sherbet_auth_core.hpp"
-#include "sherbet_content_json.hpp" // content_download_targets
 #include <string>
 #include <atomic>
 #include <mutex>

@@ -4,6 +4,7 @@
  */
 #include "sherbet_auth.hpp"
 #include "sherbet_content.hpp"
+#include "sherbet_content_json.hpp" // content_download_targets
 #include "sherbet_http.hpp"
 #include "sherbet_owner.h"
 #include "sherbet_nodelock.hpp" // hwid()
