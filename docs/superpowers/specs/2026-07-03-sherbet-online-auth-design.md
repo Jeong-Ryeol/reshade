@@ -218,3 +218,78 @@ Sherbet 실행
    - `sherbet-buyer` — 실행 기본 게이트 (없으면 Sherbet 실행 불가)
    - `sherbet-theme-<id>` — 테마별 (예: `sherbet-theme-strawberry`)
    - `sherbet-preset-<주문번호>` — 프리셋/커스텀별 (`SHERBET_ORDER_NO` 기반, 없으면 owner)
+
+---
+
+## 13. Phase 1 상세 설계 (원격 테마 — 2026-07-04 확정, 범위 1a+1b)
+
+Phase 0(인증) 완료 후, 테마 언락을 오프라인 FNV 코드에서 **디스코드 역할 + 서버 배포**로 전환한다. **재빌드 없이** 서버에 새 테마를 추가할 수 있게 한다.
+
+### 13.1 테마 JSON 스키마 (C++ `theme` 구조체 매핑, `source/sherbet_theme.hpp`)
+
+```json
+{
+  "id": "aurora",
+  "display_name": "Aurora Sky",
+  "colors": {
+    "bg0":"#0a1f1aff","bg1":"#0f2e24ff","bg2":"#123a2cff",
+    "panel":"#122e26b8","panel_alt":"#183a2fd9",
+    "chip":"#134233ff","border":"#5df0c040",
+    "text":"#eafff6ff","text_dim":"#8fbfaeff",
+    "accent":"#5df0c0ff","accent2":"#a7ffe3ff",
+    "glow":"#5df0c073"
+  },
+  "particle": "leaf",
+  "hue_cycle": false,
+  "role": "sherbet-theme-aurora"
+}
+```
+- 색은 `#rrggbbaa`(8자리 hex, 알파 포함). 12색 = struct 필드 그대로.
+- `particle` = `spark|heart|leaf|petal`.
+- `role` = 이 테마 언락에 필요한 역할. `null`/생략이면 무료(모든 구매자에게 제공).
+
+### 13.2 서버 — `GET /sherbet-auth/content/me` (Bearer)
+
+- **인증:** `Authorization: Bearer <JWT>`. 서명·만료 검증(hwid는 검사 안 함 — 콘텐츠는 신원만 필요). `sub` 추출.
+- **역할:** `sub`로 **디스코드 역할 라이브 재조회**(`get_member_role_ids`, verify와 동일). 토큰에 박힌 역할 스냅샷이 아니라 현재 역할 기준.
+- **소스:** 서버의 `server/content/themes.json`(어드민이 손으로 편집·추가). 배열 형태.
+- **필터:** 각 테마의 `role`이 `null`이거나 사용자 역할에 포함되면 매니페스트에 넣는다.
+- **응답:** `{ "themes": [ <themeJSON>, ... ] }`. (프리셋/이펙트는 Phase 2에서 추가.)
+- **에러:** 토큰 무효/만료 → 401. 디스코드 재조회 실패 → 503(재시도 신호, 클라는 조용히 실패).
+- **배포:** 새 테마 = `themes.json`에 항목 추가 + 디코에서 `sherbet-theme-<id>` 역할 부여. 서버 재시작/재빌드 불필요(요청마다 파일 읽거나 mtime 캐시).
+
+### 13.3 클라 — 동적 테마 레지스트리 (`source/sherbet_themes.cpp` 확장)
+
+- **소유 구조:** `struct owned_theme { std::string id, display_name; theme view; }`. `view.id = id.c_str()`, `view.display_name = display_name.c_str()`. 색/particle/hue_cycle은 값.
+- **보관:** `std::vector<std::unique_ptr<owned_theme>> s_dynamic;` (unique_ptr → 벡터 성장에도 owned_theme 주소·문자열 포인터 안정).
+- **API 확장:**
+  - `find_theme(id)` → 정적 `s_themes` 먼저, 없으면 `s_dynamic` 검색.
+  - `all_themes` 는 연속 배열을 반환할 수 없게 되므로 **`std::vector<const theme*> themes_snapshot()`** 신규(정적+동적 합친 뷰)로 교체하고 호출부(마켓 그리드 등)를 이 스냅샷 순회로 바꾼다.
+  - `add_dynamic_theme(...)` — id 중복 시 무시(정적 우선). 색/필드 세팅 후 `view` 포인터 연결.
+- **파싱:** 작은 JSON(테마 소수)을 전용 파서로 처리. `#rrggbbaa` → `IM_COL32`. particle 문자열 → enum. (Phase 0b `sherbet_auth_core.hpp` 파서 스타일 재활용 또는 별도 `sherbet_theme_json`.)
+
+### 13.4 클라 — 역할 스냅샷 + `is_unlocked` 교체
+
+- **역할 노출:** `sherbet::auth::controller` 가 최근 역할 스냅샷을 보관(verify/poll 응답의 `roles`)하고 `bool has_role(const char *role) const` 제공(락 보호).
+- **`is_unlocked(id)` 재구현:**
+  - 기본(구매) 테마(`SHERBET_DEFAULT_THEME`) → 항상 열림.
+  - 내장 테마 → `_sherbet_auth.has_role("sherbet-theme-<id>")` (소프트 게이트, UI만).
+  - 동적 테마 → 서버가 권한자에게만 내려주므로 목록에 존재하면 열림(true).
+  - `SHERBET_ONLINE_AUTH==0`(개발) → 모두 열림(현행 개발 편의 유지).
+- **제거:** `s_unlocked` map + FNV 테마코드 경로(`sherbet_ui.cpp` `unlock_theme`/`load_unlocked_csv`/`unlocked_csv`/`check_theme_code`), 마켓의 SHRB- InputText(`runtime_gui.cpp:3825` 부근)와 config `Unlocked` 저장/로드. **프리셋(PRE-) 경로는 Phase 2까지 유지.**
+
+### 13.5 클라 — "내 전용 불러오기" 버튼
+
+- 위치: 테마 마켓 상단(또는 홈). 인증된 상태에서만 노출.
+- 동작: `sherbet::http::get(host, "/sherbet-auth/content/me", resp, bearer)` (Phase 0b `sherbet_http` 재활용) → 파싱 → `add_dynamic_theme` 병합 → 마켓 그리드 갱신. 백그라운드 스레드(오버레이 논블로킹, Phase 0b 컨트롤러 패턴).
+- 실패(401/503/전송실패) → 조용히 상태 텍스트만.
+
+### 13.6 위협 모델 (Phase 1)
+
+- **동적 테마 = 하드 게이트:** 서버가 역할 없는 사용자에게 JSON 자체를 주지 않음 → 변조 클라도 미권한 테마 콘텐츠를 얻지 못한다. FNV 코드보다 강함.
+- **내장 7테마 = 소프트 게이트:** 이미 바이너리에 존재 → 역할 체크는 UI 표시뿐(노드락 수준). 그러나 **위조 가능한 평문 오프라인 코드는 완전 제거**된다(§13.4). 이 트레이드오프는 §12.3 클라 신뢰 모델 한계로 감수.
+
+### 13.7 Phase 1 분해
+
+- **1a-server:** `/content/me` 엔드포인트 + `themes.json` 로더 + 역할 필터 (FastAPI, host 테스트).
+- **1b-client:** 동적 테마 레지스트리 + JSON 파서(host 테스트) + `has_role`/`is_unlocked` 교체 + "내 전용 불러오기" + 마켓 UI 정리(FNV 제거). Mac 컴파일 불가 부분은 CI.
