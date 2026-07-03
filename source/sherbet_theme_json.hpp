@@ -96,42 +96,43 @@ namespace sherbet
 			std::string hex;
 			return json_str(obj, key, hex) && parse_hex_color(hex, dst);
 		}
+
+		// body 의 "key":[ {..}, {..} ] 배열에서 최상위 객체 문자열들을 brace 매칭으로 잘라 반환.
+		inline std::vector<std::string> split_top_level_objects(const std::string &body, const char *key)
+		{
+			std::vector<std::string> out;
+			std::string needle = std::string("\"") + key + "\"";
+			std::size_t tk = body.find(needle);
+			if (tk == std::string::npos) return out;
+			std::size_t lb = body.find('[', tk);
+			if (lb == std::string::npos) return out;
+			std::size_t i = lb + 1;
+			while (i < body.size())
+			{
+				while (i < body.size() && body[i] != '{' && body[i] != ']') ++i;
+				if (i >= body.size() || body[i] == ']') break;
+				const std::size_t start = i;
+				int depth = 0;
+				bool in_str = false;
+				for (; i < body.size(); ++i)
+				{
+					const char c = body[i];
+					if (in_str) { if (c == '\\') { ++i; continue; } if (c == '"') in_str = false; continue; }
+					if (c == '"') in_str = true;
+					else if (c == '{') ++depth;
+					else if (c == '}') { if (--depth == 0) { ++i; break; } }
+				}
+				out.push_back(body.substr(start, i - start));
+			}
+			return out;
+		}
 	}
 
-	// {"themes":[ {..}, {..} ]} → 각 최상위 테마 객체를 brace 매칭으로 잘라 파싱.
 	inline std::vector<parsed_theme> parse_themes_manifest(const std::string &body)
 	{
 		std::vector<parsed_theme> out;
-		std::size_t tk = body.find("\"themes\"");
-		if (tk == std::string::npos) return out;
-		std::size_t lb = body.find('[', tk);
-		if (lb == std::string::npos) return out;
-
-		std::size_t i = lb + 1;
-		while (i < body.size())
+		for (const std::string &obj : detail::split_top_level_objects(body, "themes"))
 		{
-			// 다음 '{' 또는 배열 종료 ']'
-			while (i < body.size() && body[i] != '{' && body[i] != ']') ++i;
-			if (i >= body.size() || body[i] == ']') break;
-			// brace 매칭(문자열 내 중괄호는 무시)
-			const std::size_t start = i;
-			int depth = 0;
-			bool in_str = false;
-			for (; i < body.size(); ++i)
-			{
-				const char c = body[i];
-				if (in_str)
-				{
-					if (c == '\\') { ++i; continue; }
-					if (c == '"') in_str = false;
-					continue;
-				}
-				if (c == '"') in_str = true;
-				else if (c == '{') ++depth;
-				else if (c == '}') { if (--depth == 0) { ++i; break; } }
-			}
-			const std::string obj = body.substr(start, i - start);
-
 			parsed_theme pt;
 			detail::json_str(obj, "id", pt.id);
 			if (!detail::json_str(obj, "display_name", pt.display_name))
