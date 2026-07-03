@@ -59,3 +59,13 @@ state를 찾지 못하고 인증이 무작위로 실패한다. 수평 확장이 
 ```bash
 python -m pytest -q
 ```
+
+## 원격 테마 (`/content/me`)
+
+- `GET /content/me` — 헤더 `Authorization: Bearer <세션토큰>`. 로그인 사용자의 디스코드 역할에 맞는 테마 JSON 목록 `{"themes":[...]}` 반환. 토큰 무효/만료 → 401, 디스코드 조회 실패 → 503.
+- **새 테마 배포(재빌드 불필요):**
+  1. `server/content/themes.json` 배열에 테마 항목 추가(스키마: 설계 문서 §13.1 — id/display_name/colors 12색 #rrggbbaa/particle/hue_cycle/role).
+  2. `role` 은 디스코드 역할의 **숫자 ID**(무료면 `null`). 역할을 새로 만들었다면 개발자 모드로 역할 우클릭 → ID 복사.
+  3. 구매자에게 디스코드에서 해당 역할 부여.
+  4. 끝. 서버 재시작 불필요(파일 mtime 이 바뀌면 다음 요청에서 자동 반영).
+- themes.json 은 요청마다 stat 되며, 내용이 안 바뀌면 메모리 캐시를 쓴다(단일 워커 전제).
