@@ -32,7 +32,7 @@ def issue_token(
 def verify_token(
     settings: Settings,
     token: str,
-    hwid: str,
+    hwid: str | None = None,
     now: int | None = None,
 ) -> dict | None:
     try:
@@ -44,7 +44,7 @@ def verify_token(
         )
     except jwt.InvalidTokenError:
         return None
-    if payload.get("hwid") != hwid:
+    if hwid is not None and payload.get("hwid") != hwid:  # hwid=None 이면 신원만 검증(콘텐츠 배포용)
         return None
     if int(payload.get("exp", 0)) < _now(now):
         return None
