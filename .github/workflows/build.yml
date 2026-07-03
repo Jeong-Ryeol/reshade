@@ -27,6 +27,11 @@ on:
         type: boolean
         required: false
         default: false
+      online_auth:
+        description: '온라인 인증(디스코드 로그인 게이트) 켜기'
+        type: boolean
+        required: false
+        default: false
       preset_ini:
         description: '개인 전용 프리셋 .ini (base64 인코딩 권장 — 웹 UI 붙여넣기는 줄바꿈이 사라짐. 비우면 프리셋 미포함)'
         required: false
@@ -65,12 +70,14 @@ jobs:
           SHERBET_INPUT_ORDER_NO: ${{ github.event.inputs.order_no }}
           SHERBET_INPUT_DEFAULT_THEME: ${{ github.event.inputs.default_theme }}
           SHERBET_INPUT_NODELOCK: ${{ github.event.inputs.nodelock }}
+          SHERBET_INPUT_ONLINE_AUTH: ${{ github.event.inputs.online_auth }}
           SHERBET_INPUT_PRESET_INI: ${{ github.event.inputs.preset_ini }}
         run: |
           $owner = $env:SHERBET_INPUT_OWNER -replace '\\', '\\\\' -replace '"', '\"'
           $order = $env:SHERBET_INPUT_ORDER_NO -replace '\\', '\\\\' -replace '"', '\"'
           $theme = $env:SHERBET_INPUT_DEFAULT_THEME -replace '\\', '\\\\' -replace '"', '\"'
           $nodelock = if ($env:SHERBET_INPUT_NODELOCK -eq 'true') { '1' } else { '0' }
+          $online_auth = if ($env:SHERBET_INPUT_ONLINE_AUTH -eq 'true') { '1' } else { '0' }
           # 테마 id 오타 방지 — 잘못된 id 로 빌드하면 유료 테마가 잠긴 채 배송된다
           $valid_themes = @('mint','peach','pink','rainbow','lavender','noir','strawberry')
           if ($valid_themes -notcontains $theme) {
@@ -99,10 +106,15 @@ jobs:
           $content = $content -replace '#define SHERBET_ORDER_NO ""', "#define SHERBET_ORDER_NO `"$order`""
           $content = $content -replace '#define SHERBET_DEFAULT_THEME "mint"', "#define SHERBET_DEFAULT_THEME `"$theme`""
           $content = $content -replace '#define SHERBET_NODELOCK 0', "#define SHERBET_NODELOCK $nodelock"
+          $content = $content -replace '#define SHERBET_ONLINE_AUTH 0', "#define SHERBET_ONLINE_AUTH $online_auth"
           Set-Content -Path source/sherbet_owner.h -Value $content -Encoding UTF8 -NoNewline
           # 치환 결과 확인(치환 실패를 조용히 지나치지 않게)
           if ($nodelock -eq '1' -and (Get-Content -Raw source/sherbet_owner.h) -notmatch 'SHERBET_NODELOCK 1') {
             Write-Error "SHERBET_NODELOCK 치환 실패 — sherbet_owner.h 의 기본값 라인이 바뀌었는지 확인하세요"
+            exit 1
+          }
+          if ($online_auth -eq '1' -and (Get-Content -Raw source/sherbet_owner.h) -notmatch 'SHERBET_ONLINE_AUTH 1') {
+            Write-Error "SHERBET_ONLINE_AUTH 치환 실패 — sherbet_owner.h 의 기본값 라인이 바뀌었는지 확인하세요"
             exit 1
           }
 
