@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,13 @@ class Settings(BaseSettings):
     session_secret: str
     role_buyer_id: str
     token_ttl_seconds: int = 86400
+
+    @field_validator("session_secret")
+    @classmethod
+    def _session_secret_min_length(cls, v: str) -> str:
+        if len(v) < 16:
+            raise ValueError("session_secret must be at least 16 characters")
+        return v
 
 
 @lru_cache
