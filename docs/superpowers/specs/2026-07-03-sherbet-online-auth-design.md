@@ -79,26 +79,31 @@
 
 ---
 
-## 5. 인증 흐름 (Device-style OAuth)
+## 5. 인증 흐름 (Device-style OAuth) — **배포 반영본 (2026-07-03)**
 
-게임 오버레이 안에서 로그인창을 못 띄우므로, 시스템 브라우저 + 홈서버 콜백 방식(업스케일러의 `login_callback?code=...`와 동일 패턴):
+게임 오버레이 안에서 로그인창을 못 띄우므로, 시스템 브라우저 + 홈서버 폴링 방식. **베이스 URL: `https://wonryeol.asuscomm.com/sherbet-auth`** (Phase 0a 배포 완료·live 검증됨). 보안 하드닝으로 **state를 서버가 생성**(`POST /auth/start`)하고 클라는 **폴링**(`GET /auth/poll`)한다 — 옛 `GET /auth/discord?state=<클라nonce>`는 폐기.
 
 ```
 Sherbet 실행
-  → 캐시 세션토큰 확인
-      · 유효 → 통과
-      · 없음/만료 → 아래 로그인
-  → 시스템 브라우저 열기: https://wonryeol.asuscomm.com/auth/discord?state=<nonce>
-  → 사용자 디스코드 로그인/승인
-  → 디스코드 → 홈서버 콜백(?code=...)
-  → 홈서버: code→토큰 교환 → 봇으로 그 사용자의 길드 역할 조회
-  → 홈서버: 세션토큰 발급 (역할 스냅샷 포함)
-  → Sherbet: 세션토큰 폴링/수신 후 로컬 캐시
-  → 이후 콘텐츠 요청에 세션토큰 사용
+  → 캐시 토큰({token, hwid, last_verified_unix}) 로드
+      · POST /auth/verify {token, hwid} == valid:true          → 통과(잠금해제)
+      · 서버 무응답/503 & last_verified 로부터 24h 이내         → 오프라인 그레이스 통과
+      · valid:false / 그레이스 초과 / 토큰 없음                 → 잠금(로그인 UI)
+  ── 로그인(잠금 패널의 "디스코드로 로그인" 버튼 클릭) ──
+  → POST /auth/start {hwid}  → { state, authorize_url }
+  → ShellExecute 로 시스템 브라우저에 authorize_url 열기
+  → 사용자 디스코드 로그인/승인 → 디스코드 → /auth/callback (서버가 code→토큰 교환, 봇으로 역할 조회, JWT 발급/거부)
+  → Sherbet: GET /auth/poll?state=  를 ~2초 간격 폴링(최대 5분)
+      · ready + token → 캐시 저장 + last_verified=now → 잠금해제
+      · denied(no_buyer_role) → 사유 표시
+      · 5분 타임아웃 → 버튼으로 복귀
 ```
 
-- 세션토큰 캐시 위치: config 폴더 (노드락 `sherbet.lic`와 동급 위치).
-- **재확인 주기:** 실행 시마다 서버에 토큰 유효성 + 역할 재조회.
+- **토큰 캐시:** config 폴더, 노드락 `sherbet.lic`와 동급 위치. 저장 필드 = JWT 토큰 + hwid + `last_verified_unix`(오프라인 그레이스 기준).
+- **HWID:** `sherbet_nodelock.hpp` 재활용(CPUID + C: 볼륨시리얼). `/auth/verify`·`/auth/start` 에 동봉.
+- **재확인 주기:** 실행 시마다 `/auth/verify` 로 토큰 유효성 + 역할 스냅샷 재조회(온라인일 때). 오프라인이면 그레이스.
+- **로그인 UX(확정):** 버튼식. 잠금 시 오버레이는 로그인 패널만 노출하고 효과·테마·마켓은 잠금. 브라우저는 버튼 클릭 시에만 열림(게임 실행 중 자동 팝업 없음).
+- **폴링:** 오버레이 프레임을 막지 않도록 백그라운드 처리(또는 프레임당 1회 비동기 체크).
 
 ---
 
@@ -136,25 +141,34 @@ Sherbet 실행
 
 ## 8. 서버 API 계약 (초안)
 
-| 엔드포인트 | 메서드 | 인증 | 역할 |
-|---|---|---|---|
-| `/auth/discord` | GET(브라우저) | — | OAuth 시작, 콜백 처리, 세션토큰 발급 |
-| `/auth/verify` | POST | Bearer | 토큰 유효성 + 최신 역할 스냅샷 반환 (실행 시 게이트) |
-| `/content/me` | GET | Bearer | 권한 콘텐츠 매니페스트 |
-| `/content/file/<id>` | GET | Bearer | 프리셋/fx 바이트 (권한 재확인 후 스트림) |
+**베이스 경로 `/sherbet-auth` (nginx → 127.0.0.1:8010). Phase 0a = 배포 완료·live 검증.**
 
-- 전 구간 HTTPS. `/content/*`는 세션토큰 없으면 401.
-- 홈서버 스택: (미정 — Phase 0에서 확정. 후보: Node/Express or Python/FastAPI, 기존 티켓봇과 같은 호스트).
+| 엔드포인트 | 메서드 | 바디/파라미터 | 응답 | 상태 |
+|---|---|---|---|---|
+| `/auth/start` | POST | `{hwid}` | `{state, authorize_url}` (state=서버생성) | ✅ 배포 |
+| `/auth/callback` | GET(브라우저) | `?code&state` (또는 `?error`) | 안내 HTML(200) | ✅ 배포 |
+| `/auth/poll` | GET | `?state` | `{status: pending\|ready\|denied, token?, reason?}` | ✅ 배포 |
+| `/auth/verify` | POST | `{token, hwid}` | `{valid, sub?, roles?}` / 503`{valid:null,error}` | ✅ 배포 |
+| `/content/me` | GET | Bearer | 권한 콘텐츠 매니페스트 | ⏳ Phase 1+ |
+| `/content/file/<id>` | GET | Bearer | 프리셋/fx 바이트 | ⏳ Phase 2 |
+
+- 전 구간 HTTPS(certbot, 기존 `wonryeol.asuscomm.com` 도메인). `/content/*`는 세션토큰 없으면 401(미구현).
+- **홈서버 스택: Python + FastAPI** (`~/reshade/server`, systemd `--user` `sherbet-auth.service`, 단일 워커). 봇 토큰은 티켓봇("JeongRyeol Ticket") 공유.
+- **HWID 결합:** `/auth/start`·`/auth/verify` 가 hwid를 받고, 토큰 JWT 클레임에 hwid를 넣음. 단 클라측 강제(스펙 §12.3).
 
 ---
 
 ## 9. Phase 분해 (각 단계 = 독립 작동 결과물)
 
-### Phase 0 — 인증 게이트 (기반)
-- 홈서버: `/auth/discord`, `/auth/verify`, 세션토큰 발급/검증, 봇 경유 역할 조회.
-- 클라: 브라우저 OAuth 흐름, 세션토큰 캐시, 3개 게이트 지점(생성자/오버레이/이펙트) 연결.
-- **결과:** "디코 로그인 + 구매자 역할 없으면 Sherbet 안 켜짐."
-- **안전망(필수):** 서버 무응답 시 캐시토큰 N시간 유예(완전 먹통 방지). 유예 값은 Phase 0에서 확정.
+### Phase 0a — 인증 서버 (✅ 완료·배포·live 검증)
+- 홈서버 FastAPI: `/auth/start`·`/auth/callback`·`/auth/poll`·`/auth/verify`, JWT(HS256, HWID·24h), 봇 경유 역할 조회. 보안 하드닝(로그인CSRF·PendingStore TTL·업스트림 실패 처리) 완료. 37 pytest green. `~/reshade/server`, systemd `--user` on 8010, nginx `/sherbet-auth/`.
+
+### Phase 0b — 클라이언트 인증 게이트 (진행 대상)
+- 클라(Sherbet C++): 캐시 토큰 로드 + `/auth/verify`, 잠금 시 **버튼식 로그인 패널**, `/auth/start`→`ShellExecute`(브라우저)→`/auth/poll` 폴링, 토큰 캐시({token,hwid,last_verified}), 3개 게이트(생성자 `runtime.cpp:353`/오버레이 `runtime_gui.cpp:1587`/이펙트 `update_effects` `runtime.cpp:3711`).
+- **오프라인 그레이스: 24h** (서버 무응답/503 & last_verified 24h 이내 통과).
+- WinInet 헬퍼를 POST+JSON+헤더까지 확장(현재 GET 위주, `runtime_update_check.cpp` 재활용). 응답 JSON 파싱.
+- 교체: `s_unlocked`+FNV 오프라인 코드 계층 → 이 인증. (단 Phase 0b는 `sherbet-buyer` 게이트만; 테마별 `is_unlocked` 역할조회는 Phase 1.)
+- **결과:** "디코 로그인 + 구매자 역할 없으면 효과·오버레이 잠금." Mac 컴파일 불가 → CI 검증.
 
 ### Phase 1 — 원격 테마 배포
 - 동적 테마 목록(정적+동적) 지원, `all_themes`/`find_theme` 확장.
