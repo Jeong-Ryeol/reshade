@@ -33,6 +33,7 @@ namespace sherbet
 
 		private:
 			void join_worker();
+			void join_content_worker();
 			void save_cache_locked();
 
 			std::string _config_dir;
@@ -43,6 +44,7 @@ namespace sherbet
 			std::atomic<bool> _worker_done{ false };
 			std::atomic<bool> _stop{ false }; // 파괴 시 워커(폴링 루프) 조기 종료 신호
 			std::thread _worker;
+			std::thread _content_worker;
 			mutable std::mutex _mtx;
 			std::string _status;          // _mtx 보호
 			bool _pending_save = false;   // _mtx 보호: tick()에서 캐시 파일 기록 트리거

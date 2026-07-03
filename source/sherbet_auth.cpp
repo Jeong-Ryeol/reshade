@@ -41,11 +41,16 @@ bool sherbet::auth::enabled()
 }
 
 sherbet::auth::controller::controller() {}
-sherbet::auth::controller::~controller() { _stop = true; join_worker(); }
+sherbet::auth::controller::~controller() { _stop = true; join_worker(); join_content_worker(); }
 
 void sherbet::auth::controller::join_worker()
 {
 	if (_worker.joinable()) _worker.join();
+}
+
+void sherbet::auth::controller::join_content_worker()
+{
+	if (_content_worker.joinable()) _content_worker.join();
 }
 
 void sherbet::auth::controller::save_cache_locked()
@@ -228,7 +233,8 @@ void sherbet::auth::controller::begin_fetch_content()
 	{ std::lock_guard<std::mutex> lk(_mtx); bearer = _cache.token; }
 	if (bearer.empty()) { _content_active = false; return; }
 
-	std::thread([this, bearer]() {
+	join_content_worker();
+	_content_worker = std::thread([this, bearer]() {
 		std::string body;
 		if (sherbet::content::fetch(bearer, _config_dir, body) && !body.empty()) {
 			std::lock_guard<std::mutex> lk(_mtx);
@@ -236,5 +242,5 @@ void sherbet::auth::controller::begin_fetch_content()
 			_content_ready = true;
 		}
 		_content_active = false;
-	}).detach();
+	});
 }
