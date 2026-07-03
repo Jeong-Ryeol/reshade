@@ -12,6 +12,7 @@ namespace
 {
 	constexpr wchar_t kHost[] = L"wonryeol.asuscomm.com";
 	constexpr wchar_t kContentPath[] = L"/sherbet-auth/content/me";
+	const std::string kFilePathPrefix = "/sherbet-auth/content/file/";
 
 	std::filesystem::path cache_path(const std::string &config_dir_utf8)
 	{
@@ -41,5 +42,23 @@ bool sherbet::content::load_cached(const std::string &config_dir_utf8, std::stri
 	if (text.empty())
 		return false;
 	out_body = std::move(text);
+	return true;
+}
+
+bool sherbet::content::fetch_file(const std::string &bearer, const std::string &item_id, const std::string &dest_path_utf8)
+{
+	const std::string path = kFilePathPrefix + item_id;      // item_id 는 서버 매니페스트의 불투명 키(ASCII)
+	const std::wstring wpath(path.begin(), path.end());
+	std::string resp;
+	const int status = sherbet::http::get(kHost, wpath.c_str(), resp, bearer.empty() ? nullptr : bearer.c_str());
+	if (status != 200 || resp.empty())
+		return false;
+	const std::filesystem::path dest = std::filesystem::u8path(dest_path_utf8);
+	std::error_code ec;
+	std::filesystem::create_directories(dest.parent_path(), ec); // 실패해도 아래 open 에서 재판정
+	std::ofstream out(dest, std::ios::trunc | std::ios::binary);
+	if (!out.is_open())
+		return false;
+	out.write(resp.data(), static_cast<std::streamsize>(resp.size()));
 	return true;
 }
