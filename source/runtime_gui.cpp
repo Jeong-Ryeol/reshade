@@ -3820,11 +3820,16 @@ void reshade::runtime::draw_gui_market()
 		for (std::size_t i = 0; i < presets.size(); ++i)
 		{
 			const sherbet::content_item &it = presets[i];
+			// 다운로드 경로와 동일하게 basename 만 사용(경로탈출/서브경로 파일명 거부).
+			// 워커는 safe_basename 으로 기록하므로 UI 도 같은 규칙이어야 카드가 실제 파일을 가리킨다.
+			const std::string base = sherbet::safe_basename(it.filename);
+			if (base.empty())
+				continue;
 			ImGui::PushID((int)i);
 			sherbet::begin_card("##preset_card");
 			ImGui::Text("%s", it.display_name.c_str());
 			const std::filesystem::path preset_path = _config_path.parent_path() / L"Sherbet-Presets" /
-				std::filesystem::u8path(it.filename);
+				std::filesystem::u8path(base);
 			const bool active = _current_preset_path == preset_path;
 			if (active)
 				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"

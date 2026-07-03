@@ -75,8 +75,6 @@ namespace sherbet
 
 		// 테마 언락코드 검증 (기존 SHRB-XXXX-XXXX 와 100% 호환).
 		inline bool verify_theme(const char *id, const char *code) { return verify("SHRB", "theme", id, code); }
-		// 프리셋 언락코드 검증.
-		inline bool verify_preset(const char *id, const char *code) { return verify("PRE", "preset", id, code); }
 
 		// 노드락 서명: sherbet.lic 에 저장/비교할 HWID 서명 토큰을 만든다.
 		inline void sign_hwid(const char *hwid, char *out, unsigned int out_size)
