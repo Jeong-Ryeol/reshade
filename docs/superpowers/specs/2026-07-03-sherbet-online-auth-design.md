@@ -195,9 +195,12 @@ Sherbet 실행
 
 ---
 
-## 12. 열린 질문 (Phase 0 착수 전 확정)
+## 12. 확정된 파라미터 (구 열린 질문 — 2026-07-03 확정)
 
-1. 홈서버 API 스택 (Node vs Python) — 기존 티켓봇과 동일 호스트/언어로 갈지.
-2. 오프라인 그레이스 시간 (N) — 몇 시간/일?
-3. 세션토큰에 HWID 바인딩(노드락)까지 결합할지.
-4. 역할 명명 규칙 최종안 (`sherbet-theme-<id>` 등).
+1. **홈서버 API 스택: Python + FastAPI.** 기존 티켓봇(discord.py)과 동일 호스트/언어 → 봇의 길드 역할 조회 로직·토큰 공유가 쉬움.
+2. **오프라인 그레이스: 24시간.** 홈서버 무응답 시 캐시 세션토큰을 마지막 검증 후 24h까지 허용(완전 먹통 방지).
+3. **HWID 바인딩: 결합함.** 세션토큰을 발급 시 노드락 HWID(CPUID + C: 볼륨시리얼, `sherbet_nodelock.hpp` 재활용)에 묶음 → 토큰 탈취해도 타 PC 무용.
+4. **역할 명명 규칙 (확정):**
+   - `sherbet-buyer` — 실행 기본 게이트 (없으면 Sherbet 실행 불가)
+   - `sherbet-theme-<id>` — 테마별 (예: `sherbet-theme-strawberry`)
+   - `sherbet-preset-<주문번호>` — 프리셋/커스텀별 (`SHERBET_ORDER_NO` 기반, 없으면 owner)
