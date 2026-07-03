@@ -149,8 +149,8 @@ Sherbet 실행
 | `/auth/callback` | GET(브라우저) | `?code&state` (또는 `?error`) | 안내 HTML(200) | ✅ 배포 |
 | `/auth/poll` | GET | `?state` | `{status: pending\|ready\|denied, token?, reason?}` | ✅ 배포 |
 | `/auth/verify` | POST | `{token, hwid}` | `{valid, sub?, roles?}` / 503`{valid:null,error}` | ✅ 배포 |
-| `/content/me` | GET | Bearer | 권한 콘텐츠 매니페스트 | ⏳ Phase 1+ |
-| `/content/file/<id>` | GET | Bearer | 프리셋/fx 바이트 | ⏳ Phase 2 |
+| `/content/me` | GET | Bearer | 권한 콘텐츠 매니페스트(themes ✅ / presets·effects ⏳) | ✅ 배포(테마) / Phase 2(프리셋·fx 확장) |
+| `/content/file/<id>` | GET | Bearer | 프리셋/fx 바이트 (per-id 역할 재검증) | ⏳ Phase 2 |
 
 - 전 구간 HTTPS(certbot, 기존 `wonryeol.asuscomm.com` 도메인). `/content/*`는 세션토큰 없으면 401(미구현).
 - **홈서버 스택: Python + FastAPI** (`~/reshade/server`, systemd `--user` `sherbet-auth.service`, 단일 워커). 봇 토큰은 티켓봇("JeongRyeol Ticket") 공유.
@@ -319,3 +319,69 @@ Phase 0(인증) 완료 후, 테마 언락을 오프라인 FNV 코드에서 **디
 
 - **1a-server:** `/content/me` 엔드포인트 + `themes.json` 로더 + 역할 필터 (FastAPI, host 테스트).
 - **1b-client:** 동적 테마 레지스트리 + JSON 파서(host 테스트, `imgui.h` 호스트 컴파일 가능 확인됨) + 엔타이틀 집합 기반 `is_unlocked` 교체 + `begin_fetch_content`/`take_content`/`token()` + `apply_content` + "내 전용 불러오기" 버튼 + `sherbet.themes` 캐시 + 마켓 UI 정리(FNV 제거). Mac 컴파일 불가 부분(WinInet/스레드/ImGui glue)은 CI.
+
+---
+
+## 14. Phase 2 상세 설계 — 프리셋·fx 원격 배포
+
+Phase 1(테마)이 이미 확립한 패턴(`/content/me` 역할필터 + 클라 `apply_content` + `sherbet.themes` 캐시)을 확장한다. 배달 방식은 **2단계(매니페스트 → 파일 개별 다운로드)**, 배달 단위는 **"콘텐츠 아이템 = 파일 1개"**. 옵션 A(평문 다운로드 게이트, §2) 확정 위에서 설계.
+
+### 14.1 배달 방식 결정
+
+- **A (채택): 2단계.** `/content/me` 매니페스트가 권한 아이템(id, kind, filename)을 나열하고, 클라가 `/content/file/<id>`로 각 파일 바이트를 개별 다운로드. 아이템=파일 1개 → 단일 `.ini`/`.fx`는 물론, 드물게 fx가 LUT `.png`를 딸려도 그 텍스처를 별도 effect 아이템으로 같은 폴더에 떨궈 번들(zip) 없이 커버. Phase 1 `/content/me` 확장 재활용.
+- B(단일 zip 번들): C++ unzip(miniz) 필요 → 기각. C(프리셋/fx 별도 엔드포인트): 매니페스트 분산 → 기각.
+
+### 14.2 서버 저장소 + 매니페스트
+
+`server/content/` 아래:
+- `themes.json` — Phase 1, 그대로.
+- `presets.json`, `effects.json` — 배열. 각 항목 `{ "id", "filename", "role", "display_name" }`. `role`=언락에 필요한 **디스코드 숫자 역할 ID 문자열**(`null`=무료). `id`는 파일명과 분리한 불투명 키(예: `"strawberry-grade"`)라 파일명 추측으로 접근 불가.
+- `files/<id>` — 실제 `.ini`/`.fx`/`.png` 바이트. `id`로 매핑(매니페스트의 `filename`은 클라가 디스크에 쓸 이름).
+
+로더는 테마와 동일하게 mtime 캐시(요청마다 stat, 안 바뀌면 캐시). 새 프리셋/fx 배포 = 파일을 `files/`에 두고 `presets.json`/`effects.json`에 항목 추가 + 디코 역할 부여. 재빌드/재시작 불필요.
+
+### 14.3 엔드포인트
+
+- **`GET /content/me` (확장):** 응답에 `presets`·`effects` 추가 →
+  `{ "themes":[...], "presets":[ {id, filename, display_name}, ... ], "effects":[ {id, filename, display_name}, ... ] }`.
+  각 배열은 테마와 동일한 역할 필터(`role`이 null이거나 사용자 역할에 포함) 통과분만, `role` 필드 제거하고 반환.
+- **`GET /content/file/<id>` (신규):** `Authorization: Bearer <JWT>` 검증(서명·만료, hwid 미검사) → `sub`로 디스코드 역할 라이브 재조회 → **그 `id`가 속한 아이템의 `role`을 사용자가 보유하는지 재확인**. 통과 시 파일 바이트를 `application/octet-stream`으로. 미통과 → 403.
+  - **핵심 보안:** `/content/me`로 매니페스트를 걸러 주는 것만으로는 부족 — 변조 클라가 임의 `id`로 `/content/file`을 직접 때릴 수 있으므로, **파일 서빙 시점에 그 id에 대한 역할을 반드시 재검증**한다(id 추측으로 남의 전용 프리셋 유출 차단). 무료(`role:null`) 아이템은 인증만으로 허용.
+  - `id`는 `presets.json`+`effects.json`의 화이트리스트에서만 조회. 매칭 없으면 404. `files/` 경로는 서버가 `id`→고정 경로로만 구성(사용자 입력으로 경로 구성 금지 → 경로탈출 차단).
+
+### 14.4 엔타이틀 역할
+
+- `sherbet-preset-<id>` / `sherbet-fx-<id>` 성격의 역할을 `presets.json`/`effects.json`의 `role`에 **숫자 ID로** 기입(§13.4 정정과 동일 — 클라는 역할→콘텐츠 매핑을 모르고 서버가 전담).
+- 무료 공개 프리셋/fx는 `role:null`.
+
+### 14.5 클라 다운로드/배치/로드
+
+Phase 1b `apply_content(body)`(렌더 스레드)가 이미 `/content/me` 응답을 처리 중 → presets/effects 처리를 여기에 이어붙인다. 단, 파일 다운로드(네트워크)는 **백그라운드 워커**에서(Phase 1b `begin_fetch_content` 워커 확장), 디스크 기록·검색경로 등록·`reload_effects`·프리셋 목록 갱신은 **렌더 스레드**에서.
+
+- **배치 폴더**(모두 `g_reshade_base_path` 기준):
+  - 프리셋 → `Sherbet-Presets/<filename>` (`.ini`).
+  - fx/텍스처 → `Sherbet-Fx/<filename>` (`.fx`/`.fxh`/`.png`).
+- **검색경로 등록(1회):** `Sherbet-Fx/`를 `_effect_search_paths`와 `_texture_search_paths`에 없으면 추가(config 저장). 이후 `reload_effects()`가 새 `.fx`를 발견·컴파일(`find_files(_effect_search_paths, {.fx,...})`, `runtime.cpp:3462`).
+- **로드 순서:** ① effect/텍스처 파일 기록 → ② 검색경로 보장 → ③ `reload_effects()` → ④ 프리셋 파일 기록 → ⑤ 프리셋 목록 갱신(같은 폴더 유효 `.ini` 자동 인식 로직 재활용). 프리셋이 fx를 참조하므로 fx가 먼저 준비돼야 컴파일 성공.
+- **파일명 안전:** 클라는 `filename`에서 `/`·`\`·`..`를 거르고 **basename만** 사용(서버가 화이트리스트지만 클라도 방어).
+- **캐시:** 다운로드한 파일은 디스크에 상주(옵션 A). 매니페스트는 `sherbet.themes` 캐시에 이미 포함(테마와 한 응답) → 오프라인/재시작에도 목록 복원. 파일 자체도 폴더에 남아 재다운로드 불필요(mtime/존재 확인 후 스킵 가능 — 단순화 위해 매번 덮어써도 무방).
+
+### 14.6 클라 마켓 UI (프리셋 세그먼트 교체)
+
+현재 프리셋 세그먼트(내장 1개 프리셋 + PRE- 코드 + 10초 체험, `runtime_gui.cpp:3834~3916`)를 **서버 목록 기반**으로 교체:
+- 받은 프리셋 아이템들을 카드로 나열, 각 "적용" 버튼 → `set_current_preset_path(Sherbet-Presets/<filename>)`.
+- fx는 개별 UI 없이 자동 배치(프리셋이 참조). 인증·"내 전용 불러오기"는 테마와 공용 버튼.
+- **UX:** "내 전용 불러오기"는 다운로드·배치만 하고 **자동 적용 안 함**(테마와 동일) — 사용자가 목록에서 "적용" 선택.
+- **제거:** 내장 `IDR_SHERBET_PRESET_PERSONAL` 리소스 + PRE- InputText + 10초 체험(`_sherbet_preset_trial*`) + config `PresetUnlocked` + `license::verify_preset` 경로. 온라인 모델은 역할=엔타이틀이라 체험/코드 불필요(테마 SHRB- 제거와 동형). `sherbet_license.hpp`의 나머지(노드락 등)는 유지.
+
+### 14.7 에러/보안
+
+- `/content/file`: 401(토큰무효/만료) / 403(역할없음) / 404(id없음) / 503(디코조회실패). 클라는 파일 다운로드 실패 시 **조용히 스킵**(기존 파일·프리셋 유지), 상태텍스트만.
+- **경로탈출:** 서버=`id`→고정경로만(사용자 입력 경로 금지), 클라=basename만. 양쪽 방어.
+- **평문 유출:** 받은 `.fx`/`.ini`가 디스크 평문 상주 → 캐주얼 공유 가능(옵션 A 트레이드오프, §12.4에서 감수 결정). 다운로드 게이트가 1차 방어.
+- fx = **임의 셰이더 코드**가 디스크에서 컴파일됨. 서버(정렬 본인)가 올린 것만 배포되므로 신뢰 경계 내. 제3자 업로드 경로 없음.
+
+### 14.8 Phase 2 분해
+
+- **2a-server:** `presets.json`/`effects.json` 로더(themes 로더 일반화 재활용) + `/content/me` 확장(presets/effects 필터) + `/content/file/<id>`(per-id 역할 재검증, 경로 안전) — FastAPI, host pytest(respx 디코 목킹).
+- **2b-client:** `apply_content` 확장(preset/effect 아이템 파싱) + 파일 다운로드 워커(`/content/file/<id>`, Bearer) + `Sherbet-Presets`/`Sherbet-Fx` 배치 + 검색경로 등록 + `reload_effects` + 프리셋 목록 갱신 + 마켓 프리셋 세그먼트 교체 + PRE-/체험/내장프리셋 제거. 순수 파싱(매니페스트 preset/effect)은 host 테스트, WinInet/디스크/ImGui glue는 CI.
