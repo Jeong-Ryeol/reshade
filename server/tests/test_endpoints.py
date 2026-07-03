@@ -146,6 +146,40 @@ def test_callback_discord_error_denies(settings):
         _reset()
 
 
+@respx.mock
+def test_callback_malformed_discord_body_denies(settings):
+    # 디스코드가 200이지만 본문이 JSON이 아닌 경우 (JSONDecodeError) → 500이 아니라 denied
+    _reset(); _override(settings)
+    try:
+        main_module.store.put_pending("s-bad", "HWB")
+        respx.post(f"{API}/oauth2/token").mock(
+            return_value=httpx.Response(200, text="not json at all"))
+        client = TestClient(app)
+        r = client.get("/auth/callback", params={"code": "c", "state": "s-bad"})
+        assert r.status_code == 200
+        poll = client.get("/auth/poll", params={"state": "s-bad"}).json()
+        assert poll["status"] == "denied"
+        assert poll["reason"] == "discord_error"
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_verify_malformed_member_body_returns_503(settings):
+    # 멤버 조회가 200이지만 JSON 깨짐 → valid:false가 아니라 재시도 신호(503)
+    _reset(); _override(settings)
+    try:
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, text="not json"))
+        client = TestClient(app)
+        r = client.post("/auth/verify", json={"token": tok, "hwid": "HW9"})
+        assert r.status_code == 503
+        assert r.json()["error"] == "upstream_unavailable"
+    finally:
+        _reset()
+
+
 def test_callback_oauth_error_param_denies(settings):
     _reset(); _override(settings)
     try:

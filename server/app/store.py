@@ -53,8 +53,14 @@ class PendingStore:
         with self._lock:
             self._sweep_locked(now)
 
-    def get_hwid(self, state: str) -> str | None:
+    def get_hwid(self, state: str, now: float | None = None) -> str | None:
+        now = self._now(now)
         with self._lock:
+            created = self._created.get(state)
+            if created is not None and now - created > self._ttl:
+                # TTL 초과한 state 는 읽는 순간에도 만료 처리(유휴 시 백그라운드 스윕이 없어도 강제)
+                self._drop(state)
+                return None
             return self._hwid.get(state)
 
     def set_result(self, state: str, token: str) -> None:
@@ -67,8 +73,13 @@ class PendingStore:
             if state in self._hwid:
                 self._result[state] = {"status": "denied", "reason": reason}
 
-    def pop_result(self, state: str) -> dict | None:
+    def pop_result(self, state: str, now: float | None = None) -> dict | None:
+        now = self._now(now)
         with self._lock:
+            created = self._created.get(state)
+            if created is not None and now - created > self._ttl:
+                self._drop(state)
+                return None
             if state not in self._hwid:
                 return None
             if state in self._result:

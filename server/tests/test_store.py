@@ -38,16 +38,33 @@ def test_fresh_entry_survives_sweep():
     s = PendingStore(ttl_seconds=300)
     s.put_pending("fresh", "HW2", now=100)
     s.sweep(now=200)  # only 100s old
-    assert s.get_hwid("fresh") == "HW2"
-    assert s.pop_result("fresh") == {"status": "pending"}
+    # 읽기도 같은 시뮬레이션 시계로 (읽기 경로 TTL 강제와 일관되게)
+    assert s.get_hwid("fresh", now=200) == "HW2"
+    assert s.pop_result("fresh", now=200) == {"status": "pending"}
 
 
 def test_put_pending_sweeps_stale_entries():
     s = PendingStore(ttl_seconds=300)
     s.put_pending("old", "HW1", now=0)
     s.put_pending("new", "HW2", now=301)  # this put triggers a sweep
-    assert s.pop_result("old") is None
-    assert s.pop_result("new") == {"status": "pending"}
+    assert s.pop_result("old", now=301) is None
+    assert s.pop_result("new", now=301) == {"status": "pending"}
+
+
+def test_get_hwid_enforces_ttl_on_read():
+    # 유휴 상태로 아무 put_pending/sweep 없이 TTL 지난 뒤 콜백이 와도 만료 처리돼야 함
+    s = PendingStore(ttl_seconds=300)
+    s.put_pending("old", "HW1", now=0)
+    assert s.get_hwid("old", now=301) is None  # 읽는 순간 만료
+    # 만료 후엔 pending도 아님
+    assert s.pop_result("old", now=302) is None
+
+
+def test_pop_result_enforces_ttl_on_read():
+    s = PendingStore(ttl_seconds=300)
+    s.put_pending("old", "HW1", now=0)
+    # 유휴 상태로 TTL 초과 → 영원한 pending 대신 만료(None)
+    assert s.pop_result("old", now=301) is None
 
 
 def test_cap_eviction_drops_oldest():
@@ -56,6 +73,6 @@ def test_cap_eviction_drops_oldest():
     s.put_pending("b", "HWb", now=2)
     s.put_pending("c", "HWc", now=3)
     s.put_pending("d", "HWd", now=4)  # exceeds cap of 3 -> drop oldest ("a")
-    assert s.get_hwid("a") is None
-    assert s.get_hwid("b") == "HWb"
-    assert s.get_hwid("d") == "HWd"
+    assert s.get_hwid("a", now=4) is None
+    assert s.get_hwid("b", now=4) == "HWb"
+    assert s.get_hwid("d", now=4) == "HWd"

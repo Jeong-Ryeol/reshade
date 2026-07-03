@@ -58,8 +58,9 @@ async def auth_callback(
         access_token = await exchange_code(settings, code)
         user_id = await get_user_id(access_token)
         role_ids = await get_member_role_ids(settings, user_id)
-    except httpx.HTTPError:
-        # 디스코드 업스트림 실패 — 상태가 pending으로 갇히지 않게 denied 처리
+    except (httpx.HTTPError, KeyError, ValueError):
+        # 디스코드 업스트림 실패(연결 오류 또는 200인데 응답 본문이 깨진 경우 KeyError/JSONDecodeError 포함)
+        # — 상태가 pending으로 갇히지 않게 denied 처리
         store.set_denied(state, "discord_error")
         return HTMLResponse(
             "<h2>인증 오류</h2><p>디스코드 연결에 실패했습니다. 잠시 후 다시 시도해주세요.</p>",
@@ -89,9 +90,9 @@ async def auth_verify(body: VerifyBody, settings: Settings = Depends(get_setting
         return {"valid": False}
     try:
         role_ids = await get_member_role_ids(settings, payload["sub"])
-    except httpx.HTTPError:
-        # 서버/디스코드 다운 — 클라가 "구매자 아님"과 구별해 24h 오프라인 유예를 적용할 수 있게
-        # 재시도 가능한 별도 신호(503 + valid:null)를 반환. valid:false를 쓰면 안 됨.
+    except (httpx.HTTPError, KeyError, ValueError):
+        # 서버/디스코드 다운(또는 응답 본문 파싱 실패) — 클라가 "구매자 아님"과 구별해 24h 오프라인
+        # 유예를 적용할 수 있게 재시도 가능한 별도 신호(503 + valid:null)를 반환. valid:false를 쓰면 안 됨.
         return JSONResponse(
             status_code=503,
             content={"valid": None, "error": "upstream_unavailable"},
