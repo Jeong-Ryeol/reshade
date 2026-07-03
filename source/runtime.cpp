@@ -3712,7 +3712,18 @@ void reshade::runtime::update_effects()
 {
 	// SHERBET: 인증 안 됐으면 이펙트 컴파일/적용을 건너뛴다(효과 잠금).
 	if (!_sherbet_auth.is_authed())
+	{
+		_sherbet_auth_was_locked = true; // 잠금 상태였음을 기억
 		return;
+	}
+	// 잠금→인증 전환: _frame_count 는 이미 0을 지나쳤으므로 아래 `_frame_count == 0` 원샷이 놓쳐진다.
+	// 인증이 막 통과한 이 시점에 한 번 재무장(reload)해 이펙트가 자동 로드되도록 한다.
+	if (_sherbet_auth_was_locked)
+	{
+		_sherbet_auth_was_locked = false;
+		if (!_no_reload_on_init)
+			reload_effects();
+	}
 
 	// Delay first load to the first render call to avoid loading while the application is still initializing
 	if (_frame_count == 0 && !_no_reload_on_init)

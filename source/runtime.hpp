@@ -369,6 +369,7 @@ namespace reshade
 		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.
 		sherbet::auth::controller _sherbet_auth;
+		bool _sherbet_auth_was_locked = false; // 인증 잠금 상태였는지(잠금→인증 전환 시 최초-로드 원샷 재무장용)
 
 		api::state_block _app_state = {};
 		#pragma endregion
