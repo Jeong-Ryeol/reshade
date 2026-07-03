@@ -1582,6 +1582,48 @@ void reshade::runtime::draw_gui()
 			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
 		}
 
+		// SHERBET: 온라인 인증 — 미인증이면 로그인 패널만 노출(효과/오버레이 잠금)
+		_sherbet_auth.tick();
+		if (sherbet::auth::enabled() && !_sherbet_auth.is_authed())
+		{
+			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
+			ImGui::TextUnformatted("Sherbet");
+			ImGui::PopFont();
+
+			const float avail_w = ImGui::GetContentRegionAvail().x;
+			ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.30f));
+			auto centered_text = [avail_w](const char *text) {
+				const float tw = ImGui::CalcTextSize(text).x;
+				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
+				ImGui::TextUnformatted(text);
+			};
+
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.4f);
+			centered_text(ICON_FK_LOCK "  \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8\xEC\x9D\xB4 \xED\x95\x84\xEC\x9A\x94\xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "로그인이 필요합니다"
+			ImGui::PopFont();
+			ImGui::Spacing();
+
+			// 로그인 버튼(진행 중이면 비활성 + 스피너 대신 텍스트)
+			const bool busy = _sherbet_auth.login_active();
+			const char *btn = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8"; // "디스코드로 로그인"
+			const float bw = ImGui::CalcTextSize(btn).x + 40.0f;
+			ImGui::SetCursorPosX((avail_w - bw) * 0.5f);
+			ImGui::BeginDisabled(busy);
+			if (ImGui::Button(btn, ImVec2(bw, 0.0f)))
+				_sherbet_auth.begin_login();
+			ImGui::EndDisabled();
+
+			// 상태 텍스트(대기중/거부 사유/실패) — status_text()는 락 안에서 복사한 std::string 값 반환
+			const std::string st = _sherbet_auth.status_text();
+			if (!st.empty()) { ImGui::Spacing(); centered_text(st.c_str()); }
+
+			ImGui::Spacing();
+			centered_text("\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEC\x9E\x90\xEB\x8F\x99\xEC\x9C\xBC\xEB\xA1\x9C \xEC\xA7\x84\xED\x96\x89\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "로그인 후 자동으로 진행됩니다"
+
+			ImGui::End();
+		}
+		else
 		// SHERBET: 노드락 — 등록되지 않은 PC면 오버레이 콘텐츠 대신 안내문만 표시
 		// (헤더의 원클릭 버튼도 인증 통과 후에만 그려져, 미승인 PC에서 기능이 눌리지 않음)
 		if (!sherbet::nodelock::is_authorized(_config_path.parent_path().u8string()))
