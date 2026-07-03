@@ -1684,9 +1684,11 @@ void reshade::runtime::draw_gui()
 			};
 			int item_count = 4;
 #if RESHADE_ADDON
-			// REST 등 외부 애드온이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김)
+			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
+			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
+			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external) { item_count = 5; break; }
+				if (info.external || !info.file.empty()) { item_count = 5; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
