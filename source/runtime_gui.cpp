@@ -1674,18 +1674,25 @@ void reshade::runtime::draw_gui()
 			ImGui::SetItemTooltip("Sherbet \xED\x99\x88"); // "Sherbet 홈"
 			ImGui::Dummy(ImVec2(0, 10));
 
-			struct RailItem { const char *id; const char *icon; };
+			struct RailItem { const char *id; const char *icon; int tab; };
 			const RailItem items[] = {
-				{ "##tab_home", ICON_FK_HOME },
-				{ "##tab_market", ICON_FK_SHOPPING_CART },
-				{ "##tab_settings", ICON_FK_SLIDERS },
-				{ "##tab_about", ICON_FK_INFO_CIRCLE },
+				{ "##tab_home", ICON_FK_HOME, 0 },
+				{ "##tab_market", ICON_FK_SHOPPING_CART, 1 },
+				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
+				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
+				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
 			};
-			for (int i = 0; i < 4; ++i)
+			int item_count = 4;
+#if RESHADE_ADDON
+			// REST 등 외부 애드온이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김)
+			for (const addon_info &info : addon_loaded_info)
+				if (info.external) { item_count = 5; break; }
+#endif
+			for (int i = 0; i < item_count; ++i)
 			{
 				ImGui::SetCursorPosX((sherbet::rail_width - sherbet::rail_button_size) * 0.5f);
-				if (sherbet::rail_button(items[i].id, items[i].icon, _sherbet_tab == i))
-					_sherbet_tab = i;
+				if (sherbet::rail_button(items[i].id, items[i].icon, _sherbet_tab == items[i].tab))
+					_sherbet_tab = items[i].tab;
 				ImGui::Dummy(ImVec2(0, 4));
 			}
 		}
@@ -1701,6 +1708,9 @@ void reshade::runtime::draw_gui()
 		case 1: draw_gui_market(); break;
 		case 2: draw_gui_settings(); break;
 		case 3: draw_gui_about(); break;
+#if RESHADE_ADDON
+		case 4: draw_gui_addons(); break;
+#endif
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
