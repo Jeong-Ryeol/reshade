@@ -662,6 +662,7 @@
     <ClCompile Include="source\runtime_update_check.cpp" />
     <ClCompile Include="source\sherbet_http.cpp" />
     <ClCompile Include="source\sherbet_auth.cpp" />
+    <ClCompile Include="source\sherbet_content.cpp" />
     <ClCompile Include="source\sherbet_themes.cpp" />
     <ClCompile Include="source\sherbet_ui.cpp" />
     <ClCompile Include="source\state_block.cpp" />
@@ -783,6 +784,7 @@
     <ClInclude Include="source\runtime_manager.hpp" />
     <ClInclude Include="source\sherbet_auth.hpp" />
     <ClInclude Include="source\sherbet_auth_core.hpp" />
+    <ClInclude Include="source\sherbet_content.hpp" />
     <ClInclude Include="source\sherbet_http.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
     <ClInclude Include="source\sherbet_nodelock.hpp" />
