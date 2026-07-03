@@ -372,17 +372,6 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
-	  // 프리셋 언락도 "1" 이 아니라 실제 코드를 저장/재검증 — ini 에 1 만 적는 우회를 막는다.
-	  { std::string pc; config.get("SHERBET", "PresetUnlocked", pc);
-	    const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : SHERBET_OWNER;
-	    if (!pc.empty() && sherbet::license::verify_preset(preset_id, pc.c_str())) { _sherbet_preset_unlocked = true; _sherbet_preset_code = pc; }
-	    else { _sherbet_preset_unlocked = false; _sherbet_preset_code.clear(); } }
-	  // 체험 중 게임이 꺼졌던 경우: 저장된 원복 경로가 남아 있으면 첫 프레임에 즉시 원복
-	  config.get("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
-	  // 진행 중인 체험(> 0)은 유지 — 스왑체인 재생성 등으로 config 가 재로드돼도 체험이 끊기지 않게.
-	  // 시작 시점(= 0)에 원복 경로가 남아 있으면 지난 세션이 체험 중 종료된 것 → 첫 프레임에 즉시 원복.
-	  if (!_sherbet_preset_trial_restore.empty() && _sherbet_preset_trial <= 0.0f)
-		  _sherbet_preset_trial = 0.001f;
 	  config.get("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	  std::string fav; config.get("SHERBET", "Favorites", fav);
 	  _sherbet_fav.clear();
@@ -502,8 +491,6 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
-	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_code); // 실제 코드 저장(재검증용)
-	config.set("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
 	config.set("SHERBET", "CrosshairOn", _sherbet_crosshair_on);
@@ -862,33 +849,6 @@ void reshade::runtime::save_custom_style() const
 void reshade::runtime::draw_gui()
 {
 	assert(_is_initialized);
-
-	// SHERBET: 프리셋 체험 카운트다운 — 오버레이가 닫혀 있어도 매 프레임 진행되고,
-	// 끝나면 체험 전 프리셋으로 자동 원복한다. (early-out 이전이라 항상 실행됨)
-	if (_sherbet_preset_trial > 0.0f && !is_loading())
-	{
-		_sherbet_preset_trial -= _last_frame_duration.count() * 1e-9f;
-		if (_sherbet_preset_trial <= 0.0f)
-		{
-			_sherbet_preset_trial = 0.0f;
-			if (!_sherbet_preset_trial_restore.empty())
-			{
-				const std::filesystem::path restore = _sherbet_preset_trial_restore;
-				_sherbet_preset_trial_restore.clear(); // 원복 완료 → 저장된 체험 상태 제거
-				set_current_preset_path(restore.u8string().c_str());
-				// 언락 전에는 체험 프리셋 파일을 디스크에 남기지 않는다(수동 로드로 우회 방지).
-				// 경로는 원복 프리셋 폴더의 고정 이름으로만 재구성 — 체험 중 사용자가 다른
-				// 프리셋으로 전환했어도 절대 사용자 파일을 지우지 않는다.
-				const std::filesystem::path trial_file = restore.parent_path() / L"Sherbet-Custom.ini";
-				if (!_sherbet_preset_unlocked && _current_preset_path != trial_file)
-				{
-					std::error_code ec;
-					std::filesystem::remove(trial_file, ec);
-				}
-				save_config();
-			}
-		}
-	}
 
 	bool show_overlay = _show_overlay;
 	api::input_source show_overlay_source = _imgui_context->NavInputSource == ImGuiInputSource_Mouse ? api::input_source::mouse : api::input_source::keyboard;
@@ -1583,6 +1543,17 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 온라인 인증 — 미인증이면 로그인 패널만 노출(효과/오버레이 잠금)
 		_sherbet_auth.tick();
 		{ std::string _content; if (_sherbet_auth.take_content(_content)) sherbet::apply_content(_content); }
+		if (_sherbet_auth.take_files_changed())
+		{
+			const std::filesystem::path fx_dir = _config_path.parent_path() / L"Sherbet-Fx";
+			bool added = false;
+			if (std::find(_effect_search_paths.begin(), _effect_search_paths.end(), fx_dir) == _effect_search_paths.end())
+			{ _effect_search_paths.push_back(fx_dir); added = true; }
+			if (std::find(_texture_search_paths.begin(), _texture_search_paths.end(), fx_dir) == _texture_search_paths.end())
+			{ _texture_search_paths.push_back(fx_dir); added = true; }
+			if (added) save_config();
+			reload_effects();
+		}
 		if (sherbet::auth::enabled() && !_sherbet_auth.is_authed())
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
@@ -3828,90 +3799,39 @@ void reshade::runtime::draw_gui_market()
 	}
 	else
 	{
-		// 프리셋 마켓 — 구매자 전용 프리셋(개인 .ini 이어받기)
-		const resources::data_resource pres = resources::load_data_resource(IDR_SHERBET_PRESET_PERSONAL);
-		const std::string_view content(static_cast<const char *>(pres.data), pres.data_size);
-		// 실제 프리셋 여부 — 줄 시작의 "Techniques=" 키만 인정(주석에 단어가 있어도 오탐 없음)
-		const bool has_personal = content.rfind("Techniques", 0) == 0 || content.find("\nTechniques") != std::string_view::npos;
-		// 언락코드 대상 id: 주문번호 → 구매자명 순. 비어 있으면 만능 코드가 생기므로 언락 입력을 숨긴다.
-		const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : SHERBET_OWNER;
+		// 프리셋 마켓 — 서버가 내려준 "내 전용 프리셋"(디스코드 역할 기반)
+		ImGui::TextUnformatted("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 '\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0'\xEB\xA1\x9C \xEB\xB0\x9B\xEC\x95\x84\xEC\x9A\x94."); // "디스코드 로그인 후 '내 전용 불러오기'로 받아요."
+		ImGui::Spacing();
 
-		// 내장 프리셋을 디스크에 써서 경로를 돌려주는 헬퍼(적용/체험 공용)
-		auto materialize = [this, &pres]() -> std::filesystem::path {
-			std::filesystem::path out = _current_preset_path.parent_path() / L"Sherbet-Custom.ini";
-			std::ofstream f(out, std::ios::binary | std::ios::trunc);
-			if (f.is_open()) { f.write(static_cast<const char *>(pres.data), pres.data_size); f.close(); }
-			return out;
-		};
+		if (sherbet::auth::enabled() && _sherbet_auth.is_authed())
+		{
+			if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
+				_sherbet_auth.begin_fetch_content();
+			ImGui::Spacing();
+		}
 
-		if (!has_personal)
+		const std::vector<sherbet::content_item> &presets = sherbet::content_presets();
+		if (presets.empty())
 		{
 			sherbet::begin_card("##preset_empty");
-			ImGui::TextWrapped("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB8\xB0\xEC\xA1\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C .ini \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x84 \xEB\xB3\xB4\xEB\x82\xB4\xEC\xA3\xBC\xEC\x8B\x9C\xEB\xA9\xB4, \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA7\x81\xEC\xA0\x91 \xED\x8A\x9C\xEB\x8B\x9D\xED\x95\xB4\xEC\x84\x9C \xEB\x8B\xB9\xEC\x8B\xA0\xEB\xA7\x8C\xEC\x9D\x98 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xA7\x8C\xEB\x93\xA4\xEC\x96\xB4 \xEB\x93\x9C\xEB\xA0\xA4\xEC\x9A\x94. \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEB\xB0\x9B\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEB\xB0\x94\xEB\xA1\x9C \xEC\xA0\x81\xEC\x9A\xA9\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안내
-			ImGui::Spacing();
-			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\x82\xB4 \xEC\x84\xB8\xED\x8C\x85 \xEB\xB3\xB4\xEB\x82\xB4\xEA\xB8\xB0", SHERBET_DISCORD_URL); // "디스코드로 내 세팅 보내기"
+			ImGui::TextWrapped("\xEB\xB0\x9B\xEC\x9D\x80 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEA\xB6\x8C\xED\x95\x9C\xEC\x9D\xB4 \xEC\x9E\x88\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x9C\x84 \xEB\xB2\x84\xED\x8A\xBC\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEC\x84\xB8\xEC\x9A\x94."); // "받은 프리셋이 없어요. 권한이 있으면 위 버튼으로 불러오세요."
 			sherbet::end_card();
 		}
-		else
+		for (std::size_t i = 0; i < presets.size(); ++i)
 		{
-			sherbet::begin_card("##preset_personal");
-			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
-			ImGui::TextUnformatted(ICON_FK_MAGIC "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B"); // "내 전용 프리셋"
-			ImGui::PopFont();
-			if (sherbet::has_owner())
-				ImGui::TextDisabled("%s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEB\xA7\x9E\xEC\xB6\xA4 \xEB\xB3\xB4\xEC\xA0\x95", SHERBET_OWNER); // "%s님을 위한 맞춤 보정"
-			ImGui::Spacing();
-
-			if (_sherbet_preset_unlocked)
-			{
-				if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", true)) // "적용"
-					set_current_preset_path(materialize().u8string().c_str());
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x96\xB8\xEB\x9D\xBD\xEB\x90\xA8"); // "언락됨"
-			}
-			else
-			{
-				if (_sherbet_preset_trial > 0.0f)
-				{
-					ImGui::Text("%s", ICON_FK_BOLT); ImGui::SameLine();
-					ImGui::Text("\xEC\xB2\xB4\xED\x97\x98 \xEC\xA4\x91\xE2\x80\xA6 %.0f\xEC\xB4\x88", _sherbet_preset_trial); // "체험 중… %.0f초"
-				}
-				else if (sherbet::pill_button(ICON_FK_BOLT "  10\xEC\xB4\x88 \xEC\xB2\xB4\xED\x97\x98", false)) // "10초 체험"
-				{
-					_sherbet_preset_trial_restore = _current_preset_path;
-					set_current_preset_path(materialize().u8string().c_str());
-					_sherbet_preset_trial = 10.0f;
-				}
-				ImGui::Spacing();
-				ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80 \xE2\x80\x94 \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C(PRE-\xE2\x80\xA6)\xEA\xB0\x80 \xED\x95\x84\xEC\x9A\x94\xED\x95\xB4\xEC\x9A\x94"); // "잠김 — 언락코드(PRE-…)가 필요해요"
-			}
+			const sherbet::content_item &it = presets[i];
+			ImGui::PushID((int)i);
+			sherbet::begin_card("##preset_card");
+			ImGui::Text("%s", it.display_name.c_str());
+			const std::filesystem::path preset_path = _config_path.parent_path() / L"Sherbet-Presets" /
+				std::filesystem::u8path(it.filename);
+			const bool active = _current_preset_path == preset_path;
+			if (active)
+				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+			else if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
+				set_current_preset_path(preset_path.u8string().c_str());
 			sherbet::end_card();
-
-			ImGui::Spacing();
-			if (preset_id[0] == '\0')
-			{
-				// 주문번호/구매자명 없이 프리셋이 내장된 비정상 빌드 — 만능 코드 발급을 막기 위해 입력을 숨긴다
-				ImGui::TextDisabled("%s", ICON_FK_WARNING " \xEC\xA3\xBC\xEB\xAC\xB8 \xEC\xA0\x95\xEB\xB3\xB4 \xEC\x97\x86\xEB\x8A\x94 \xEB\xB9\x8C\xEB\x93\x9C \xE2\x80\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "주문 정보 없는 빌드 — 디스코드로 문의해 주세요"
-			}
-			else
-			{
-			static char pcode[32] = "";
-			ImGui::SetNextItemWidth(220.0f);
-			ImGui::InputTextWithHint("##punlock", "PRE-XXXX-XXXX", pcode, sizeof(pcode));
-			ImGui::SameLine();
-			if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
-			{
-				if (sherbet::license::verify_preset(preset_id, pcode))
-				{
-					_sherbet_preset_code = pcode; // 재검증용 실제 코드 저장
-					_sherbet_preset_unlocked = true; pcode[0] = '\0';
-					_sherbet_preset_trial = 0.0f; // 체험 중이었다면 종료(적용 상태 유지)
-					_sherbet_preset_trial_restore.clear(); // 원복 예약 취소 — 언락됐으니 되돌리지 않음
-					save_config();
-					set_current_preset_path(materialize().u8string().c_str());
-				}
-			}
-			}
+			ImGui::PopID();
 		}
 	}
 }

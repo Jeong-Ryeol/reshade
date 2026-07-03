@@ -28,7 +28,6 @@
 #define IDR_LICENSE_S_JXL               711
 #define IDR_FONT_SHERBET_BODY           720
 #define IDR_FONT_SHERBET_TITLE          721
-#define IDR_SHERBET_PRESET_PERSONAL     722
 #define IDR_FONT_SHERBET_LATIN          723
 
 // Next default values for new objects

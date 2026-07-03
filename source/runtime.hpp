@@ -455,10 +455,6 @@ namespace reshade
 		ImGuiContext *_imgui_context = nullptr;
 		ImFont *_sherbet_title_font = nullptr;
 		int _sherbet_tab = 0; // 0=Home 1=Market 2=Settings 3=About
-		bool _sherbet_preset_unlocked = false; // 개인 전용 프리셋 언락 여부
-		std::string _sherbet_preset_code;      // 언락에 사용된 실제 코드(재검증용) — ini 변조 방지
-		float _sherbet_preset_trial = 0.0f; // 프리셋 체험 남은 시간(초). >0 이면 체험 중
-		std::filesystem::path _sherbet_preset_trial_restore; // 체험 종료 시 되돌릴 프리셋 경로
 		int _sherbet_effect_filter = 0; // 이펙트 필터: 0=전체 1=켜짐 2=즐겨찾기
 		std::set<std::string> _sherbet_fav; // 즐겨찾기 이펙트(테크닉 이름)
 

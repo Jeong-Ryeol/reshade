@@ -118,7 +118,6 @@ IDR_FONT_SHERBET_TITLE  RCDATA                  "fonts\\Gaegu-Bold.ttf"
 
 IDR_FONT_SHERBET_LATIN  RCDATA                  "fonts\\Fredoka-Medium.ttf"
 
-IDR_SHERBET_PRESET_PERSONAL RCDATA              "presets\\personal.ini"
 #endif
 
 #endif    // Neutral (Default) resources
