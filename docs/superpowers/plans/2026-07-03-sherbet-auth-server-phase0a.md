@@ -790,7 +790,7 @@ def test_poll_unknown_state_404(settings):
 def test_verify_valid_token_rechecks_roles(settings):
     _reset(); _override(settings)
     try:
-        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"], now=1000)
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])  # 실제 현재 시각 발급(살아있는 토큰)
         respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
             return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-x"]}))
         client = TestClient(app)
