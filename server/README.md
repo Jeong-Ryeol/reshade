@@ -69,3 +69,21 @@ python -m pytest -q
   3. 구매자에게 디스코드에서 해당 역할 부여.
   4. 끝. 서버 재시작 불필요(파일 mtime 이 바뀌면 다음 요청에서 자동 반영).
 - themes.json 은 요청마다 stat 되며, 내용이 안 바뀌면 메모리 캐시를 쓴다(단일 워커 전제).
+
+## 원격 프리셋·이펙트 (`/content/me` 확장 + `/content/file/<id>`)
+
+- `GET /content/me` 는 `{"themes":[...], "presets":[...], "effects":[...]}` 를 반환한다. presets/effects 는 각각 `content/presets.json`·`content/effects.json` 을 역할 필터한 결과(`role` 필드 제거).
+- `GET /content/file/<id>` — 헤더 `Authorization: Bearer <세션토큰>`. **그 id 아이템의 `role` 을 사용자가 보유해야만** 파일 바이트(`application/octet-stream`)를 준다(매니페스트 필터만으로는 부족 — id 추측 방어). 미보유 → 403, 미등록 id → 404, 디코 조회 실패 → 503.
+- **매니페스트 스키마**(presets.json / effects.json, 배열):
+  ```json
+  [{ "id": "strawberry-grade", "filename": "Strawberry.ini", "role": "1408966226637750405", "display_name": "딸기 보정" }]
+  ```
+  - `id` = 파일명과 분리한 불투명 키(파일 추측 방지). `content/files/<id>` 로 매핑된다(파일명 = id, 확장자 없이).
+  - `filename` = 클라가 디스크에 쓸 이름(프리셋=`Sherbet-Presets/`, 이펙트=`Sherbet-Fx/`).
+  - `role` = 디스코드 **숫자 역할 ID 문자열**(따옴표), `null`=무료. 숫자 없이 이름 쓰면 항상 거부(fail-closed).
+- **새 프리셋/fx 배포(재빌드 불필요):**
+  1. 파일을 `content/files/<id>` 로 둔다(파일명 = id, 확장자 없이).
+  2. `presets.json`(또는 `effects.json`)에 위 스키마로 항목 추가.
+  3. 구매자에게 디스코드에서 해당 역할 부여.
+  4. 끝. mtime 캐시라 다음 요청에 자동 반영.
+- **주의(fx 다중 파일):** fx 가 LUT `.png`/`.fxh` 를 딸리면 각각을 별도 effects 아이템으로 추가한다(클라가 모두 `Sherbet-Fx/` 에 떨궈 ReShade 가 검색경로에서 발견).
