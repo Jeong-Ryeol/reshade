@@ -52,6 +52,32 @@ def test_auth_start_generates_state_and_registers_hwid(settings):
 
 
 @respx.mock
+def test_callback_and_verify_relay_display_name(settings):
+    # 공용 DLL 이름 각인: 콜백이 디스코드 표시이름을 토큰에 넣고 poll/verify 가 되돌려준다
+    _reset(); _override(settings)
+    try:
+        main_module.store.put_pending("s-name", "HWN")
+        respx.post(f"{API}/oauth2/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "at"}))
+        respx.get(f"{API}/users/@me").mock(
+            return_value=httpx.Response(200, json={"id": "user-n", "username": "jr", "global_name": "정렬"}))
+        respx.get(f"{API}/guilds/guild-1/members/user-n").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        client = TestClient(app)
+        client.get("/auth/callback", params={"code": "c", "state": "s-name"})
+        poll = client.get("/auth/poll", params={"state": "s-name"}).json()
+        assert poll["status"] == "ready"
+        assert poll["name"] == "정렬"  # global_name 우선
+        # 같은 토큰으로 verify → name 유지
+        respx.get(f"{API}/guilds/guild-1/members/user-n").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        v = client.post("/auth/verify", json={"token": poll["token"], "hwid": "HWN"}).json()
+        assert v["valid"] is True and v["name"] == "정렬"
+    finally:
+        _reset()
+
+
+@respx.mock
 def test_callback_issues_token_for_buyer(settings):
     _reset(); _override(settings)
     try:

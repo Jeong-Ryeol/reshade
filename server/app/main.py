@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.config import Settings, get_settings
 from app.content import entitled_items, find_item, is_entitled, load_manifest
 from app.discord_roles import get_member_role_ids, roles_snapshot
-from app.oauth import build_authorize_url, exchange_code, get_user_id
+from app.oauth import build_authorize_url, exchange_code, get_user_identity
 from app.store import PendingStore
 from app.tokens import issue_token, verify_token
 
@@ -68,7 +68,7 @@ async def auth_callback(
         )
     try:
         access_token = await exchange_code(settings, code)
-        user_id = await get_user_id(access_token)
+        user_id, user_name = await get_user_identity(access_token)
         role_ids = await get_member_role_ids(settings, user_id)
     except (httpx.HTTPError, KeyError, ValueError):
         # 디스코드 업스트림 실패(연결 오류 또는 200인데 응답 본문이 깨진 경우 KeyError/JSONDecodeError 포함)
@@ -82,8 +82,8 @@ async def auth_callback(
         store.set_denied(state, "no_buyer_role")
         return HTMLResponse("<h2>인증 실패</h2><p>구매자 역할이 없습니다. 창을 닫아주세요.</p>", status_code=200)
     roles = roles_snapshot(settings, role_ids)
-    token = issue_token(settings, user_id, hwid, roles)
-    store.set_result(state, token)
+    token = issue_token(settings, user_id, hwid, roles, name=user_name)
+    store.set_result(state, token, user_name)
     return HTMLResponse("<h2>인증 완료</h2><p>Sherbet으로 돌아가세요. 이 창은 닫아도 됩니다.</p>")
 
 
@@ -168,4 +168,9 @@ async def auth_verify(body: VerifyBody, settings: Settings = Depends(get_setting
         )
     if role_ids is None or settings.role_buyer_id not in role_ids:
         return {"valid": False}
-    return {"valid": True, "sub": payload["sub"], "roles": roles_snapshot(settings, role_ids)}
+    return {
+        "valid": True,
+        "sub": payload["sub"],
+        "roles": roles_snapshot(settings, role_ids),
+        "name": payload.get("name", ""),  # 공용 DLL 이름 각인
+    }

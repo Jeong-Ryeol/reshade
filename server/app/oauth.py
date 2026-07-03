@@ -39,3 +39,18 @@ async def get_user_id(access_token: str) -> str:
         resp = await client.get(f"{_API}/users/@me", headers=headers)
     resp.raise_for_status()
     return resp.json()["id"]
+
+
+def _display_name(user: dict) -> str:
+    """디스코드 사용자 객체에서 표시할 이름 — global_name(표시이름) 우선, 없으면 username."""
+    return (user.get("global_name") or user.get("username") or "").strip()
+
+
+async def get_user_identity(access_token: str) -> tuple[str, str]:
+    """(id, 표시이름) 반환. 공용 DLL 이 로그인한 사람 이름을 각인하는 데 쓴다."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{_API}/users/@me", headers=headers)
+    resp.raise_for_status()
+    user = resp.json()
+    return user["id"], _display_name(user)

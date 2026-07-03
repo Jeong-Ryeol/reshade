@@ -7,7 +7,10 @@ def test_pending_then_ready_flow():
     assert s.get_hwid("st1") == "HW1"
     assert s.pop_result("st1") == {"status": "pending"}
     s.set_result("st1", "tok-abc")
-    assert s.pop_result("st1") == {"status": "ready", "token": "tok-abc"}
+    assert s.pop_result("st1") == {"status": "ready", "token": "tok-abc", "name": ""}
+    s.put_pending("st1b", "HW1")
+    s.set_result("st1b", "tok-def", "정렬")
+    assert s.pop_result("st1b") == {"status": "ready", "token": "tok-def", "name": "정렬"}
     # 1회 소비 후 사라짐
     assert s.pop_result("st1") is None
 

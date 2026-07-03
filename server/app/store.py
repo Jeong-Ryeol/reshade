@@ -63,10 +63,10 @@ class PendingStore:
                 return None
             return self._hwid.get(state)
 
-    def set_result(self, state: str, token: str) -> None:
+    def set_result(self, state: str, token: str, name: str = "") -> None:
         with self._lock:
             if state in self._hwid:
-                self._result[state] = {"status": "ready", "token": token}
+                self._result[state] = {"status": "ready", "token": token, "name": name}
 
     def set_denied(self, state: str, reason: str) -> None:
         with self._lock:
