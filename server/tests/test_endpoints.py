@@ -308,3 +308,47 @@ def test_content_me_discord_down_503(settings, tmp_path, monkeypatch):
         assert r.status_code == 503
     finally:
         _reset()
+
+
+def _write_json(tmp_path, name, data):
+    import json
+    p = tmp_path / name
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return str(p)
+
+
+def _files_dir(tmp_path, mapping):
+    d = tmp_path / "files"
+    d.mkdir()
+    for fid, content in mapping.items():
+        (d / fid).write_bytes(content)
+    return str(d)
+
+
+@respx.mock
+def test_content_me_includes_presets_and_effects(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "THEMES_PATH", _write_json(tmp_path, "themes.json", []))
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", [
+            {"id": "free-p", "role": None, "filename": "free.ini", "display_name": "F"},
+            {"id": "gold-p", "role": "role-gold", "filename": "gold.ini", "display_name": "G"},
+            {"id": "plat-p", "role": "role-plat", "filename": "plat.ini", "display_name": "P"},
+        ]))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", [
+            {"id": "gold-fx", "role": "role-gold", "filename": "gold.fx", "display_name": "GFX"},
+        ]))
+        main_module.THEMES_CACHE.clear(); main_module.PRESETS_CACHE.clear(); main_module.EFFECTS_CACHE.clear()
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-gold"]}))
+        client = TestClient(app)
+        r = client.get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+        body = r.json()
+        assert [p["id"] for p in body["presets"]] == ["free-p", "gold-p"]
+        assert [e["id"] for e in body["effects"]] == ["gold-fx"]
+        assert all("role" not in p for p in body["presets"])
+        assert all("role" not in e for e in body["effects"])
+    finally:
+        _reset()

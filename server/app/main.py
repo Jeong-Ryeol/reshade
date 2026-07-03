@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.content import entitled_themes, load_themes
+from app.content import entitled_items, find_item, is_entitled, load_manifest
 from app.discord_roles import get_member_role_ids, roles_snapshot
 from app.oauth import build_authorize_url, exchange_code, get_user_id
 from app.store import PendingStore
@@ -16,9 +16,15 @@ from app.tokens import issue_token, verify_token
 app = FastAPI(title="Sherbet Auth")
 store = PendingStore()
 
-# 원격 테마 정의 파일 경로 + mtime 캐시(요청마다 파일 stat, 안 바뀌면 캐시)
-THEMES_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content", "themes.json")
+# 원격 콘텐츠 정의 파일 경로 + mtime 캐시(요청마다 파일 stat, 안 바뀌면 캐시)
+_CONTENT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content")
+THEMES_PATH = os.path.join(_CONTENT_DIR, "themes.json")
+PRESETS_PATH = os.path.join(_CONTENT_DIR, "presets.json")
+EFFECTS_PATH = os.path.join(_CONTENT_DIR, "effects.json")
+FILES_DIR = os.path.join(_CONTENT_DIR, "files")
 THEMES_CACHE: dict = {}
+PRESETS_CACHE: dict = {}
+EFFECTS_CACHE: dict = {}
 
 
 class StartBody(BaseModel):
@@ -104,8 +110,11 @@ async def content_me(
         role_ids = await get_member_role_ids(settings, payload["sub"])
     except (httpx.HTTPError, KeyError, ValueError):
         return JSONResponse(status_code=503, content={"error": "upstream_unavailable"})
-    themes = load_themes(THEMES_PATH, THEMES_CACHE)
-    return {"themes": entitled_themes(themes, role_ids or [])}
+    roles = role_ids or []
+    themes = entitled_items(load_manifest(THEMES_PATH, THEMES_CACHE), roles)
+    presets = entitled_items(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
+    effects = entitled_items(load_manifest(EFFECTS_PATH, EFFECTS_CACHE), roles)
+    return {"themes": themes, "presets": presets, "effects": effects}
 
 
 @app.post("/auth/verify")
