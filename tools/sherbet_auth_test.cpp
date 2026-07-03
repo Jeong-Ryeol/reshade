@@ -39,10 +39,48 @@ static void test_parse_verify() {
 	assert(!transport.ok && transport.upstream_down);
 }
 
+static void test_cache_roundtrip() {
+	token_cache c; c.token = "JWT.tok.en"; c.hwid = "HWABC_123"; c.last_verified_unix = 1751560000LL;
+	std::string s = serialize_cache(c);
+	token_cache back;
+	assert(parse_cache(s, back));
+	assert(back.token == c.token && back.hwid == c.hwid && back.last_verified_unix == c.last_verified_unix);
+	token_cache empty;
+	assert(!parse_cache("garbage-no-fields", empty)); // 토큰 없으면 실패
+}
+
+static void test_grace() {
+	// grace=86400. 마지막 검증 t=1000.
+	assert(allow_offline(1000, 1000 + 86399, 86400));   // 24h 직전 → 허용
+	assert(!allow_offline(1000, 1000 + 86401, 86400));  // 24h 초과 → 거부
+	assert(!allow_offline(0, 99999, 86400));            // last_verified 없음(0) → 거부
+}
+
+static void test_decide() {
+	token_cache c; c.token = "t"; c.last_verified_unix = 1000;
+	// 온라인 검증 성공 → authed
+	verify_result ok; ok.ok = true;
+	assert(decide(ok, c, 5000, 86400) == gate::authed);
+	// 구매자 아님(valid:false) → locked (그레이스 무관)
+	verify_result no;
+	assert(decide(no, c, 1000 + 10, 86400) == gate::locked);
+	// 서버 다운 + 그레이스 내 → authed
+	verify_result down; down.upstream_down = true;
+	assert(decide(down, c, 1000 + 100, 86400) == gate::authed);
+	// 서버 다운 + 그레이스 초과 → locked
+	assert(decide(down, c, 1000 + 90000, 86400) == gate::locked);
+	// 서버 다운 + 캐시 토큰 없음 → locked
+	token_cache none;
+	assert(decide(down, none, 1000, 86400) == gate::locked);
+}
+
 int main() {
 	test_parse_start();
 	test_parse_poll();
 	test_parse_verify();
+	test_cache_roundtrip();
+	test_grace();
+	test_decide();
 	std::printf("sherbet_auth_core parsing: ALL PASS\n");
 	return 0;
 }

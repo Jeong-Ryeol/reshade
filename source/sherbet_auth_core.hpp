@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <cstddef>
+#include <stdexcept>
 
 namespace sherbet
 {
@@ -107,6 +108,55 @@ namespace sherbet
 				r.roles = json_string_array(body, "roles");
 			}
 			return r; // v==0(구매자 아님) 또는 v==-1 → ok=false, upstream_down=false
+		}
+
+		struct token_cache { std::string token; std::string hwid; long long last_verified_unix = 0; };
+
+		inline std::string serialize_cache(const token_cache &c)
+		{
+			std::string o;
+			o += "token=" + c.token + "\n";
+			o += "hwid=" + c.hwid + "\n";
+			o += "last_verified=" + std::to_string(c.last_verified_unix) + "\n";
+			return o;
+		}
+
+		inline bool parse_cache(const std::string &text, token_cache &out)
+		{
+			token_cache tmp;
+			std::size_t i = 0;
+			while (i < text.size()) {
+				std::size_t eol = text.find('\n', i);
+				std::string line = text.substr(i, eol == std::string::npos ? std::string::npos : eol - i);
+				i = (eol == std::string::npos) ? text.size() : eol + 1;
+				std::size_t eq = line.find('=');
+				if (eq == std::string::npos) continue;
+				std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+				while (!val.empty() && (val.back() == '\r' || val.back() == ' ')) val.pop_back();
+				if (key == "token") tmp.token = val;
+				else if (key == "hwid") tmp.hwid = val;
+				else if (key == "last_verified") { try { tmp.last_verified_unix = std::stoll(val); } catch (...) { tmp.last_verified_unix = 0; } }
+			}
+			if (tmp.token.empty()) return false;
+			out = tmp;
+			return true;
+		}
+
+		inline bool allow_offline(long long last_verified_unix, long long now_unix, long long grace_secs)
+		{
+			if (last_verified_unix <= 0) return false;
+			return (now_unix - last_verified_unix) <= grace_secs;
+		}
+
+		enum class gate { locked, authed };
+
+		inline gate decide(const verify_result &vr, const token_cache &cache, long long now_unix, long long grace_secs)
+		{
+			if (vr.ok) return gate::authed;                                   // 온라인 검증 통과(구매자)
+			if (vr.upstream_down && !cache.token.empty() &&                   // 서버 다운 + 캐시 존재 + 그레이스 내
+				allow_offline(cache.last_verified_unix, now_unix, grace_secs))
+				return gate::authed;
+			return gate::locked;                                              // 그 외(구매자 아님/그레이스 초과/토큰 없음)
 		}
 	}
 }
