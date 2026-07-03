@@ -246,14 +246,14 @@ Phase 0(인증) 완료 후, 테마 언락을 오프라인 FNV 코드에서 **디
 ```
 - 색은 `#rrggbbaa`(8자리 hex, 알파 포함). 12색 = struct 필드 그대로.
 - `particle` = `spark|heart|leaf|petal`.
-- `role` = 이 테마 언락에 필요한 역할. `null`/생략이면 무료(모든 구매자에게 제공).
+- `role` = 이 테마 언락에 필요한 **디스코드 역할의 숫자 ID**(문자열; `get_member_role_ids`가 숫자 ID를 반환하므로 이름이 아니라 ID로 매칭). `null`/생략이면 무료.
 
 ### 13.2 서버 — `GET /sherbet-auth/content/me` (Bearer)
 
 - **인증:** `Authorization: Bearer <JWT>`. 서명·만료 검증(hwid는 검사 안 함 — 콘텐츠는 신원만 필요). `sub` 추출.
 - **역할:** `sub`로 **디스코드 역할 라이브 재조회**(`get_member_role_ids`, verify와 동일). 토큰에 박힌 역할 스냅샷이 아니라 현재 역할 기준.
 - **소스:** 서버의 `server/content/themes.json`(어드민이 손으로 편집·추가). 배열 형태.
-- **필터:** 각 테마의 `role`이 `null`이거나 사용자 역할에 포함되면 매니페스트에 넣는다.
+- **필터:** 각 테마의 `role`(숫자 역할 ID)이 `null`이거나 사용자의 역할 ID 목록에 포함되면 매니페스트에 넣는다.
 - **응답:** `{ "themes": [ <themeJSON>, ... ] }`. (프리셋/이펙트는 Phase 2에서 추가.)
 - **에러:** 토큰 무효/만료 → 401. 디스코드 재조회 실패 → 503(재시도 신호, 클라는 조용히 실패).
 - **배포:** 새 테마 = `themes.json`에 항목 추가 + 디코에서 `sherbet-theme-<id>` 역할 부여. 서버 재시작/재빌드 불필요(요청마다 파일 읽거나 mtime 캐시).
