@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "sherbet_auth.hpp"
+#include "sherbet_content.hpp"
 #include "sherbet_http.hpp"
 #include "sherbet_owner.h"
 #include "sherbet_nodelock.hpp" // hwid()
@@ -67,6 +68,16 @@ void sherbet::auth::controller::init(const std::string &config_dir_utf8)
 	if (in.is_open()) {
 		std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 		parse_cache(text, _cache);
+	}
+
+	// 테마 캐시 로드 — 첫 프레임 take_content 로 레지스트리에 복원(오프라인/재시작 지속)
+	{
+		std::string cached;
+		if (sherbet::content::load_cached(_config_dir, cached) && !cached.empty()) {
+			std::lock_guard<std::mutex> lk(_mtx);
+			_content_body = std::move(cached);
+			_content_ready = true;
+		}
 	}
 
 	// 시작 시 비동기 verify (토큰이 있을 때만)
@@ -187,4 +198,43 @@ void sherbet::auth::controller::begin_login()
 		{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEC\x8B\x9C\xEA\xB0\x84 \xEC\xB4\x88\xEA\xB3\xBC"; } // "시간 초과"
 		_login_active = false; _worker_done = true;
 	});
+}
+
+std::string sherbet::auth::controller::token() const
+{
+	std::lock_guard<std::mutex> lk(_mtx);
+	return _cache.token;
+}
+
+bool sherbet::auth::controller::take_content(std::string &out)
+{
+	if (!_content_ready.load())
+		return false;
+	std::lock_guard<std::mutex> lk(_mtx);
+	if (_content_body.empty()) { _content_ready = false; return false; }
+	out = std::move(_content_body);
+	_content_body.clear();
+	_content_ready = false;
+	return true;
+}
+
+void sherbet::auth::controller::begin_fetch_content()
+{
+	if (!enabled()) return;
+	if (!_authed.load()) return;                 // 인증된 상태에서만
+	if (_content_active.exchange(true)) return;  // 이미 페치 중
+
+	std::string bearer;
+	{ std::lock_guard<std::mutex> lk(_mtx); bearer = _cache.token; }
+	if (bearer.empty()) { _content_active = false; return; }
+
+	std::thread([this, bearer]() {
+		std::string body;
+		if (sherbet::content::fetch(bearer, _config_dir, body) && !body.empty()) {
+			std::lock_guard<std::mutex> lk(_mtx);
+			_content_body = std::move(body);
+			_content_ready = true;
+		}
+		_content_active = false;
+	}).detach();
 }

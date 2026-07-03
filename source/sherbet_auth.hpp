@@ -27,6 +27,9 @@ namespace sherbet
 			void begin_login();
 			bool login_active() const;
 			std::string status_text() const;
+			std::string token() const;
+			void begin_fetch_content();
+			bool take_content(std::string &out);
 
 		private:
 			void join_worker();
@@ -43,6 +46,9 @@ namespace sherbet
 			mutable std::mutex _mtx;
 			std::string _status;          // _mtx 보호
 			bool _pending_save = false;   // _mtx 보호: tick()에서 캐시 파일 기록 트리거
+			std::string _content_body;               // _mtx 보호: 페치/캐시된 /content/me 바디
+			std::atomic<bool> _content_ready{ false };// 렌더 스레드가 take_content 로 인출
+			std::atomic<bool> _content_active{ false };// 페치 워커 진행 중 재진입 방지
 		};
 	}
 }
