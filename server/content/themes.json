@@ -1,0 +1,17 @@
+[
+  {
+    "id": "aurora",
+    "display_name": "Aurora Sky",
+    "colors": {
+      "bg0": "#0a1f1aff", "bg1": "#0f2e24ff", "bg2": "#123a2cff",
+      "panel": "#122e26b8", "panel_alt": "#183a2fd9",
+      "chip": "#134233ff", "border": "#5df0c040",
+      "text": "#eafff6ff", "text_dim": "#8fbfaeff",
+      "accent": "#5df0c0ff", "accent2": "#a7ffe3ff",
+      "glow": "#5df0c073"
+    },
+    "particle": "leaf",
+    "hue_cycle": false,
+    "role": "900000000000000001"
+  }
+]
