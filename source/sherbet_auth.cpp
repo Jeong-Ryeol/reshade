@@ -237,10 +237,25 @@ void sherbet::auth::controller::begin_fetch_content()
 	_content_worker = std::thread([this, bearer]() {
 		std::string body;
 		if (sherbet::content::fetch(bearer, _config_dir, body) && !body.empty()) {
-			std::lock_guard<std::mutex> lk(_mtx);
-			_content_body = std::move(body);
-			_content_ready = true;
+			// 프리셋/이펙트 파일 다운로드(순수 계산으로 대상 산출 → 각 다운로드)
+			const auto targets = sherbet::content_download_targets(
+				body, _config_dir + "/Sherbet-Presets", _config_dir + "/Sherbet-Fx");
+			for (const auto &t : targets) {
+				if (_stop.load()) break;
+				sherbet::content::fetch_file(bearer, t.id, t.dest_path); // 실패는 조용히 스킵
+			}
+			{
+				std::lock_guard<std::mutex> lk(_mtx);
+				_content_body = std::move(body);
+				_content_ready = true;
+			}
+			_content_files_changed = true; // 렌더 스레드가 검색경로+reload
 		}
 		_content_active = false;
 	});
+}
+
+bool sherbet::auth::controller::take_files_changed()
+{
+	return _content_files_changed.exchange(false);
 }

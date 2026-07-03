@@ -4,6 +4,7 @@
  */
 #pragma once
 #include "sherbet_auth_core.hpp"
+#include "sherbet_content_json.hpp" // content_download_targets
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -30,6 +31,7 @@ namespace sherbet
 			std::string token() const;
 			void begin_fetch_content();
 			bool take_content(std::string &out);
+			bool take_files_changed();
 
 		private:
 			void join_worker();
@@ -51,6 +53,7 @@ namespace sherbet
 			std::string _content_body;               // _mtx 보호: 페치/캐시된 /content/me 바디
 			std::atomic<bool> _content_ready{ false };// 렌더 스레드가 take_content 로 인출
 			std::atomic<bool> _content_active{ false };// 페치 워커 진행 중 재진입 방지
+			std::atomic<bool> _content_files_changed{ false }; // 파일 새로 받음 → 렌더 스레드가 reload
 		};
 	}
 }
