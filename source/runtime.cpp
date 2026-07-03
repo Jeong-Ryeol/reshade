@@ -352,6 +352,9 @@ reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphic
 
 	load_config();
 
+	// SHERBET: 온라인 인증 컨트롤러 초기화(캐시 토큰 로드 + 비동기 시작 검증)
+	_sherbet_auth.init(_config_path.parent_path().u8string());
+
 	fpng::fpng_init();
 }
 reshade::runtime::~runtime()
@@ -3707,6 +3710,10 @@ exit_failure:
 
 void reshade::runtime::update_effects()
 {
+	// SHERBET: 인증 안 됐으면 이펙트 컴파일/적용을 건너뛴다(효과 잠금).
+	if (!_sherbet_auth.is_authed())
+		return;
+
 	// Delay first load to the first render call to avoid loading while the application is still initializing
 	if (_frame_count == 0 && !_no_reload_on_init)
 		reload_effects();

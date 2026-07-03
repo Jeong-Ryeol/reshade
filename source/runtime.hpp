@@ -8,6 +8,7 @@
 #include "reshade_api.hpp"
 #include "state_block.hpp"
 #include "imgui_code_editor.hpp"
+#include "sherbet_auth.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -364,6 +365,10 @@ namespace reshade
 		float _sherbet_crosshair_off[2] = { 0.0f, 0.0f };            // 중앙 기준 오프셋(px)
 		float _sherbet_crosshair_col[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // 도형 색(딸기 핑크 기본)
 		bool _sherbet_crosshair_dirty = false;   // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+
+		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
+		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.
+		sherbet::auth::controller _sherbet_auth;
 
 		api::state_block _app_state = {};
 		#pragma endregion
