@@ -352,3 +352,93 @@ def test_content_me_includes_presets_and_effects(settings, tmp_path, monkeypatch
         assert all("role" not in e for e in body["effects"])
     finally:
         _reset()
+
+
+@respx.mock
+def test_content_file_serves_entitled_bytes(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", [
+            {"id": "gold-p", "role": "role-gold", "filename": "gold.ini"},
+        ]))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FILES_DIR", _files_dir(tmp_path, {"gold-p": b"Techniques=X\n"}))
+        main_module.PRESETS_CACHE.clear(); main_module.EFFECTS_CACHE.clear()
+        tok = issue_token(settings, "u1", "HW", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/u1").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-gold"]}))
+        client = TestClient(app)
+        r = client.get("/content/file/gold-p", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+        assert r.content == b"Techniques=X\n"
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_file_403_when_role_missing(settings, tmp_path, monkeypatch):
+    # 매니페스트엔 있지만 사용자가 그 role 미보유 → 403 (id 추측 방어)
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", [
+            {"id": "gold-p", "role": "role-gold", "filename": "gold.ini"},
+        ]))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FILES_DIR", _files_dir(tmp_path, {"gold-p": b"secret"}))
+        main_module.PRESETS_CACHE.clear(); main_module.EFFECTS_CACHE.clear()
+        tok = issue_token(settings, "u2", "HW", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/u2").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))  # role-gold 없음
+        client = TestClient(app)
+        r = client.get("/content/file/gold-p", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_file_404_unknown_id(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", []))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FILES_DIR", _files_dir(tmp_path, {}))
+        main_module.PRESETS_CACHE.clear(); main_module.EFFECTS_CACHE.clear()
+        tok = issue_token(settings, "u3", "HW", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/u3").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        client = TestClient(app)
+        r = client.get("/content/file/ghost", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 404
+    finally:
+        _reset()
+
+
+def test_content_file_no_bearer_401(settings):
+    _reset(); _override(settings)
+    try:
+        client = TestClient(app)
+        assert client.get("/content/file/whatever").status_code == 401
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_file_free_item_no_role(settings, tmp_path, monkeypatch):
+    # role:null 무료 아이템 → 인증만으로 200
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", [
+            {"id": "free-p", "role": None, "filename": "free.ini"},
+        ]))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FILES_DIR", _files_dir(tmp_path, {"free-p": b"free-bytes"}))
+        main_module.PRESETS_CACHE.clear(); main_module.EFFECTS_CACHE.clear()
+        tok = issue_token(settings, "u4", "HW", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/u4").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        client = TestClient(app)
+        r = client.get("/content/file/free-p", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200 and r.content == b"free-bytes"
+    finally:
+        _reset()

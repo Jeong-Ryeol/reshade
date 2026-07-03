@@ -3,7 +3,7 @@ import secrets
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
@@ -115,6 +115,41 @@ async def content_me(
     presets = entitled_items(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
     effects = entitled_items(load_manifest(EFFECTS_PATH, EFFECTS_CACHE), roles)
     return {"themes": themes, "presets": presets, "effects": effects}
+
+
+@app.get("/content/file/{item_id}")
+async def content_file(
+    item_id: str,
+    authorization: str | None = Header(default=None),
+    settings: Settings = Depends(get_settings),
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing_bearer")
+    token = authorization[len("Bearer "):]
+    payload = verify_token(settings, token, hwid=None)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="invalid_token")
+
+    # 매니페스트(프리셋+이펙트)에서 id 조회 — 화이트리스트
+    items = load_manifest(PRESETS_PATH, PRESETS_CACHE) + load_manifest(EFFECTS_PATH, EFFECTS_CACHE)
+    item = find_item(items, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="unknown_item")
+
+    # per-id 역할 재검증 — 매니페스트 필터만 믿지 않는다(id 추측 방어)
+    try:
+        role_ids = await get_member_role_ids(settings, payload["sub"])
+    except (httpx.HTTPError, KeyError, ValueError):
+        return JSONResponse(status_code=503, content={"error": "upstream_unavailable"})
+    if not is_entitled(item, role_ids or []):
+        raise HTTPException(status_code=403, detail="not_entitled")
+
+    # 경로탈출 방어: files/<id> 고정 구성 + 실경로가 FILES_DIR 안인지 확인
+    base = os.path.realpath(FILES_DIR)
+    target = os.path.realpath(os.path.join(base, item_id))
+    if os.path.commonpath([base, target]) != base or not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="file_missing")
+    return FileResponse(target, media_type="application/octet-stream")
 
 
 @app.post("/auth/verify")
