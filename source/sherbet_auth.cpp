@@ -1,0 +1,182 @@
+/*
+ * Copyright (C) 2026 정렬 (Jeong-Ryeol)
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+#include "sherbet_auth.hpp"
+#include "sherbet_http.hpp"
+#include "sherbet_owner.h"
+#include "sherbet_nodelock.hpp" // hwid()
+#include <Windows.h>
+#include <shellapi.h>
+#include <fstream>
+#include <filesystem>
+#include <chrono>
+
+namespace
+{
+	constexpr wchar_t kHost[] = L"wonryeol.asuscomm.com";
+	constexpr wchar_t kStartPath[]  = L"/sherbet-auth/auth/start";
+	constexpr wchar_t kVerifyPath[] = L"/sherbet-auth/auth/verify";
+	const std::string kPollBase     = "/sherbet-auth/auth/poll?state=";
+
+	long long now_unix()
+	{
+		return std::chrono::duration_cast<std::chrono::seconds>(
+			std::chrono::system_clock::now().time_since_epoch()).count();
+	}
+
+	std::string json_escape(const std::string &s)
+	{
+		std::string o; o.reserve(s.size() + 2);
+		for (char c : s) { if (c == '"' || c == '\\') o += '\\'; o += c; }
+		return o;
+	}
+}
+
+bool sherbet::auth::enabled()
+{
+	return SHERBET_ONLINE_AUTH != 0;
+}
+
+sherbet::auth::controller::controller() {}
+sherbet::auth::controller::~controller() { join_worker(); }
+
+void sherbet::auth::controller::join_worker()
+{
+	if (_worker.joinable()) _worker.join();
+}
+
+void sherbet::auth::controller::save_cache_locked()
+{
+	const std::filesystem::path p = std::filesystem::u8path(_config_dir) / L"sherbet.auth";
+	std::ofstream out(p, std::ios::trunc);
+	if (out.is_open()) out << serialize_cache(_cache);
+}
+
+void sherbet::auth::controller::init(const std::string &config_dir_utf8)
+{
+	if (!enabled()) { _authed = true; return; } // 개발 빌드: 항상 통과
+
+	_config_dir = config_dir_utf8;
+	_hwid = sherbet::nodelock::hwid();
+
+	// 캐시 로드
+	const std::filesystem::path p = std::filesystem::u8path(_config_dir) / L"sherbet.auth";
+	std::ifstream in(p);
+	if (in.is_open()) {
+		std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		parse_cache(text, _cache);
+	}
+
+	// 시작 시 비동기 verify (토큰이 있을 때만)
+	if (_cache.token.empty()) { _authed = false; return; }
+
+	_worker_done = false;
+	_worker = std::thread([this]() {
+		const std::string body = std::string("{\"token\":\"") + json_escape(_cache.token) +
+			"\",\"hwid\":\"" + json_escape(_hwid) + "\"}";
+		std::string resp;
+		const int status = sherbet::http::post_json(kHost, kVerifyPath, body, resp, nullptr);
+		const verify_result vr = parse_verify(resp, status);
+		const gate g = decide(vr, _cache, now_unix(), 86400);
+		{
+			std::lock_guard<std::mutex> lk(_mtx);
+			if (vr.ok) { _cache.last_verified_unix = now_unix(); _pending_save = true; }
+		}
+		_authed = (g == gate::authed);
+		_worker_done = true;
+	});
+}
+
+bool sherbet::auth::controller::is_authed() const
+{
+	if (!enabled()) return true;
+	return _authed.load();
+}
+
+bool sherbet::auth::controller::login_active() const
+{
+	return _login_active.load();
+}
+
+const char *sherbet::auth::controller::status_text() const
+{
+	std::lock_guard<std::mutex> lk(_mtx);
+	return _status.c_str();
+}
+
+void sherbet::auth::controller::tick()
+{
+	if (!enabled()) return;
+
+	// 완료된 워커 스레드 정리 + 지연된 캐시 저장 반영
+	if (_worker_done.load()) {
+		join_worker();
+		_worker_done = false;
+		std::lock_guard<std::mutex> lk(_mtx);
+		if (_pending_save) { save_cache_locked(); _pending_save = false; }
+	}
+}
+
+void sherbet::auth::controller::begin_login()
+{
+	if (!enabled()) return;
+	if (_login_active.load()) return;      // 이미 진행 중
+	if (_worker.joinable() && !_worker_done.load()) return; // 시작 verify 진행 중
+
+	_login_active = true;
+	{
+		std::lock_guard<std::mutex> lk(_mtx);
+		_status = "\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xEC\xA4\x80\xEB\xB9\x84\xEC\xA4\x91\xE2\x80\xA6"; // "로그인 준비중…"
+	}
+
+	join_worker();
+	_worker_done = false;
+	_worker = std::thread([this]() {
+		// 1) start
+		const std::string sbody = std::string("{\"hwid\":\"") + json_escape(_hwid) + "\"}";
+		std::string sresp;
+		const int sstatus = sherbet::http::post_json(kHost, kStartPath, sbody, sresp, nullptr);
+		const start_result sr = parse_start(sresp);
+		if (sstatus == 0 || !sr.ok) {
+			{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEC\x97\xB0\xEA\xB2\xB0 \xEC\x8B\xA4\xED\x8C\xA8"; } // "연결 실패"
+			_login_active = false; _worker_done = true; return;
+		}
+		// 2) 브라우저 열기
+		{
+			std::wstring wurl(sr.authorize_url.begin(), sr.authorize_url.end()); // URL은 ASCII
+			ShellExecuteW(nullptr, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		}
+		{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xEB\x8C\x80\xEA\xB8\xB0\xEC\xA4\x91\xE2\x80\xA6"; } // "로그인 대기중…"
+
+		// 3) 폴링(최대 5분, 2초 간격)
+		const std::string poll_path = kPollBase + sr.state;
+		const std::wstring wpoll(poll_path.begin(), poll_path.end());
+		for (int i = 0; i < 150; ++i) {
+			std::string presp;
+			const int pstatus = sherbet::http::get(kHost, wpoll.c_str(), presp, nullptr);
+			if (pstatus == 200) {
+				const poll_result pr = parse_poll(presp);
+				if (pr.status == poll_result::ready) {
+					std::lock_guard<std::mutex> lk(_mtx);
+					_cache.token = pr.token;
+					_cache.hwid = _hwid;
+					_cache.last_verified_unix = now_unix();
+					_pending_save = true;
+					_status.clear();
+					_authed = true;
+					_login_active = false; _worker_done = true; return;
+				}
+				if (pr.status == poll_result::denied) {
+					std::lock_guard<std::mutex> lk(_mtx);
+					_status = "\xEA\xB5\xAC\xEB\xA7\xA4\xEC\x9E\x90 \xEC\x97\xAD\xED\x95\xA0\xEC\x9D\xB4 \xEC\x97\x86\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"; // "구매자 역할이 없습니다"
+					_authed = false;
+					_login_active = false; _worker_done = true; return;
+				}
+			}
+			Sleep(2000);
+		}
+		{ std::lock_guard<std::mutex> lk(_mtx); _status = "\xEC\x8B\x9C\xEA\xB0\x84 \xEC\xB4\x88\xEA\xB3\xBC"; } // "시간 초과"
+		_login_active = false; _worker_done = true;
+	});
+}
