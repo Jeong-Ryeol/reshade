@@ -660,6 +660,7 @@
     <ClCompile Include="source\runtime_gui_vr.cpp" />
     <ClCompile Include="source\runtime_manager.cpp" />
     <ClCompile Include="source\runtime_update_check.cpp" />
+    <ClCompile Include="source\sherbet_http.cpp" />
     <ClCompile Include="source\sherbet_themes.cpp" />
     <ClCompile Include="source\sherbet_ui.cpp" />
     <ClCompile Include="source\state_block.cpp" />
@@ -779,6 +780,7 @@
     <ClInclude Include="source\runtime.hpp" />
     <ClInclude Include="source\runtime_internal.hpp" />
     <ClInclude Include="source\runtime_manager.hpp" />
+    <ClInclude Include="source\sherbet_http.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
     <ClInclude Include="source\sherbet_nodelock.hpp" />
     <ClInclude Include="source\sherbet_owner.h" />

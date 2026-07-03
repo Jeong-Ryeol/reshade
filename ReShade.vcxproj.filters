@@ -408,6 +408,9 @@
     <ClCompile Include="source\runtime_update_check.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\sherbet_http.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\sherbet_themes.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
@@ -753,6 +756,9 @@
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\runtime_manager.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_http.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_license.hpp">
