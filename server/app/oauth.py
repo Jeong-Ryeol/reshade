@@ -15,7 +15,6 @@ def build_authorize_url(settings: Settings, state: str) -> str:
         "redirect_uri": settings.discord_redirect_uri,
         "scope": _SCOPE,
         "state": state,
-        "prompt": "none",
     }
     return f"https://discord.com/oauth2/authorize?{urlencode(params)}"
 

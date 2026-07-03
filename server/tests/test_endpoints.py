@@ -29,16 +29,24 @@ def test_health(settings):
         _reset()
 
 
-def test_auth_discord_redirects_and_registers_state(settings):
+def test_auth_start_generates_state_and_registers_hwid(settings):
     _override(settings)
     try:
         _reset(); _override(settings)
         client = TestClient(app)
-        r = client.get("/auth/discord", params={"state": "s1", "hwid": "HW1"},
-                       follow_redirects=False)
-        assert r.status_code == 307 or r.status_code == 302
-        assert "discord.com/oauth2/authorize" in r.headers["location"]
-        assert main_module.store.get_hwid("s1") == "HW1"
+        caller_supplied = "attacker-chosen-state"
+        r = client.post("/auth/start", json={"hwid": "HW1"})
+        assert r.status_code == 200
+        body = r.json()
+        state = body["state"]
+        assert isinstance(state, str) and state != ""
+        assert state != caller_supplied  # 서버 생성 state (호출자가 고를 수 없음)
+        assert state != "HW1"
+        assert "discord.com/oauth2/authorize" in body["authorize_url"]
+        assert state in body["authorize_url"]
+        assert "prompt=none" not in body["authorize_url"]
+        # 반환된 state로 hwid가 등록됨
+        assert main_module.store.get_hwid(state) == "HW1"
     finally:
         _reset()
 
@@ -116,6 +124,86 @@ def test_verify_bad_hwid(settings):
         tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"], now=1000)
         client = TestClient(app)
         r = client.post("/auth/verify", json={"token": tok, "hwid": "WRONG"})
+        assert r.json() == {"valid": False}
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_callback_discord_error_denies(settings):
+    _reset(); _override(settings)
+    try:
+        main_module.store.put_pending("s-err", "HWE")
+        respx.post(f"{API}/oauth2/token").mock(
+            return_value=httpx.Response(500, json={"error": "server_error"}))
+        client = TestClient(app)
+        r = client.get("/auth/callback", params={"code": "c", "state": "s-err"})
+        assert r.status_code == 200  # 500이 아니라 친절한 안내 페이지
+        poll = client.get("/auth/poll", params={"state": "s-err"}).json()
+        assert poll["status"] == "denied"
+        assert poll["reason"] == "discord_error"
+    finally:
+        _reset()
+
+
+def test_callback_oauth_error_param_denies(settings):
+    _reset(); _override(settings)
+    try:
+        main_module.store.put_pending("s-den", "HWD")
+        client = TestClient(app)
+        r = client.get("/auth/callback",
+                       params={"error": "access_denied", "state": "s-den"})
+        assert r.status_code == 200  # 422 아님
+        poll = client.get("/auth/poll", params={"state": "s-den"}).json()
+        assert poll["status"] == "denied"
+        assert poll["reason"] == "oauth_denied"
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_verify_upstream_error_returns_503(settings):
+    _reset(); _override(settings)
+    try:
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(500, json={"error": "server_error"}))
+        client = TestClient(app)
+        r = client.post("/auth/verify", json={"token": tok, "hwid": "HW9"})
+        assert r.status_code == 503
+        body = r.json()
+        assert body["valid"] is None
+        assert body["error"] == "upstream_unavailable"
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_verify_non_buyer_returns_valid_false(settings):
+    _reset(); _override(settings)
+    try:
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        # 멤버는 있으나 buyer 역할 없음
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-other"]}))
+        client = TestClient(app)
+        r = client.post("/auth/verify", json={"token": tok, "hwid": "HW9"})
+        assert r.status_code == 200
+        assert r.json() == {"valid": False}
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_verify_member_404_returns_valid_false(settings):
+    _reset(); _override(settings)
+    try:
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(404, json={"message": "Unknown Member"}))
+        client = TestClient(app)
+        r = client.post("/auth/verify", json={"token": tok, "hwid": "HW9"})
+        assert r.status_code == 200
         assert r.json() == {"valid": False}
     finally:
         _reset()

@@ -1,15 +1,22 @@
+import secrets
+
+import httpx
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.discord_roles import get_member_role_ids, has_buyer_role, roles_snapshot
+from app.discord_roles import get_member_role_ids, roles_snapshot
 from app.oauth import build_authorize_url, exchange_code, get_user_id
 from app.store import PendingStore
 from app.tokens import issue_token, verify_token
 
 app = FastAPI(title="Sherbet Auth")
 store = PendingStore()
+
+
+class StartBody(BaseModel):
+    hwid: str
 
 
 class VerifyBody(BaseModel):
@@ -22,20 +29,42 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/auth/discord")
-def auth_discord(state: str, hwid: str, settings: Settings = Depends(get_settings)):
-    store.put_pending(state, hwid)
-    return RedirectResponse(build_authorize_url(settings, state))
+@app.post("/auth/start")
+def auth_start(body: StartBody, settings: Settings = Depends(get_settings)) -> dict:
+    # state는 서버가 추측 불가능하게 생성 (호출자 입력 신뢰 안 함)
+    state = secrets.token_urlsafe(32)
+    store.put_pending(state, body.hwid)
+    return {"state": state, "authorize_url": build_authorize_url(settings, state)}
 
 
 @app.get("/auth/callback", response_class=HTMLResponse)
-async def auth_callback(code: str, state: str, settings: Settings = Depends(get_settings)):
+async def auth_callback(
+    state: str,
+    code: str | None = None,
+    error: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
     hwid = store.get_hwid(state)
     if hwid is None:
         raise HTTPException(status_code=400, detail="unknown_state")
-    access_token = await exchange_code(settings, code)
-    user_id = await get_user_id(access_token)
-    role_ids = await get_member_role_ids(settings, user_id)
+    if code is None:
+        # 사용자가 거부했거나 OAuth 오류 (?error=...) — 폴링이 denied로 풀리게
+        store.set_denied(state, "oauth_denied")
+        return HTMLResponse(
+            "<h2>인증 취소</h2><p>로그인이 취소되었습니다. Sherbet에서 다시 시도해주세요.</p>",
+            status_code=200,
+        )
+    try:
+        access_token = await exchange_code(settings, code)
+        user_id = await get_user_id(access_token)
+        role_ids = await get_member_role_ids(settings, user_id)
+    except httpx.HTTPError:
+        # 디스코드 업스트림 실패 — 상태가 pending으로 갇히지 않게 denied 처리
+        store.set_denied(state, "discord_error")
+        return HTMLResponse(
+            "<h2>인증 오류</h2><p>디스코드 연결에 실패했습니다. 잠시 후 다시 시도해주세요.</p>",
+            status_code=200,
+        )
     if role_ids is None or settings.role_buyer_id not in role_ids:
         store.set_denied(state, "no_buyer_role")
         return HTMLResponse("<h2>인증 실패</h2><p>구매자 역할이 없습니다. 창을 닫아주세요.</p>", status_code=200)
@@ -54,11 +83,19 @@ def auth_poll(state: str) -> dict:
 
 
 @app.post("/auth/verify")
-async def auth_verify(body: VerifyBody, settings: Settings = Depends(get_settings)) -> dict:
+async def auth_verify(body: VerifyBody, settings: Settings = Depends(get_settings)):
     payload = verify_token(settings, body.token, body.hwid)
     if payload is None:
         return {"valid": False}
-    role_ids = await get_member_role_ids(settings, payload["sub"])
+    try:
+        role_ids = await get_member_role_ids(settings, payload["sub"])
+    except httpx.HTTPError:
+        # 서버/디스코드 다운 — 클라가 "구매자 아님"과 구별해 24h 오프라인 유예를 적용할 수 있게
+        # 재시도 가능한 별도 신호(503 + valid:null)를 반환. valid:false를 쓰면 안 됨.
+        return JSONResponse(
+            status_code=503,
+            content={"valid": None, "error": "upstream_unavailable"},
+        )
     if role_ids is None or settings.role_buyer_id not in role_ids:
         return {"valid": False}
     return {"valid": True, "sub": payload["sub"], "roles": roles_snapshot(settings, role_ids)}
