@@ -372,7 +372,6 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
 	{ std::string s; config.get("SHERBET", "ActiveTheme", s); if (!s.empty()) sherbet::set_active_theme(s.c_str());
-	  std::string u; config.get("SHERBET", "Unlocked", u); sherbet::load_unlocked_csv(u.c_str());
 	  // 프리셋 언락도 "1" 이 아니라 실제 코드를 저장/재검증 — ini 에 1 만 적는 우회를 막는다.
 	  { std::string pc; config.get("SHERBET", "PresetUnlocked", pc);
 	    const char *preset_id = (SHERBET_ORDER_NO[0] != '\0') ? SHERBET_ORDER_NO : SHERBET_OWNER;
@@ -503,7 +502,6 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
 	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
-	config.set("SHERBET", "Unlocked", sherbet::unlocked_csv());
 	config.set("SHERBET", "PresetUnlocked", _sherbet_preset_code); // 실제 코드 저장(재검증용)
 	config.set("SHERBET", "TrialRestore", _sherbet_preset_trial_restore);
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
@@ -1584,6 +1582,7 @@ void reshade::runtime::draw_gui()
 
 		// SHERBET: 온라인 인증 — 미인증이면 로그인 패널만 노출(효과/오버레이 잠금)
 		_sherbet_auth.tick();
+		{ std::string _content; if (_sherbet_auth.take_content(_content)) sherbet::apply_content(_content); }
 		if (sherbet::auth::enabled() && !_sherbet_auth.is_authed())
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
@@ -3787,13 +3786,21 @@ void reshade::runtime::draw_gui_market()
 
 	if (seg == 0)
 	{
-		ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEC\x9E\xA0\xEA\xB8\xB4 \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEC\x96\xB8\xEB\x9D\xBD\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xED\x95\xB4\xEC\xA0\x9C\xED\x95\xB4\xEC\x9A\x94."); // "오버레이 테마. 잠긴 테마는 언락코드로 해제해요."
+		ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x9C \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEC\x84\xB8\xEC\x9A\x94."); // "오버레이 테마. 구매한 테마는 디스코드 로그인 후 불러오세요."
 		ImGui::Spacing();
 
-		std::size_t count = 0; const sherbet::theme *all = sherbet::all_themes(count);
-		for (std::size_t i = 0; i < count; ++i)
+		// "내 전용 불러오기" — 인증 상태에서만. /content/me 페치(비동기).
+		if (sherbet::auth::enabled() && _sherbet_auth.is_authed())
 		{
-			const sherbet::theme &th = all[i];
+			if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
+				_sherbet_auth.begin_fetch_content();
+			ImGui::Spacing();
+		}
+
+		const std::vector<const sherbet::theme *> snapshot = sherbet::themes_snapshot();
+		for (std::size_t i = 0; i < snapshot.size(); ++i)
+		{
+			const sherbet::theme &th = *snapshot[i];
 			const bool unlocked = sherbet::is_unlocked(th.id);
 			const bool active = std::strcmp(th.id, sherbet::active_theme_id()) == 0;
 			ImGui::PushID((int)i);
@@ -3817,18 +3824,6 @@ void reshade::runtime::draw_gui_market()
 			}
 			sherbet::end_card();
 			ImGui::PopID();
-		}
-
-		ImGui::Spacing();
-		static char code_buf[32] = "";
-		ImGui::SetNextItemWidth(220.0f);
-		ImGui::InputTextWithHint("##unlock", "SHRB-XXXX-XXXX", code_buf, sizeof(code_buf));
-		ImGui::SameLine();
-		if (sherbet::pill_button(ICON_FK_KEY "  \xED\x95\xB4\xEC\xA0\x9C", true)) // "해제"
-		{
-			for (std::size_t i = 0; i < count; ++i)
-				if (sherbet::check_theme_code(all[i].id, code_buf))
-				{ sherbet::unlock_theme(all[i].id, code_buf); code_buf[0] = '\0'; save_config(); break; }
 		}
 	}
 	else
