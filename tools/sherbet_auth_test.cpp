@@ -21,16 +21,17 @@ static void test_parse_start() {
 static void test_parse_poll() {
 	auto p = parse_poll(R"({"status":"pending"})");
 	assert(p.status == poll_result::pending);
-	auto r = parse_poll(R"({"status":"ready","token":"JWT.tok.en"})");
-	assert(r.status == poll_result::ready && r.token == "JWT.tok.en");
+	auto r = parse_poll(R"({"status":"ready","token":"JWT.tok.en","name":"정렬"})");
+	assert(r.status == poll_result::ready && r.token == "JWT.tok.en" && r.name == "정렬");
 	auto d = parse_poll(R"({"status":"denied","reason":"no_buyer_role"})");
 	assert(d.status == poll_result::denied && d.reason == "no_buyer_role");
 }
 
 static void test_parse_verify() {
-	auto ok = parse_verify(R"({"valid":true,"sub":"123","roles":["sherbet-buyer","900"]})", 200);
+	auto ok = parse_verify(R"({"valid":true,"sub":"123","roles":["sherbet-buyer","900"],"name":"정렬"})", 200);
 	assert(ok.ok && !ok.upstream_down && ok.sub == "123");
 	assert(ok.roles.size() == 2 && ok.roles[0] == "sherbet-buyer");
+	assert(ok.name == "정렬");
 	auto no = parse_verify(R"({"valid":false})", 200);
 	assert(!no.ok && !no.upstream_down);
 	auto down = parse_verify(R"({"valid":null,"error":"upstream_unavailable"})", 503);

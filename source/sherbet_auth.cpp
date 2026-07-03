@@ -101,7 +101,7 @@ void sherbet::auth::controller::init(const std::string &config_dir_utf8)
 		{
 			std::lock_guard<std::mutex> lk(_mtx);
 			g = decide(vr, _cache, now_unix(), 86400);
-			if (vr.ok) { _cache.last_verified_unix = now_unix(); _pending_save = true; }
+			if (vr.ok) { _cache.last_verified_unix = now_unix(); _pending_save = true; _owner_name = vr.name; }
 		}
 		_authed = (g == gate::authed);
 		_worker_done = true;
@@ -186,6 +186,7 @@ void sherbet::auth::controller::begin_login()
 					_cache.hwid = _hwid;
 					_cache.last_verified_unix = now_unix();
 					_pending_save = true;
+					_owner_name = pr.name;
 					_status.clear();
 					_authed = true;
 					_login_active = false; _worker_done = true; return;
@@ -210,6 +211,22 @@ std::string sherbet::auth::controller::token() const
 {
 	std::lock_guard<std::mutex> lk(_mtx);
 	return _cache.token;
+}
+
+std::string sherbet::auth::controller::owner_name() const
+{
+	std::lock_guard<std::mutex> lk(_mtx);
+	return _owner_name;
+}
+
+std::string sherbet::auth::effective_owner_name(const controller &c)
+{
+	if (enabled()) {
+		std::string dynamic = c.owner_name();
+		if (!dynamic.empty()) return dynamic; // 서버가 릴레이한 로그인 표시이름 우선
+	}
+	if (sherbet::has_owner()) return SHERBET_OWNER; // 오프라인/컴파일 타임 각인 폴백
+	return "";
 }
 
 bool sherbet::auth::controller::take_content(std::string &out)

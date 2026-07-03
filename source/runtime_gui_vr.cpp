@@ -46,8 +46,9 @@ bool reshade::runtime::init_gui_vr()
 	}
 
 	char sherbet_vr_title[128];
-	if (sherbet::has_owner())
-		snprintf(sherbet_vr_title, sizeof(sherbet_vr_title), "Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", sherbet::default_theme().display_name, SHERBET_OWNER);
+	const std::string vr_owner = sherbet::auth::effective_owner_name(_sherbet_auth);
+	if (!vr_owner.empty())
+		snprintf(sherbet_vr_title, sizeof(sherbet_vr_title), "Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", sherbet::default_theme().display_name, vr_owner.c_str());
 	else
 		snprintf(sherbet_vr_title, sizeof(sherbet_vr_title), "Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", sherbet::default_theme().display_name);
 

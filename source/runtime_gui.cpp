@@ -1236,8 +1236,9 @@ void reshade::runtime::draw_gui()
 			// SHERBET 리브랜드 스플래시 제목 (타이틀 폰트 + 액센트 색)
 			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(splash_theme.accent));
-			if (sherbet::has_owner())
-				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", splash_theme.display_name, SHERBET_OWNER);
+			const std::string splash_owner = sherbet::auth::effective_owner_name(_sherbet_auth);
+			if (!splash_owner.empty())
+				ImGui::Text("Sherbet %s \xC2\xB7 %s\xEB\x8B\x98\xEC\x9D\x84 \xEC\x9C\x84\xED\x95\x9C \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80", splash_theme.display_name, splash_owner.c_str());
 			else
 				ImGui::Text("Sherbet %s \xC2\xB7 by \xEC\xA0\x95\xEB\xA0\xAC", splash_theme.display_name);
 			ImGui::PopStyleColor();
@@ -3621,10 +3622,11 @@ void reshade::runtime::draw_gui_about()
 	ImGui::TextUnformatted("\xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEB\xA7\x8C\xEB\x93\xA0 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C"); // "정렬이 만든 커스텀 리쉐이드"
 	ImGui::Spacing();
 	ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEC\xB0\xB8\xEC\x97\xAC", SHERBET_DISCORD_URL); // "디스코드 참여"
-	if (sherbet::has_owner())
+	const std::string about_owner = sherbet::auth::effective_owner_name(_sherbet_auth);
+	if (!about_owner.empty())
 	{
 		ImGui::Spacing();
-		ImGui::Text(ICON_FK_OK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90 : %s", SHERBET_OWNER); // "등록 소유자 :"
+		ImGui::Text(ICON_FK_OK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90 : %s", about_owner.c_str()); // "등록 소유자 :"
 		if (SHERBET_ORDER_NO[0] != '\0')
 			ImGui::Text("   \xEC\xA3\xBC\xEB\xAC\xB8 #%s", SHERBET_ORDER_NO); // "주문 #"
 	}
