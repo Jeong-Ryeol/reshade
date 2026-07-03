@@ -30,6 +30,41 @@ namespace sherbet
 	}
 }
 
+#if defined(_WIN32)
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#include <intrin.h>
+#include <string>
+#include <sstream>
+
+namespace sherbet
+{
+	namespace nodelock
+	{
+		// 하드웨어 지문: CPUID(feature) + C: 볼륨 시리얼. NODELOCK 여부와 무관하게 인증(HWID 결합)에서 쓴다.
+		inline std::string hwid()
+		{
+			int cpu[4] = { 0, 0, 0, 0 };
+			__cpuid(cpu, 1);
+
+			DWORD volume_serial = 0;
+			GetVolumeInformationA("C:\\", nullptr, 0, &volume_serial, nullptr, nullptr, nullptr, 0);
+
+			std::stringstream ss;
+			ss << std::hex << cpu[3] << cpu[0] << "_" << volume_serial;
+			return ss.str();
+		}
+	}
+}
+
+#endif // _WIN32
+
 #if SHERBET_NODELOCK && defined(_WIN32)
 
 #include "sherbet_license.hpp"
@@ -52,20 +87,6 @@ namespace sherbet
 {
 	namespace nodelock
 	{
-		// 하드웨어 지문: CPUID(feature) + C: 볼륨 시리얼 조합.
-		inline std::string hwid()
-		{
-			int cpu[4] = { 0, 0, 0, 0 };
-			__cpuid(cpu, 1);
-
-			DWORD volume_serial = 0;
-			GetVolumeInformationA("C:\\", nullptr, 0, &volume_serial, nullptr, nullptr, nullptr, 0);
-
-			std::stringstream ss;
-			ss << std::hex << cpu[3] << cpu[0] << "_" << volume_serial;
-			return ss.str();
-		}
-
 		// sherbet.lic 을 놓을 경로(호출자가 넘긴 디렉터리 아래). 보통 설정 파일과 같은 폴더.
 		// UTF-8 문자열을 filesystem::path 로 변환해 한글 등 비ASCII 경로에서도 동작(와이드 API).
 		inline std::filesystem::path lic_path(const std::string &dir_utf8)
