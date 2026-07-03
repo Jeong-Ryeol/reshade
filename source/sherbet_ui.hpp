@@ -6,7 +6,9 @@
 
 #include <imgui.h>
 #include <string>
+#include <vector>
 #include "sherbet_theme.hpp"
+#include "sherbet_content_json.hpp"
 
 namespace sherbet
 {
@@ -27,6 +29,7 @@ namespace sherbet
 	void mark_entitled(const char *id);   // 서버가 내려준 엔타이틀 테마 id 등록
 	void clear_entitlements();            // 재페치 전 초기화
 	void apply_content(const std::string &body); // /content/me 응답(JSON) 반영
+	const std::vector<content_item> &content_presets(); // 서버가 내려준 프리셋 목록(마켓 UI)
 
 	// 테마 색/라운드/간격을 ImGui 스타일에 적용 (매 프레임 또는 테마 변경 시 호출)
 	void apply_style(ImGuiStyle &style, const theme &t);

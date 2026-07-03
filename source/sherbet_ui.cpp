@@ -7,6 +7,7 @@
 #include "sherbet_license.hpp"
 #include "sherbet_auth.hpp"
 #include "sherbet_theme_json.hpp"
+#include "sherbet_content_json.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -25,6 +26,8 @@ namespace sherbet
 	static std::string s_active_id = safe_default_id();
 	// 서버(/content/me)가 내려준 엔타이틀 테마 id 집합. 기본(구매) 테마는 별도 처리(항상 열림).
 	static std::set<std::string> s_entitled;
+	// 서버 프리셋 목록(마켓 UI용)
+	static std::vector<content_item> s_content_presets;
 
 	const theme &active_theme()
 	{
@@ -48,6 +51,7 @@ namespace sherbet
 	{
 		s_entitled.clear();
 	}
+	const std::vector<content_item> &content_presets() { return s_content_presets; }
 	// /content/me 응답(JSON)을 반영: 동적 테마 재구성 + 엔타이틀 집합 재구성.
 	// 렌더 스레드에서만 호출(레지스트리/엔타이틀은 렌더 루프가 읽음).
 	void apply_content(const std::string &body)
@@ -65,6 +69,7 @@ namespace sherbet
 		// 활성 테마가 사라진 동적 테마였다면 기본으로 폴백
 		if (find_theme(active_theme_id()) == nullptr)
 			set_active_theme(safe_default_id());
+		s_content_presets = parse_content_items(body, "presets");
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
