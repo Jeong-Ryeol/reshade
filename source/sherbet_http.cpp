@@ -54,12 +54,31 @@ namespace
 		DWORD status = 0, slen = sizeof(status);
 		HttpQueryInfoW(req, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &slen, nullptr);
 
-		// 바디 읽기(루프). InternetReadFile이 false 반환 시(중간 네트워크 오류) EOF로 처리되어 out이 절단될 수 있음.
-		// 호출자는 JSON 파싱으로 유효성 검증(절단된 바디는 파싱 실패 → 오류로 처리됨).
+		// 기대 바디 길이(Content-Length). 있으면 아래에서 수신량과 대조해 절단을 잡는다.
+		DWORD content_length = 0, clen = sizeof(content_length);
+		const bool have_len = HttpQueryInfoW(req, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER,
+			&content_length, &clen, nullptr) != FALSE;
+
+		// 바디 읽기. InternetReadFile이 루프 중간에 false를 반환하면(네트워크 오류/타임아웃) 이는 절단이므로
+		// EOF로 눙치지 않고 실패로 처리한다. 절단된 바디를 성공(200)으로 넘기면 잘린 셰이더 파일이 디스크에
+		// 남아 컴파일 실패·드라이버(dxgi) 크래시로 이어진다 — 여러 파일을 연속 다운로드할 때 특히 잘 터진다.
 		char buf[2048];
 		DWORD read = 0;
-		while (InternetReadFile(req, buf, sizeof(buf), &read) && read > 0)
+		bool truncated = false;
+		for (;;)
+		{
+			if (!InternetReadFile(req, buf, sizeof(buf), &read)) { truncated = true; break; } // 중간 오류 = 절단
+			if (read == 0) break;                                                              // 정상 EOF
 			out.append(buf, read);
+		}
+		if (have_len && out.size() != content_length)
+			truncated = true; // 선언 길이와 실제 수신량 불일치 = 절단
+
+		if (truncated)
+		{
+			out.clear();
+			return 0; // 호출자는 status!=200 로 보고 실패 처리 → 잘린 파일을 저장하지 않는다
+		}
 
 		return static_cast<int>(status);
 	}
