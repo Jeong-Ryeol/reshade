@@ -94,6 +94,51 @@
 
 ---
 
+## 3B. 테마 판매 (테마별 유료 애드온)
+
+**판매 모델 = 테마별 유료 애드온.** 구매(base)엔 기본 테마 **Mint** 하나만 열리고,
+나머지 6개는 산 사람에게만 역할로 열어준다.
+
+### 규칙 (중요)
+- DLL엔 아래 **7개 테마가 이미 내장**돼 있다. 팔 때 파일 업로드 없음 — `themes.json`에 항목만 넣으면 된다.
+- 내장 테마는 `themes.json`에 **`id`+`role`만 있으면** 그 역할 가진 사람에게 열린다(색상은 DLL에 있어 무시됨).
+- **`id`는 아래 표의 값과 정확히 일치**해야 한다(오타 시 안 열림).
+
+| id | 표시명 | 상태 |
+|---|---|---|
+| `mint` | Mint Soda | **기본 무료**(구매자 전원) — 팔 필요 없음 |
+| `peach` | Peach Punch | 판매 대상 |
+| `pink` | Pink Crush | 판매 대상 |
+| `rainbow` | Prism Pop | 판매 대상 |
+| `lavender` | Lavender Dream | 판매 대상 |
+| `noir` | Noir Gold | 판매 대상 |
+| `strawberry` | Strawberry Milk | 판매 대상 |
+
+### 테마 하나 팔 세팅 (예: 딸기)
+1. **디스코드 역할 생성** — 예 `sherbet-strawberry` (봇 역할 아래). 우클릭 → ID 복사.
+2. **봇에 상품 등록** — `/product-add key:strawberry name:딸기 테마 role:@sherbet-strawberry`
+3. **서버 `themes.json`에 항목 추가** (`~/sherbet-auth/content/`):
+   ```json
+   [
+     { "id": "strawberry", "display_name": "Strawberry Milk", "role": "여기에_sherbet-strawberry_역할ID" }
+   ]
+   ```
+   여러 테마를 팔면 배열에 계속 추가:
+   ```json
+   [
+     { "id": "strawberry", "display_name": "Strawberry Milk", "role": "111111111111111111" },
+     { "id": "noir",       "display_name": "Noir Gold",       "role": "222222222222222222" }
+   ]
+   ```
+4. 서버 **재시작 불필요**(mtime 캐시).
+
+판매 시: `/grant member:@손님 product:strawberry` → 딸기 역할 부여 → 손님 클라에서 딸기 테마 잠금 해제.
+
+> 지금 `themes.json` = `[]` (빈 상태). 데모 aurora는 정리함. 팔 테마가 생기면 위처럼 채우면 된다.
+> 손님 마켓에는 내장 7테마가 다 보이고, 안 산 테마는 잠긴 상태로 뜬다(디스코드에서 구매 유도).
+
+---
+
 ## 4. 콘텐츠 업로드 요약 (테마 / 프리셋 / fx)
 
 `~/sherbet-auth/content/` 안의 세 매니페스트 + `files/` 폴더로 끝난다.
@@ -107,7 +152,7 @@
 - `role`: 디스코드 숫자 역할 ID 문자열, `null`=무료.
 - 업로드 후 재빌드·재시작 없음. 손님은 로그인 후 마켓 "내 전용 불러오기"로 받음.
 - **현재 배포 상태:** `presets.json` = 기본 프리셋 `정렬-기본.ini`(role null, 전 구매자) 1개.
-  `effects.json` = 비어 있음(fx 아직 없음). `themes.json` = Aurora 등.
+  `effects.json` = 비어 있음(fx 아직 없음). `themes.json` = `[]`(내장 Mint만 무료로 열림, 유료 테마 세팅 전).
 
 > 참고: 기본 프리셋(`정렬-기본.ini`)의 활성 Technique는 `실사전용.fx` 를 참조한다.
 > 실사 fx를 안 산 사람이 이 프리셋을 적용하면 그 항목만 "이펙트 없음"으로 표시될 뿐
