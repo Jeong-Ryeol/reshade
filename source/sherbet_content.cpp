@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <chrono>
+#include <thread>
 
 namespace
 {
@@ -49,10 +51,22 @@ bool sherbet::content::fetch_file(const std::string &bearer, const std::string &
 {
 	const std::string path = kFilePathPrefix + item_id;      // item_id 는 서버 매니페스트의 불투명 키(ASCII)
 	const std::wstring wpath(path.begin(), path.end());
+
+	// 완전한 응답을 받을 때까지 재시도한다(최대 4회). http::get 은 절단을 status!=200 으로 신호하므로
+	// 절단/일시 오류면 다시 받는다. 잘린 파일을 저장 안 하는 것에서 그치지 않고 실제로 끝까지 받게 함 —
+	// 여러 파일을 연속으로 받을 때 한 파일이 중간에 끊겨도 자동 복구된다.
 	std::string resp;
-	const int status = sherbet::http::get(kHost, wpath.c_str(), resp, bearer.empty() ? nullptr : bearer.c_str());
+	int status = 0;
+	for (int attempt = 0; attempt < 4; ++attempt)
+	{
+		resp.clear();
+		status = sherbet::http::get(kHost, wpath.c_str(), resp, bearer.empty() ? nullptr : bearer.c_str());
+		if (status == 200 && !resp.empty())
+			break; // 완전한 바디 수신
+		std::this_thread::sleep_for(std::chrono::milliseconds(200 * (attempt + 1))); // 점증 백오프
+	}
 	if (status != 200 || resp.empty())
-		return false; // 절단/오류 응답은 http::get 이 status!=200 로 신호 → 여기서 저장 안 함
+		return false; // 4회 재시도에도 완전한 응답을 못 받음 → 저장 안 함(다음 불러오기에서 다시 시도)
 	const std::filesystem::path dest = std::filesystem::u8path(dest_path_utf8);
 	std::error_code ec;
 	std::filesystem::create_directories(dest.parent_path(), ec); // 실패해도 아래 open 에서 재판정
