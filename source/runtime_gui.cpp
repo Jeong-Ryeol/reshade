@@ -363,6 +363,11 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ShowFPS", _show_fps);
 	config.get("OVERLAY", "ShowFrameTime", _show_frametime);
 	config.get("OVERLAY", "ShowPresetName", _show_preset_name);
+	// SHERBET: OSD 를 켬/끔 2단계로 단순화 — 예전 '오버레이일 때만'(값 2) 설정은 '항상'(1)으로 이관
+	if (_show_clock > 1) _show_clock = 1;
+	if (_show_fps > 1) _show_fps = 1;
+	if (_show_frametime > 1) _show_frametime = 1;
+	if (_show_preset_name > 1) _show_preset_name = 1;
 	config.get("OVERLAY", "ShowScreenshotMessage", _show_screenshot_message);
 	if (!global_config().get("OVERLAY", "TutorialProgress", _tutorial_index))
 		config.get("OVERLAY", "TutorialProgress", _tutorial_index);
@@ -2954,15 +2959,20 @@ void reshade::runtime::draw_gui_settings()
 		{
 			ImGui::Spacing();
 
+			// SHERBET: OSD 표시를 켬/끔 2단계로 단순화(예전 3단계 tristate 제거 — 손님 혼동 방지)
+			auto osd_toggle = [&](const char *label, unsigned int &v) {
+				bool on = v != 0;
+				if (ImGui::Checkbox(label, &on)) { v = on ? 1u : 0u; modified = true; }
+			};
 			ImGui::BeginGroup();
-			modified |= imgui::checkbox_tristate(_("Show clock"), &_show_clock);
+			osd_toggle(_("Show clock"), _show_clock);
 			ImGui::SameLine(0, 10);
-			modified |= imgui::checkbox_tristate(_("Show FPS"), &_show_fps);
+			osd_toggle(_("Show FPS"), _show_fps);
 			ImGui::SameLine(0, 10);
-			modified |= imgui::checkbox_tristate(_("Show frame time"), &_show_frametime);
-			modified |= imgui::checkbox_tristate(_("Show preset name"), &_show_preset_name);
+			osd_toggle(_("Show frame time"), _show_frametime);
+			osd_toggle(_("Show preset name"), _show_preset_name);
 			ImGui::EndGroup();
-			ImGui::SetItemTooltip(_("Check to always show, fill out to only show while overlay is open."));
+			ImGui::SetItemTooltip(_("Check to always show on screen."));
 
 			if (_input != nullptr)
 			{
