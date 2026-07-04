@@ -380,6 +380,8 @@ namespace reshade
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.
 		sherbet::auth::controller _sherbet_auth;
 		bool _sherbet_auth_was_locked = false; // 인증 잠금 상태였는지(잠금→인증 전환 시 최초-로드 원샷 재무장용)
+		bool _sherbet_content_was_active = false; // 직전 프레임 콘텐츠 페치 진행중이었는지(완료 엣지 감지용)
+		float _sherbet_content_done_timer = 0.0f; // "불러오기 완료" 배너 남은 표시 시간(초)
 
 		api::state_block _app_state = {};
 		#pragma endregion

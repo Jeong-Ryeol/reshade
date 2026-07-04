@@ -1583,6 +1583,15 @@ void reshade::runtime::draw_gui()
 
 		// SHERBET: 온라인 인증 — 미인증이면 로그인 패널만 노출(효과/오버레이 잠금)
 		_sherbet_auth.tick();
+		// 콘텐츠 페치 완료 엣지 감지(진행중→끝) → "불러오기 완료" 배너 3초 표시
+		{
+			const bool active_now = _sherbet_auth.content_active();
+			if (_sherbet_content_was_active && !active_now)
+				_sherbet_content_done_timer = 3.0f;
+			_sherbet_content_was_active = active_now;
+			if (_sherbet_content_done_timer > 0.0f)
+				_sherbet_content_done_timer -= _imgui_context->IO.DeltaTime;
+		}
 		{ std::string _content; if (_sherbet_auth.take_content(_content)) sherbet::apply_content(_content); }
 		if (_sherbet_auth.take_files_changed())
 		{
@@ -1714,8 +1723,13 @@ void reshade::runtime::draw_gui()
 		}
 
 		// 좌측 레일
-		// 레일 배경은 테마의 bg0 를 살짝 얹는다 — 검정 고정이면 라이트 테마(딸기)에서 회색 띠로 떠 보임
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(sherbet::active_theme().bg0, 110)));
+		// 레일 배경은 테마의 bg0 를 살짝 얹는다 — 검정 고정이면 라이트 테마(딸기)에서 회색 띠로 떠 보임.
+		// 단, 커스텀 사진 배경이 켜져 있으면 테마색이 사진과 충돌하므로 중립적인 어두운 스크림으로 대체한다.
+		const bool sherbet_rail_photo = _sherbet_bg_on && sherbet::has_feature("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
+		const ImU32 sherbet_rail_bg = sherbet_rail_photo
+			? IM_COL32(12, 12, 16, 200)                                   // 사진 위: 어떤 사진이든 어울리는 중립 다크 스크림
+			: sherbet::with_alpha(sherbet::active_theme().bg0, 110);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(sherbet_rail_bg));
 		ImGui::BeginChild("##sherbet_rail", ImVec2(sherbet::rail_width, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		ImGui::PopStyleColor();
 		{
@@ -3926,6 +3940,12 @@ void reshade::runtime::draw_gui_market()
 		}
 		else if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
 			_sherbet_auth.begin_fetch_content();
+		// 완료 배너(마지막 1초 페이드) — 되는지 안 되는지 헷갈리지 않게 명확히 표시
+		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
+		{
+			const float a = ImMin(1.0f, _sherbet_content_done_timer);
+			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, a), ICON_FK_OK "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"); // "불러오기 완료!"
+		}
 		ImGui::Spacing();
 	};
 
@@ -3935,6 +3955,13 @@ void reshade::runtime::draw_gui_market()
 		ImGui::Spacing();
 
 		sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
+
+		// 커스텀 사진 배경 구매자 안내 — 불러온 뒤 '설정' 탭에서 사진을 지정한다는 것을 알려줌
+		if (sherbet::has_feature("custompicture"))
+		{
+			ImGui::TextWrapped("%s", ICON_FK_OK "  \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEC\x82\xAC\xEC\xA7\x84 \xEB\xB0\xB0\xEA\xB2\xBD\xEC\x9D\x80 '\xEC\x84\xA4\xEC\xA0\x95' \xED\x83\xAD > \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD\xEC\x97\x90\xEC\x84\x9C \xEC\xA7\x80\xEC\xA0\x95\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94"); // "커스텀 사진 배경은 '설정' 탭 > 커스텀 배경에서 지정하세요"
+			ImGui::Spacing();
+		}
 
 		const std::vector<const sherbet::theme *> snapshot = sherbet::themes_snapshot();
 		for (std::size_t i = 0; i < snapshot.size(); ++i)
