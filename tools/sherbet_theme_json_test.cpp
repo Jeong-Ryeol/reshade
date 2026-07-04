@@ -53,9 +53,32 @@ static void test_manifest()
     // 색 없는 내장 항목 → ok=false(색 불완전), 그러나 id 는 읽힘
     assert(!v[1].ok);
     assert(v[1].id == "mint");
+    // unlocked 필드 없으면 하위호환으로 true(해제) 간주
+    assert(v[0].unlocked == true);
     // themes 없음 → 빈 벡터
     assert(parse_themes_manifest("{}").empty());
     assert(parse_themes_manifest("garbage").empty());
+}
+
+static void test_unlocked()
+{
+    // 서버가 잠긴 테마도 진열용으로 내려줄 때 unlocked:false 로 표시
+    const char *m = R"({"themes":[
+      {"id":"locked1","display_name":"Locked","unlocked":false,
+       "colors":{"bg0":"#000000ff","bg1":"#000000ff","bg2":"#000000ff",
+         "panel":"#000000ff","panel_alt":"#000000ff","chip":"#000000ff","border":"#000000ff",
+         "text":"#ffffffff","text_dim":"#888888ff","accent":"#5ea6ffff","accent2":"#a9d2ffff",
+         "glow":"#5ea6ff73"}},
+      {"id":"owned1","display_name":"Owned","unlocked":true,
+       "colors":{"bg0":"#000000ff","bg1":"#000000ff","bg2":"#000000ff",
+         "panel":"#000000ff","panel_alt":"#000000ff","chip":"#000000ff","border":"#000000ff",
+         "text":"#ffffffff","text_dim":"#888888ff","accent":"#5ea6ffff","accent2":"#a9d2ffff",
+         "glow":"#5ea6ff73"}}
+    ]})";
+    auto v = parse_themes_manifest(m);
+    assert(v.size() == 2);
+    assert(v[0].id == "locked1" && v[0].ok && v[0].unlocked == false); // 잠김
+    assert(v[1].id == "owned1"  && v[1].ok && v[1].unlocked == true);  // 해제
 }
 
 int main()
@@ -63,6 +86,7 @@ int main()
     test_hex();
     test_particle();
     test_manifest();
+    test_unlocked();
     std::puts("sherbet_theme_json_test: ALL PASS");
     return 0;
 }

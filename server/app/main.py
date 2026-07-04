@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.content import entitled_items, find_item, is_entitled, load_manifest
+from app.content import entitled_items, find_item, is_entitled, items_with_lock, load_manifest
 from app.discord_roles import get_member_role_ids, roles_snapshot
 from app.oauth import build_authorize_url, exchange_code, get_user_identity
 from app.store import PendingStore
@@ -111,7 +111,9 @@ async def content_me(
     except (httpx.HTTPError, KeyError, ValueError):
         return JSONResponse(status_code=503, content={"error": "upstream_unavailable"})
     roles = role_ids or []
-    themes = entitled_items(load_manifest(THEMES_PATH, THEMES_CACHE), roles)
+    # 테마는 파일 다운로드가 없어 잠긴 것도 '진열'로 내려준다(unlocked=false). 프리셋/fx 는
+    # 파일 다운로드를 유발하므로 권한 있는 것만(entitled) 내려 게이트를 유지한다.
+    themes = items_with_lock(load_manifest(THEMES_PATH, THEMES_CACHE), roles)
     presets = entitled_items(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
     effects = entitled_items(load_manifest(EFFECTS_PATH, EFFECTS_CACHE), roles)
     return {"themes": themes, "presets": presets, "effects": effects}

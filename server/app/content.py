@@ -37,6 +37,18 @@ def entitled_items(items: list[dict], role_ids: list[str]) -> list[dict]:
             for it in items if is_entitled(it, role_ids)]
 
 
+def items_with_lock(items: list[dict], role_ids: list[str]) -> list[dict]:
+    """모든 아이템을 반환하되 role 은 제거하고 unlocked(bool)를 붙인다.
+    권한 없는 것도 목록에 포함(마켓 '잠김' 진열용). 역할 ID 는 노출 안 함.
+    파일 다운로드가 없는 콘텐츠(테마)에만 쓴다 — 파일형은 entitled_items 로 게이트."""
+    out = []
+    for it in items:
+        entry = {k: v for k, v in it.items() if k != "role"}
+        entry["unlocked"] = is_entitled(it, role_ids)
+        out.append(entry)
+    return out
+
+
 def find_item(items: list[dict], item_id: str) -> dict | None:
     """id 가 item_id 인 첫 아이템, 없으면 None."""
     for it in items:

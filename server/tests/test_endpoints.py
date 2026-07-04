@@ -293,9 +293,12 @@ def test_content_me_returns_entitled(settings, tmp_path, monkeypatch):
         client = TestClient(app)
         r = client.get("/content/me", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200
-        ids = [t["id"] for t in r.json()["themes"]]
-        assert ids == ["free", "gold"]
-        assert all("role" not in t for t in r.json()["themes"])
+        themes = r.json()["themes"]
+        # 테마는 잠긴 것(plat)도 진열용으로 모두 내려주되 unlocked 로 구분, role 은 숨김
+        ids = [t["id"] for t in themes]
+        assert ids == ["free", "gold", "plat"]
+        assert {t["id"]: t["unlocked"] for t in themes} == {"free": True, "gold": True, "plat": False}
+        assert all("role" not in t for t in themes)
     finally:
         _reset()
 

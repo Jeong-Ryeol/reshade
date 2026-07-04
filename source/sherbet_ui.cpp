@@ -62,8 +62,8 @@ namespace sherbet
 		for (const parsed_theme &pt : themes)
 		{
 			if (pt.id.empty()) continue;
-			mark_entitled(pt.id.c_str());
-			if (find_theme(pt.id.c_str()) == nullptr) // 내장에 없는 신규 → 동적 등록
+			if (pt.unlocked) mark_entitled(pt.id.c_str()); // 해제된 것만 잠금해제. 잠긴 건 진열만
+			if (find_theme(pt.id.c_str()) == nullptr) // 내장에 없는 신규 → 동적 등록(잠겨도 마켓에 뜨게)
 				add_dynamic_theme(pt);
 		}
 		// 활성 테마가 사라진 동적 테마였다면 기본으로 폴백

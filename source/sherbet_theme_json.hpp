@@ -20,6 +20,7 @@ namespace sherbet
 		ImU32 text = 0, text_dim = 0, accent = 0, accent2 = 0, glow = 0;
 		particle particle_shape = particle::spark;
 		bool hue_cycle = false;
+		bool unlocked = true; // 서버가 이 유저에게 해제해줬는지. false면 마켓에 '잠김'으로 진열
 		bool ok = false; // id + 12색 모두 유효할 때만 true
 	};
 
@@ -140,6 +141,7 @@ namespace sherbet
 			std::string ps;
 			if (detail::json_str(obj, "particle", ps)) pt.particle_shape = parse_particle(ps);
 			pt.hue_cycle = detail::json_bool(obj, "hue_cycle", false);
+			pt.unlocked = detail::json_bool(obj, "unlocked", true); // 서버 미표기(구버전)면 해제로 간주(하위호환)
 			const bool colors_ok =
 				detail::color_field(obj, "bg0", pt.bg0) & detail::color_field(obj, "bg1", pt.bg1) &
 				detail::color_field(obj, "bg2", pt.bg2) & detail::color_field(obj, "panel", pt.panel) &

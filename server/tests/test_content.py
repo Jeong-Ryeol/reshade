@@ -57,3 +57,16 @@ def test_is_entitled():
     assert content.is_entitled({"id": "x", "role": "r1"}, ["r1"]) is True
     assert content.is_entitled({"id": "x", "role": "r1"}, ["r2"]) is False
     assert content.is_entitled({"id": "x", "role": "r1"}, None) is False
+
+
+def test_items_with_lock_includes_all_with_flag():
+    items = [
+        {"id": "free", "role": None, "display_name": "F"},
+        {"id": "gold", "role": "111", "display_name": "G"},
+        {"id": "plat", "role": "222", "display_name": "P"},
+    ]
+    out = content.items_with_lock(items, ["111"])
+    # 잠긴 것도 포함(진열), role 은 제거, unlocked 로 구분
+    assert [i["id"] for i in out] == ["free", "gold", "plat"]
+    assert {i["id"]: i["unlocked"] for i in out} == {"free": True, "gold": True, "plat": False}
+    assert all("role" not in i for i in out)
