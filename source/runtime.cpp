@@ -648,6 +648,12 @@ exit_failure:
 	_sherbet_crosshair_srv = {};
 	_sherbet_crosshair_dirty = true; // 디바이스 재생성 후 다시 로드하도록 표시
 
+	_device->destroy_resource(_sherbet_bg_tex);
+	_sherbet_bg_tex = {};
+	_device->destroy_resource_view(_sherbet_bg_srv);
+	_sherbet_bg_srv = {};
+	_sherbet_bg_dirty = true; // 디바이스 재생성 후 다시 로드하도록 표시
+
 	for (const api::resource_view view : _back_buffer_targets)
 		_device->destroy_resource_view(view);
 	_back_buffer_targets.clear();
@@ -713,6 +719,12 @@ void reshade::runtime::on_reset()
 	_device->destroy_resource_view(_sherbet_crosshair_srv);
 	_sherbet_crosshair_srv = {};
 	_sherbet_crosshair_dirty = true; // 디바이스 재생성 후 다시 로드하도록 표시
+
+	_device->destroy_resource(_sherbet_bg_tex);
+	_sherbet_bg_tex = {};
+	_device->destroy_resource_view(_sherbet_bg_srv);
+	_sherbet_bg_srv = {};
+	_sherbet_bg_dirty = true; // 디바이스 재생성 후 다시 로드하도록 표시
 
 	for (const api::resource_view view : _back_buffer_targets)
 		_device->destroy_resource_view(view);

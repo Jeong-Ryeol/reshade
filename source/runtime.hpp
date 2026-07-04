@@ -366,6 +366,16 @@ namespace reshade
 		float _sherbet_crosshair_col[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // 도형 색(딸기 핑크 기본)
 		bool _sherbet_crosshair_dirty = false;   // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
 
+		// SHERBET: 커스텀 배경 이미지 — 오버레이 창 배경을 사용자 사진으로. 'custompicture' 기능 구매자 전용.
+		api::resource _sherbet_bg_tex = {};
+		api::resource_view _sherbet_bg_srv = {};
+		int _sherbet_bg_w = 0, _sherbet_bg_h = 0;
+		bool _sherbet_bg_on = false;
+		std::string _sherbet_bg_file;            // Sherbet-Backgrounds 폴더 기준 이미지 파일명
+		float _sherbet_bg_opacity = 0.9f;        // 이미지 불투명도 0..1
+		float _sherbet_bg_dim = 0.5f;            // 가독성용 어두운 스크림 강도 0..1
+		bool _sherbet_bg_dirty = false;          // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+
 		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.
 		sherbet::auth::controller _sherbet_auth;
@@ -446,6 +456,7 @@ namespace reshade
 		void draw_variable_editor();
 		void draw_technique_editor();
 		void sherbet_load_crosshair(); // 선택된 커스텀 조준점 이미지를 텍스처로 로딩(파일 없으면 해제)
+		void sherbet_load_background(); // 선택된 커스텀 배경 이미지를 텍스처로 로딩(파일 없으면 해제)
 
 		bool init_imgui_resources();
 		void render_imgui_draw_data(api::command_list *cmd_list, ImDrawData *draw_data, api::resource_view rtv);

@@ -26,6 +26,7 @@ namespace sherbet
 	void set_active_theme(const char *id);
 
 	bool is_unlocked(const char *id);
+	bool has_feature(const char *name);   // 서버가 내려준 잠금 기능 보유 여부(예: "custompicture")
 	void mark_entitled(const char *id);   // 서버가 내려준 엔타이틀 테마 id 등록
 	void clear_entitlements();            // 재페치 전 초기화
 	void apply_content(const std::string &body); // /content/me 응답(JSON) 반영

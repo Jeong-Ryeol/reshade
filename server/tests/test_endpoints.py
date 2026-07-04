@@ -384,6 +384,50 @@ def test_content_me_includes_presets_and_effects(settings, tmp_path, monkeypatch
 
 
 @respx.mock
+def test_content_me_features_role_gated(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "THEMES_PATH", _write_json(tmp_path, "themes.json", []))
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", []))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FEATURES_PATH", _write_json(tmp_path, "features.json", [
+            {"id": "custompicture", "role": "role-pic"},
+            {"id": "freefeature", "role": None},
+        ]))
+        main_module.THEMES_CACHE.clear(); main_module.PRESETS_CACHE.clear()
+        main_module.EFFECTS_CACHE.clear(); main_module.FEATURES_CACHE.clear()
+        # role-pic 없는 유저 → custompicture 미포함, 무료 기능만
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.json()["features"] == ["freefeature"]
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_features_unlocked_with_role(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        monkeypatch.setattr(main_module, "THEMES_PATH", _write_json(tmp_path, "themes.json", []))
+        monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", []))
+        monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+        monkeypatch.setattr(main_module, "FEATURES_PATH", _write_json(tmp_path, "features.json", [
+            {"id": "custompicture", "role": "role-pic"},
+        ]))
+        main_module.THEMES_CACHE.clear(); main_module.PRESETS_CACHE.clear()
+        main_module.EFFECTS_CACHE.clear(); main_module.FEATURES_CACHE.clear()
+        tok = issue_token(settings, "user-9", "HW9", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-9").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-pic"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.json()["features"] == ["custompicture"]
+    finally:
+        _reset()
+
+
+@respx.mock
 def test_content_file_serves_entitled_bytes(settings, tmp_path, monkeypatch):
     _reset(); _override(settings)
     try:

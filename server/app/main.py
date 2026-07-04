@@ -21,10 +21,12 @@ _CONTENT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "content
 THEMES_PATH = os.path.join(_CONTENT_DIR, "themes.json")
 PRESETS_PATH = os.path.join(_CONTENT_DIR, "presets.json")
 EFFECTS_PATH = os.path.join(_CONTENT_DIR, "effects.json")
+FEATURES_PATH = os.path.join(_CONTENT_DIR, "features.json")  # 역할로 잠그는 '기능' 목록(예: custompicture)
 FILES_DIR = os.path.join(_CONTENT_DIR, "files")
 THEMES_CACHE: dict = {}
 PRESETS_CACHE: dict = {}
 EFFECTS_CACHE: dict = {}
+FEATURES_CACHE: dict = {}
 
 
 class StartBody(BaseModel):
@@ -116,7 +118,10 @@ async def content_me(
     themes = items_with_lock(load_manifest(THEMES_PATH, THEMES_CACHE), roles)
     presets = entitled_items(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
     effects = entitled_items(load_manifest(EFFECTS_PATH, EFFECTS_CACHE), roles)
-    return {"themes": themes, "presets": presets, "effects": effects}
+    # 기능 잠금: 권한 있는 기능의 id 만 문자열 배열로 내려준다(예: ["custompicture"]).
+    features = [it["id"] for it in load_manifest(FEATURES_PATH, FEATURES_CACHE)
+                if is_entitled(it, roles) and it.get("id")]
+    return {"themes": themes, "presets": presets, "effects": effects, "features": features}
 
 
 @app.get("/content/file/{item_id}")

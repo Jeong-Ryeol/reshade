@@ -28,6 +28,8 @@ namespace sherbet
 	static std::set<std::string> s_entitled;
 	// 서버 프리셋 목록(마켓 UI용)
 	static std::vector<content_item> s_content_presets;
+	// 서버가 내려준 잠금 기능 집합(예: "custompicture")
+	static std::set<std::string> s_features;
 
 	const theme &active_theme()
 	{
@@ -46,6 +48,12 @@ namespace sherbet
 	void mark_entitled(const char *id)
 	{
 		if (id && id[0] != '\0') s_entitled.insert(id);
+	}
+	bool has_feature(const char *name)
+	{
+		if (!name) return false;
+		if (!auth::enabled()) return true; // 개발 빌드: 기능 전부 열림
+		return s_features.count(name) > 0;
 	}
 	void clear_entitlements()
 	{
@@ -70,6 +78,10 @@ namespace sherbet
 		if (find_theme(active_theme_id()) == nullptr)
 			set_active_theme(safe_default_id());
 		s_content_presets = parse_content_items(body, "presets");
+		// 잠금 기능 집합 재구성(예: "custompicture")
+		s_features.clear();
+		for (const std::string &f : auth::json_string_array(body, "features"))
+			if (!f.empty()) s_features.insert(f);
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)

@@ -391,7 +391,13 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "CrosshairOpacity", _sherbet_crosshair_opacity);
 	  config.get("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
 	  config.get("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
-	  _sherbet_crosshair_dirty = true; } // 로드 후 이미지 재로딩 예약
+	  _sherbet_crosshair_dirty = true; // 로드 후 이미지 재로딩 예약
+	  // 커스텀 배경 이미지 설정(custompicture 기능 전용)
+	  config.get("SHERBET", "BgOn", _sherbet_bg_on);
+	  config.get("SHERBET", "BgFile", _sherbet_bg_file);
+	  config.get("SHERBET", "BgOpacity", _sherbet_bg_opacity);
+	  config.get("SHERBET", "BgDim", _sherbet_bg_dim);
+	  _sherbet_bg_dirty = true; } // 로드 후 이미지 재로딩 예약
 
 	ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.get("STYLE", "Alpha", imgui_style.Alpha);
@@ -507,6 +513,10 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "CrosshairOpacity", _sherbet_crosshair_opacity);
 	config.set("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
 	config.set("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
+	config.set("SHERBET", "BgOn", _sherbet_bg_on);
+	config.set("SHERBET", "BgFile", _sherbet_bg_file);
+	config.set("SHERBET", "BgOpacity", _sherbet_bg_opacity);
+	config.set("SHERBET", "BgDim", _sherbet_bg_dim);
 
 	const ImGuiStyle &imgui_style = _imgui_context->Style;
 	config.set("STYLE", "Alpha", imgui_style.Alpha);
@@ -1543,7 +1553,29 @@ void reshade::runtime::draw_gui()
 			const ImVec2 sherbet_vmin = ImGui::GetWindowPos();
 			const ImVec2 sherbet_vmax = ImVec2(sherbet_vmin.x + ImGui::GetWindowSize().x, sherbet_vmin.y + ImGui::GetWindowSize().y);
 			static float s_sherbet_time = 0.0f; s_sherbet_time += _imgui_context->IO.DeltaTime;
-			sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time, 12.0f);
+			// SHERBET: custompicture 기능 구매자 — 켜져 있고 이미지가 로딩됐으면 그라디언트 대신 사진 배경 + 가독성 스크림
+			if (_sherbet_bg_dirty)
+				sherbet_load_background();
+			const bool sherbet_photo_bg = _sherbet_bg_on && sherbet::has_feature("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
+			if (sherbet_photo_bg)
+			{
+				// 창을 덮도록 커버-핏(비율 유지, 넘치는 부분은 잘라냄) UV 계산
+				const float win_w = sherbet_vmax.x - sherbet_vmin.x, win_h = sherbet_vmax.y - sherbet_vmin.y;
+				const float img_ar = static_cast<float>(_sherbet_bg_w) / static_cast<float>(_sherbet_bg_h);
+				const float win_ar = win_h > 0.0f ? win_w / win_h : 1.0f;
+				ImVec2 uv0(0, 0), uv1(1, 1);
+				if (img_ar > win_ar) { const float u = win_ar / img_ar; uv0.x = 0.5f - u * 0.5f; uv1.x = 0.5f + u * 0.5f; }
+				else                 { const float v = img_ar / win_ar; uv0.y = 0.5f - v * 0.5f; uv1.y = 0.5f + v * 0.5f; }
+				const float op = ImClamp(_sherbet_bg_opacity, 0.0f, 1.0f);
+				sherbet_bg->AddImageRounded(_sherbet_bg_srv.handle, sherbet_vmin, sherbet_vmax, uv0, uv1, IM_COL32(255, 255, 255, static_cast<int>(op * 255.0f)), 12.0f);
+				const int dim = static_cast<int>(ImClamp(_sherbet_bg_dim, 0.0f, 1.0f) * 255.0f);
+				if (dim > 0)
+					sherbet_bg->AddRectFilled(sherbet_vmin, sherbet_vmax, IM_COL32(0, 0, 0, dim), 12.0f);
+			}
+			else
+			{
+				sherbet::draw_background(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time, 12.0f);
+			}
 			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
 			// 얇은 테두리(카드 느낌)
 			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
@@ -2463,6 +2495,58 @@ void reshade::runtime::sherbet_load_crosshair()
 
 	stbi_image_free(pixels);
 }
+// 선택된 커스텀 배경 이미지를 텍스처로 로딩한다(Sherbet-Backgrounds 폴더). 끔이거나 파일이 없으면 해제만.
+// 렌더 스레드(draw_gui)에서만 호출 — _device 사용이 안전한 시점.
+void reshade::runtime::sherbet_load_background()
+{
+	_sherbet_bg_dirty = false;
+	if (_sherbet_bg_srv != 0) { _device->destroy_resource_view(_sherbet_bg_srv); _sherbet_bg_srv = {}; }
+	if (_sherbet_bg_tex != 0) { _device->destroy_resource(_sherbet_bg_tex); _sherbet_bg_tex = {}; }
+	_sherbet_bg_w = _sherbet_bg_h = 0;
+
+	if (!_sherbet_bg_on || _sherbet_bg_file.empty())
+		return; // 끔이거나 선택 파일 없음 → 이미지 불필요
+
+	const std::filesystem::path path = _config_path.parent_path() / L"Sherbet-Backgrounds" / std::filesystem::u8path(_sherbet_bg_file);
+	std::error_code ec;
+	if (!std::filesystem::exists(path, ec))
+		return;
+
+	std::ifstream file(path, std::ios::binary);
+	if (!file)
+		return;
+	const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	if (data.empty())
+		return;
+
+	int w = 0, h = 0, ch = 0;
+	stbi_uc *const pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(data.data()), static_cast<int>(data.size()), &w, &h, &ch, STBI_rgb_alpha);
+	if (pixels == nullptr)
+		return;
+
+	const api::subresource_data initial = { pixels, static_cast<uint32_t>(w * 4), static_cast<uint32_t>(w * 4 * h) };
+	if (_device->create_resource(
+			api::resource_desc(w, h, 1, 1, api::format::r8g8b8a8_unorm, 1, api::memory_heap::default_, api::resource_usage::shader_resource | api::resource_usage::copy_dest),
+			&initial, api::resource_usage::shader_resource, &_sherbet_bg_tex))
+	{
+		if (_device->create_resource_view(_sherbet_bg_tex, api::resource_usage::shader_resource, api::resource_view_desc(api::format::r8g8b8a8_unorm), &_sherbet_bg_srv))
+		{
+			_sherbet_bg_w = w;
+			_sherbet_bg_h = h;
+		}
+		else
+		{
+			_device->destroy_resource(_sherbet_bg_tex);
+			_sherbet_bg_tex = {};
+		}
+	}
+	else
+	{
+		_sherbet_bg_tex = {};
+	}
+
+	stbi_image_free(pixels);
+}
 void reshade::runtime::draw_gui_settings()
 {
 	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
@@ -2552,6 +2636,62 @@ void reshade::runtime::draw_gui_settings()
 		xh_changed |= ImGui::SliderFloat2("\xEC\x9C\x84\xEC\xB9\x98 X/Y", _sherbet_crosshair_off, -400.0f, 400.0f, "%.0f"); // "위치 X/Y"
 
 		if (xh_changed)
+			modified = true;
+		ImGui::Spacing();
+	}
+
+	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로. 'custompicture' 기능 구매자에게만 노출.
+	if (sherbet::has_feature("custompicture") &&
+		ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD")) // "커스텀 배경"
+	{
+		bool bg_changed = false;
+		bg_changed |= ImGui::Checkbox("\xEB\xB0\xB0\xEA\xB2\xBD \xEC\xBC\x9C\xEA\xB8\xB0", &_sherbet_bg_on); // "배경 켜기"
+		if (bg_changed)
+			_sherbet_bg_dirty = true;
+
+		const std::filesystem::path bg_dir = _config_path.parent_path() / L"Sherbet-Backgrounds";
+		static std::vector<std::string> bg_files;
+		static bool bg_need_scan = true;
+		if (bg_need_scan)
+		{
+			bg_need_scan = false;
+			bg_files.clear();
+			std::error_code ec;
+			std::filesystem::create_directories(bg_dir, ec); // 없으면 폴더 생성
+			for (std::filesystem::directory_iterator it(bg_dir, ec), end; it != end; it.increment(ec))
+			{
+				if (!it->is_regular_file(ec)) continue;
+				std::string e = it->path().extension().u8string();
+				std::transform(e.begin(), e.end(), e.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				if (e == ".png" || e == ".jpg" || e == ".jpeg" || e == ".bmp" || e == ".tga")
+					bg_files.push_back(it->path().filename().u8string());
+			}
+		}
+
+		if (ImGui::BeginCombo("\xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80 \xED\x8C\x8C\xEC\x9D\xBC##bg", _sherbet_bg_file.empty() ? "-" : _sherbet_bg_file.c_str())) // "이미지 파일"
+		{
+			for (const std::string &f : bg_files)
+				if (ImGui::Selectable(f.c_str(), f == _sherbet_bg_file))
+				{ _sherbet_bg_file = f; _sherbet_bg_dirty = true; bg_changed = true; }
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled("%s", "\xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\x84 \xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEB\x84\xA3\xEA\xB3\xA0 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEC\x84\xB8\xEC\x9A\x94"); // 안내
+
+		if (ImGui::Button("\xED\x8F\xB4\xEB\x8D\x94 \xEC\x97\xB4\xEA\xB8\xB0##bg")) // "폴더 열기"
+		{
+			std::error_code ec;
+			std::filesystem::create_directories(bg_dir, ec);
+			utils::open_explorer(bg_dir);
+			bg_need_scan = true;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("\xEC\x83\x88\xEB\xA1\x9C\xEA\xB3\xA0\xEC\xB9\xA8##bg")) // "새로고침"
+			bg_need_scan = true;
+
+		bg_changed |= ImGui::SliderFloat("\xED\x88\xAC\xEB\xAA\x85\xEB\x8F\x84##bg", &_sherbet_bg_opacity, 0.0f, 1.0f, "%.2f"); // "투명도"
+		bg_changed |= ImGui::SliderFloat("\xEC\x96\xB4\xEB\x91\xA1\xEA\xB2\x8C(\xEA\xB0\x80\xEB\x8F\x85\xEC\x84\xB1)", &_sherbet_bg_dim, 0.0f, 1.0f, "%.2f"); // "어둡게(가독성)"
+
+		if (bg_changed)
 			modified = true;
 		ImGui::Spacing();
 	}
