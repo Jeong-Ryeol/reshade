@@ -229,6 +229,11 @@ std::string sherbet::auth::effective_owner_name(const controller &c)
 	return "";
 }
 
+bool sherbet::auth::controller::content_active() const
+{
+	return _content_active.load();
+}
+
 bool sherbet::auth::controller::take_content(std::string &out)
 {
 	if (!_content_ready.load())

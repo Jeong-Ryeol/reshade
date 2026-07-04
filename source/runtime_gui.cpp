@@ -3757,18 +3757,31 @@ void reshade::runtime::draw_gui_market()
 	if (sherbet::pill_button("\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B \xEB\xA7\x88\xEC\xBC\x93", seg == 1)) seg = 1; // "프리셋 마켓"
 	ImGui::Spacing();
 
+	// "내 전용 불러오기" 버튼 — 테마/프리셋 두 세그먼트 공용. 페치 중이면 클릭을 막고
+	// 로딩 표시로 바꿔, 되는지 안 되는지 헷갈려 연타하는 것을 방지한다.
+	auto sherbet_fetch_button = [&]() {
+		if (!(sherbet::auth::enabled() && _sherbet_auth.is_authed()))
+			return;
+		if (_sherbet_auth.content_active())
+		{
+			const int dots = 1 + static_cast<int>(ImGui::GetTime() * 2.0) % 3; // 1~3, 애니메이션용
+			char buf[64];
+			snprintf(buf, sizeof(buf), ICON_FK_DOWNLOAD "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91%.*s", dots, "..."); // "불러오는 중"
+			ImGui::BeginDisabled();
+			sherbet::pill_button(buf, true);
+			ImGui::EndDisabled();
+		}
+		else if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
+			_sherbet_auth.begin_fetch_content();
+		ImGui::Spacing();
+	};
+
 	if (seg == 0)
 	{
 		ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x9C \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEC\x84\xB8\xEC\x9A\x94."); // "오버레이 테마. 구매한 테마는 디스코드 로그인 후 불러오세요."
 		ImGui::Spacing();
 
-		// "내 전용 불러오기" — 인증 상태에서만. /content/me 페치(비동기).
-		if (sherbet::auth::enabled() && _sherbet_auth.is_authed())
-		{
-			if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
-				_sherbet_auth.begin_fetch_content();
-			ImGui::Spacing();
-		}
+		sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
 
 		const std::vector<const sherbet::theme *> snapshot = sherbet::themes_snapshot();
 		for (std::size_t i = 0; i < snapshot.size(); ++i)
@@ -3805,12 +3818,7 @@ void reshade::runtime::draw_gui_market()
 		ImGui::TextUnformatted("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 '\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0'\xEB\xA1\x9C \xEB\xB0\x9B\xEC\x95\x84\xEC\x9A\x94."); // "디스코드 로그인 후 '내 전용 불러오기'로 받아요."
 		ImGui::Spacing();
 
-		if (sherbet::auth::enabled() && _sherbet_auth.is_authed())
-		{
-			if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
-				_sherbet_auth.begin_fetch_content();
-			ImGui::Spacing();
-		}
+		sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
 
 		const std::vector<sherbet::content_item> &presets = sherbet::content_presets();
 		if (presets.empty())

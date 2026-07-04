@@ -36,6 +36,7 @@ namespace sherbet
 			std::string token() const;
 			std::string owner_name() const; // 서버가 릴레이한 디스코드 표시이름(공용 DLL 각인용). 미인증/미수신이면 빈 문자열.
 			void begin_fetch_content();
+			bool content_active() const; // /content/me 페치가 진행 중이면 true (버튼 로딩 표시·연타 방지용)
 			bool take_content(std::string &out);
 			bool take_files_changed();
 
