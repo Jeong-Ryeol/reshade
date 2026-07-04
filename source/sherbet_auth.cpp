@@ -265,6 +265,11 @@ void sherbet::auth::controller::begin_fetch_content()
 				body, _config_dir + "/Sherbet-Presets", _config_dir + "/Sherbet-Fx");
 			for (const auto &t : targets) {
 				if (_stop.load()) break;
+				// 이미 있는 파일은 덮어쓰지 않는다 — 사용자가 조정한 프리셋/설정값을 보존하고
+				// 새로 권한 생긴 콘텐츠만 받는다. (기본값으로 리셋되는 문제 방지)
+				std::error_code ec;
+				if (std::filesystem::exists(std::filesystem::u8path(t.dest_path), ec))
+					continue;
 				sherbet::content::fetch_file(bearer, t.id, t.dest_path); // 실패는 조용히 스킵
 			}
 			{
