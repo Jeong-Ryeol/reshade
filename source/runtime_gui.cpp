@@ -357,6 +357,7 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "ClockFormat", _clock_format);
 	config.get("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.get("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
+	config.get("OVERLAY", "SherbetOsdHorizontal", _sherbet_osd_horizontal);
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
 	config.get("OVERLAY", "ShowClock", _show_clock);
 	config.get("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
@@ -488,6 +489,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "ClockFormat", _clock_format);
 	config.set("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.set("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
+	config.set("OVERLAY", "SherbetOsdHorizontal", _sherbet_osd_horizontal);
 	config.set("OVERLAY", "ShowClock", _show_clock);
 	config.set("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
 	config.set("OVERLAY", "ShowFPS", _show_fps);
@@ -1387,8 +1389,11 @@ void reshade::runtime::draw_gui()
 		if (ImGuiWindow *const fps_window = ImGui::FindWindowByName("OSD"))
 		{
 			fps_window_size  = fps_window->Size;
+			const int osd_lines = _sherbet_osd_horizontal
+				? ((show_clock || show_fps || show_frametime || show_preset_name) ? 1 : 0)
+				: ((show_clock ? 1 : 0) + (show_fps ? 1 : 0) + (show_frametime ? 1 : 0) + (show_preset_name ? 1 : 0));
 			fps_window_size.y = std::max(fps_window_size.y, _imgui_context->Style.FramePadding.y * 4.0f + _imgui_context->Style.ItemSpacing.y +
-				(_imgui_context->Style.ItemSpacing.y + _imgui_context->Style.FontSizeBase * _fps_scale) * ((show_clock ? 1 : 0) + (show_fps ? 1 : 0) + (show_frametime ? 1 : 0) + (show_preset_name ? 1 : 0)));
+				(_imgui_context->Style.ItemSpacing.y + _imgui_context->Style.FontSizeBase * _fps_scale) * osd_lines);
 		}
 
 		// SHERBET: 자유 X/Y 배치 (화면 비율)
@@ -1419,6 +1424,22 @@ void reshade::runtime::draw_gui()
 		const float content_width = ImGui::GetContentRegionAvail().x;
 		char temp[32];
 
+		// SHERBET: 가로 배치 옵션 — 켜면 항목을 " | " 로 이어 한 줄로, 끄면 기존처럼 세로로 쌓는다.
+		std::string osd_row; // 가로 모드 누적 버퍼
+		auto osd_emit = [&](const char *text, int len) {
+			if (_sherbet_osd_horizontal)
+			{
+				if (!osd_row.empty()) osd_row += "  |  ";
+				osd_row.append(text, len);
+			}
+			else
+			{
+				if (osd_align_right) // Align text to the right of the window(세로 모드만)
+					ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(text, text + len).x + _imgui_context->Style.ItemSpacing.x);
+				ImGui::TextUnformatted(text, text + len);
+			}
+		};
+
 		if (show_clock)
 		{
 			const std::time_t t = std::chrono::system_clock::to_time_t(_current_time);
@@ -1438,30 +1459,30 @@ void reshade::runtime::draw_gui()
 				temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%.4d-%.2d-%.2d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 				break;
 			}
-			if (osd_align_right) // Align text to the right of the window
-				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
-			ImGui::TextUnformatted(temp, temp + temp_size);
+			osd_emit(temp, temp_size);
 		}
 		if (show_fps)
 		{
 			const int temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%.0f fps", imgui_io.Framerate);
-			if (osd_align_right)
-				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
-			ImGui::TextUnformatted(temp, temp + temp_size);
+			osd_emit(temp, temp_size);
 		}
 		if (show_frametime)
 		{
 			const int temp_size = ImFormatString(temp, IM_ARRAYSIZE(temp), "%5.2f ms", 1000.0f / imgui_io.Framerate);
-			if (osd_align_right)
-				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(temp, temp + temp_size).x + _imgui_context->Style.ItemSpacing.x);
-			ImGui::TextUnformatted(temp, temp + temp_size);
+			osd_emit(temp, temp_size);
 		}
 		if (show_preset_name)
 		{
 			const std::string preset_name = _current_preset_path.stem().u8string();
+			osd_emit(preset_name.c_str(), static_cast<int>(preset_name.size()));
+		}
+
+		// 가로 모드: 누적한 한 줄을 그린다(오른쪽 정렬 지원)
+		if (_sherbet_osd_horizontal && !osd_row.empty())
+		{
 			if (osd_align_right)
-				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(preset_name.c_str(), preset_name.c_str() + preset_name.size()).x + _imgui_context->Style.ItemSpacing.x);
-			ImGui::TextUnformatted(preset_name.c_str(), preset_name.c_str() + preset_name.size());
+				ImGui::SetCursorPosX(content_width - ImGui::CalcTextSize(osd_row.c_str(), osd_row.c_str() + osd_row.size()).x + _imgui_context->Style.ItemSpacing.x);
+			ImGui::TextUnformatted(osd_row.c_str(), osd_row.c_str() + osd_row.size());
 		}
 
 		ImGui::Dummy(ImVec2(200, 0)); // Force a minimum window width
@@ -3142,6 +3163,8 @@ void reshade::runtime::draw_gui_settings()
 
 			modified |= ImGui::SliderFloat("OSD X", &_sherbet_osd_x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			modified |= ImGui::SliderFloat("OSD Y", &_sherbet_osd_y, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			modified |= ImGui::Checkbox("OSD \xEA\xB0\x80\xEB\xA1\x9C\xEB\xA1\x9C \xEB\xB0\xB0\xEC\xB9\x98", &_sherbet_osd_horizontal); // "OSD 가로로 배치"
+			ImGui::SetItemTooltip("\xEC\x8B\x9C\xEA\xB3\x84\xC2\xB7FPS\xC2\xB7\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xED\x83\x80\xEC\x9E\x84\xC2\xB7\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEB\xAA\x85\xEC\x9D\x84 \xEC\x84\xB8\xEB\xA1\x9C\xEA\xB0\x80 \xEC\x95\x84\xEB\x8B\x8C \xEA\xB0\x80\xEB\xA1\x9C \xED\x95\x9C \xEC\xA4\x84\xEB\xA1\x9C \xED\x91\x9C\xEC\x8B\x9C"); // 툴팁
 		}
 	}
 
