@@ -664,6 +664,8 @@ git commit -m "업데이트 URL 전체 접두사 피닝 추가
 **Interfaces:**
 - Consumes: Task 4의 헤더
 - Produces: `bool pe_check(const unsigned char *head, std::size_t len, bool want_x64)`
+- Produces(내부): `bool detail::pe_bounds_ok(std::uint32_t e_lfanew, std::size_t len)` — 경계 판정만
+  떼어낸 순수 술어(역참조 없음). 테스트가 크래시에 기대지 않고 결정적으로 검증하기 위한 것.
 
 **왜 필요한가:** sha256만으로는 "유효한 내 아키텍처 DLL인가"를 전혀 못 본다. x64 슬롯에 32비트 DLL을 넣는 운영 실수 한 번이면, 다음 실행에 임포트가 `ERROR_BAD_EXE_FORMAT`으로 실패하고 **롤백 코드조차 안 도는 브릭**이 된다(스펙 §8).
 
@@ -713,6 +715,81 @@ static std::string raw_pe(std::size_t len, std::uint32_t e_lfanew, bool write_nt
 		b[o + 23] = static_cast<char>((characteristics >> 8) & 0xff);
 	}
 	return b;
+}
+
+// ── 경계 술어 직접 테스트 ────────────────────────────────────────────────────
+// 버퍼도 역참조도 없다. 아래 test_pe_check 의 랩어라운드 단언들은 "잘못된 판정이
+// 크래시로 드러나기"를 기대하는데, 그건 운이다: 버퍼가 4GB 이상 예약 매핑 안에 있으면
+// 폴트 없이 false 가 나오고, ReShade32(x86) 빌드에선 head + 0xFFFFFFFF 가 head - 1 로
+// 감겨 항상 매핑된 주소라 100% 조용히 통과한다. 그래서 판정 자체를 여기서 직접 본다.
+static void test_pe_bounds_ok() {
+	using sherbet::update::detail::pe_bounds_ok;
+
+	// 랩 구간 전체 [0xFFFFFFE8, 0xFFFFFFFF] × 대표 len 3종 — 예외 없이 전부 거부.
+	// 0xFFFFFFE8 + 24 == 0 부터 0xFFFFFFFF + 24 == 23 까지가 32비트에서 감기는 구간이다.
+	const std::size_t wrap_lens[] = { 64, 4096, 4194304 };
+	for (std::size_t len : wrap_lens)
+		for (std::uint64_t e = 0xFFFFFFE8ull; e <= 0xFFFFFFFFull; ++e)
+			assert(!pe_bounds_ok(static_cast<std::uint32_t>(e), len));
+
+	// 0x40 최소값 — DOS 헤더 안을 가리키는 e_lfanew 는 무효
+	assert(!pe_bounds_ok(0, 4096));
+	assert(!pe_bounds_ok(0x3f, 4096));
+	assert(pe_bounds_ok(0x40, 4096));
+
+	// 정확 경계: 허용되는 최대 e_lfanew 는 len - 24, len - 23 부터 거부
+	const std::size_t exact_lens[] = { 88, 4096, 4194304 };
+	for (std::size_t len : exact_lens) {
+		const std::uint32_t max_ok = static_cast<std::uint32_t>(len - 24);
+		assert(pe_bounds_ok(max_ok, len));
+		assert(!pe_bounds_ok(max_ok + 1, len)); // len - 23
+	}
+
+	// 작은 len — e_lfanew >= 0x40 과 e_lfanew <= len - 24 를 동시에 만족할 수 없으므로
+	// 전부 거부여야 한다(len < 88 이면 어떤 값도 통과 못 함). pe_check 의 len < 0x40
+	// 가드와 어긋나지 않는다.
+	const std::size_t small_lens[] = { 0, 23, 24, 63 };
+	for (std::size_t len : small_lens) {
+		assert(!pe_bounds_ok(0, len));
+		assert(!pe_bounds_ok(0x40, len));
+		assert(!pe_bounds_ok(static_cast<std::uint32_t>(len), len));
+		assert(!pe_bounds_ok(0xFFFFFFFFu, len));
+	}
+
+	// 평범한 케이스
+	assert(pe_bounds_ok(0x80, 4096));
+
+	// ── 옛 결함 술어를 모델링해 이 테스트가 그것을 잡는다는 것을 증명한다 ──────
+	// 옛 표현식은 `e_lfanew + 24 <= len` 을 32비트 폭에서 계산했다. 아래는 그 산술을
+	// 그대로 재현한 것이다 — 역참조가 없으니 플랫폼·매핑 운에 기대지 않는다.
+	// e_lfanew = 0xFFFFFFFF 에서 0xFFFFFFFF + 24 == 23 이라 옛 판정은 '경계 안'이라
+	// 답하고 새 술어는 '밖'이라 답한다. 두 답이 다르다는 사실이 곧 위 랩 구간
+	// 단언들이 옛 코드에서 반드시 실패한다는 증명이다.
+	{
+		const std::uint32_t e = 0xFFFFFFFFu;
+		const std::size_t len = 64;
+		const bool old_verdict = (e >= 0x40) && (static_cast<std::uint32_t>(e + 24u) <= len);
+		const bool new_verdict = pe_bounds_ok(e, len);
+		assert(old_verdict);            // 옛 코드는 이걸 '읽어도 안전' 으로 봤다
+		assert(!new_verdict);           // 새 술어는 거부한다
+		assert(old_verdict != new_verdict);
+	}
+
+	// ── pe_check 와 술어가 어긋나지 않는지 ────────────────────────────────────
+	// 경계 안이면 유효한 x64 DLL 헤더를 실제로 채워 넣으므로 두 판정이 정확히 같아야 한다.
+	// (랩 구간 값은 여기 넣지 않는다 — raw_pe 가 그 오프셋에 쓰려 들면 테스트 하네스가
+	//  OOB 쓰기로 죽는다. 랩 구간의 pe_check 쪽 커버리지는 test_pe_check 에 있다.)
+	{
+		struct { std::uint32_t e; std::size_t len; } sample[] = {
+			{ 0x40, 88 }, { 0x41, 88 }, { 0x3f, 4096 }, { 0, 4096 },
+			{ 0x80, 4096 }, { 4072, 4096 }, { 4073, 4096 }, { 0x40, 63 }, { 0x40, 24 },
+		};
+		for (const auto &s : sample) {
+			const bool ok = pe_bounds_ok(s.e, s.len);
+			const std::string b = raw_pe(s.len, s.e, ok, 0x8664, 0x2000);
+			assert(pe_check(reinterpret_cast<const unsigned char *>(b.data()), s.len, true) == ok);
+		}
+	}
 }
 
 static void test_pe_check() {
@@ -783,13 +860,23 @@ static void test_pe_check() {
 }
 ```
 
-`main()`에 `test_pe_check();` 추가.
+`main()`에 `test_pe_bounds_ok(); test_pe_check();` 추가. **`test_pe_bounds_ok` 를 먼저 부른다** —
+경계 판정이 깨졌으면 역참조가 일어나기 전에 깨끗한 assert 실패로 죽어야 한다.
 
 > **경계검사 오버플로가 이 태스크의 핵심 위험이다.** `pe_check` 의 입력은 네트워크에서 받은
-> 4MB 파일 그대로이고 `e_lfanew` 4바이트는 공격자가 통째로 고른다. 위 테스트 목록에
-> `0xFFFFFFFF`·`0xFFFFFFE8`(랩 하한)·`0xFFFFFFF0`·정확 경계쌍(`e_lfanew + 24 == len` 통과,
-> `== len + 1` 거부)·`len == 0` + 유효 포인터가 **반드시** 있어야 한다. 이것들이 없으면
-> 32비트 덧셈 랩어라운드가 테스트를 다 통과한 채로 살아남는다.
+> 4MB 파일 그대로이고 `e_lfanew` 4바이트는 공격자가 통째로 고른다.
+>
+> **`pe_check` 를 버퍼로 때리는 테스트만으로는 이 결함을 잡을 수 없다.** 옛 코드가 랩된
+> 포인터를 역참조해도 폴트가 난다는 보장이 없기 때문이다: 버퍼가 4GB 이상 예약 매핑 안에
+> 있으면 조용히 false 가 나오고, 이 수정이 존재하는 이유인 **ReShade32(x86) 빌드에선
+> `head + 0xFFFFFFFF` 가 `head - 1` 로 감겨 항상 매핑된 주소**라 100% 조용히 통과한다.
+> 그래서 경계 판정을 `detail::pe_bounds_ok` 로 떼어내 **역참조 없이 직접** 단언한다:
+> 랩 구간 `[0xFFFFFFE8, 0xFFFFFFFF]` 전수 × `len` 64/4096/4194304, `0x40` 미만(0·0x3f),
+> 정확 경계쌍(`len - 24` 통과 / `len - 23` 거부), 작은 `len`(0·23·24·63), 평범한 케이스,
+> 그리고 **옛 표현식을 모델링한 단언**(`(uint32)(0xFFFFFFFF + 24) <= 64` 는 참 → 옛 판정과
+> 새 판정이 다름)까지. 마지막 항목이 "이 테스트가 옛 결함을 잡는다"는 플랫폼 무관 증명이다.
+> `test_pe_check` 쪽 랩어라운드 단언들은 폴트가 실제로 나는 플랫폼에서만 유효한 보너스로
+> 남겨 둔다(삭제하지 않는다).
 
 - [ ] **Step 2: 테스트가 실패하는지 확인**
 
@@ -801,6 +888,20 @@ Expected: FAIL — `use of undeclared identifier 'pe_check'`
 `sherbet_update_core.hpp`의 `split_https_url` 뒤에 삽입:
 
 ```cpp
+		namespace detail
+		{
+			// pe_check 의 경계 판정만 떼어낸 순수 술어. 역참조가 없어 어떤 플랫폼에서도
+			// 결정적으로 단위테스트할 수 있다 — 잘못된 판정이 크래시로 드러나기를 기대하지 않는다.
+			// e_lfanew + 24 를 계산하지 않는다: uint32_t 든 32비트 size_t 든 감기기 때문에,
+			// len 을 먼저 가드하고 뺄셈으로 비교한다.
+			inline bool pe_bounds_ok(std::uint32_t e_lfanew, std::size_t len)
+			{
+				if (len < 24) return false;              // len - 24 언더플로 방지
+				if (e_lfanew < 0x40) return false;       // DOS 헤더 안을 가리키는 값은 무효
+				return static_cast<std::size_t>(e_lfanew) <= len - 24;
+			}
+		}
+
 		// 다운로드한 파일의 앞부분이 우리 아키텍처의 유효한 DLL 인지 본다.
 		// sha256 은 '바이트가 온전한가' 만 보고 '무엇인가' 는 못 본다. x64 슬롯에 32비트 DLL 을
 		// 넣는 운영 실수 한 번이면 다음 실행에 ERROR_BAD_EXE_FORMAT 으로 롤백 코드조차 안 돈다.
@@ -814,14 +915,12 @@ Expected: FAIL — `use of undeclared identifier 'pe_check'`
 				(static_cast<std::uint32_t>(head[0x3e]) << 16) |
 				(static_cast<std::uint32_t>(head[0x3f]) << 24);
 			// COFF 헤더는 서명 4바이트 + 20바이트. Characteristics 는 서명 기준 +22.
-			// ⚠️ `e_lfanew + 24 > len` 으로 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이 32비트에서
-			// 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고 head + 0xFFFFFFFF 를
-			// 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로 고르는 값이다.
-			// size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다. 반드시
-			// 이미 넓혀진 len 쪽에서 뺀다. 위 `len < 0x40` 로 len >= 64 라 아래 가드는
-			// 중복이지만, len - 24 가 언더플로하지 않음을 한 줄 안에서 증명해 둔다.
-			if (len < 24) return false;
-			if (e_lfanew < 0x40 || static_cast<std::size_t>(e_lfanew) > len - 24) return false;
+			// ⚠️ 여기서 `e_lfanew + 24 > len` 을 직접 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이
+			// 32비트에서 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고
+			// head + 0xFFFFFFFF 를 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로
+			// 고르는 값이다. size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다.
+			// 판정은 detail::pe_bounds_ok 에 있다 — 역참조가 없어 결정적으로 단위테스트된다.
+			if (!detail::pe_bounds_ok(e_lfanew, len)) return false;
 			const unsigned char *nt = head + e_lfanew;
 			if (nt[0] != 'P' || nt[1] != 'E' || nt[2] != 0 || nt[3] != 0) return false;
 			const std::uint16_t machine =

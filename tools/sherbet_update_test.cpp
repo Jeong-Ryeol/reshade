@@ -190,6 +190,81 @@ static std::string raw_pe(std::size_t len, std::uint32_t e_lfanew, bool write_nt
 	return b;
 }
 
+// ── 경계 술어 직접 테스트 ────────────────────────────────────────────────────
+// 버퍼도 역참조도 없다. 아래 test_pe_check 의 랩어라운드 단언들은 "잘못된 판정이
+// 크래시로 드러나기"를 기대하는데, 그건 운이다: 버퍼가 4GB 이상 예약 매핑 안에 있으면
+// 폴트 없이 false 가 나오고, ReShade32(x86) 빌드에선 head + 0xFFFFFFFF 가 head - 1 로
+// 감겨 항상 매핑된 주소라 100% 조용히 통과한다. 그래서 판정 자체를 여기서 직접 본다.
+static void test_pe_bounds_ok() {
+	using sherbet::update::detail::pe_bounds_ok;
+
+	// 랩 구간 전체 [0xFFFFFFE8, 0xFFFFFFFF] × 대표 len 3종 — 예외 없이 전부 거부.
+	// 0xFFFFFFE8 + 24 == 0 부터 0xFFFFFFFF + 24 == 23 까지가 32비트에서 감기는 구간이다.
+	const std::size_t wrap_lens[] = { 64, 4096, 4194304 };
+	for (std::size_t len : wrap_lens)
+		for (std::uint64_t e = 0xFFFFFFE8ull; e <= 0xFFFFFFFFull; ++e)
+			assert(!pe_bounds_ok(static_cast<std::uint32_t>(e), len));
+
+	// 0x40 최소값 — DOS 헤더 안을 가리키는 e_lfanew 는 무효
+	assert(!pe_bounds_ok(0, 4096));
+	assert(!pe_bounds_ok(0x3f, 4096));
+	assert(pe_bounds_ok(0x40, 4096));
+
+	// 정확 경계: 허용되는 최대 e_lfanew 는 len - 24, len - 23 부터 거부
+	const std::size_t exact_lens[] = { 88, 4096, 4194304 };
+	for (std::size_t len : exact_lens) {
+		const std::uint32_t max_ok = static_cast<std::uint32_t>(len - 24);
+		assert(pe_bounds_ok(max_ok, len));
+		assert(!pe_bounds_ok(max_ok + 1, len)); // len - 23
+	}
+
+	// 작은 len — e_lfanew >= 0x40 과 e_lfanew <= len - 24 를 동시에 만족할 수 없으므로
+	// 전부 거부여야 한다(len < 88 이면 어떤 값도 통과 못 함). pe_check 의 len < 0x40
+	// 가드와 어긋나지 않는다.
+	const std::size_t small_lens[] = { 0, 23, 24, 63 };
+	for (std::size_t len : small_lens) {
+		assert(!pe_bounds_ok(0, len));
+		assert(!pe_bounds_ok(0x40, len));
+		assert(!pe_bounds_ok(static_cast<std::uint32_t>(len), len));
+		assert(!pe_bounds_ok(0xFFFFFFFFu, len));
+	}
+
+	// 평범한 케이스
+	assert(pe_bounds_ok(0x80, 4096));
+
+	// ── 옛 결함 술어를 모델링해 이 테스트가 그것을 잡는다는 것을 증명한다 ──────
+	// 옛 표현식은 `e_lfanew + 24 <= len` 을 32비트 폭에서 계산했다. 아래는 그 산술을
+	// 그대로 재현한 것이다 — 역참조가 없으니 플랫폼·매핑 운에 기대지 않는다.
+	// e_lfanew = 0xFFFFFFFF 에서 0xFFFFFFFF + 24 == 23 이라 옛 판정은 '경계 안'이라
+	// 답하고 새 술어는 '밖'이라 답한다. 두 답이 다르다는 사실이 곧 위 랩 구간
+	// 단언들이 옛 코드에서 반드시 실패한다는 증명이다.
+	{
+		const std::uint32_t e = 0xFFFFFFFFu;
+		const std::size_t len = 64;
+		const bool old_verdict = (e >= 0x40) && (static_cast<std::uint32_t>(e + 24u) <= len);
+		const bool new_verdict = pe_bounds_ok(e, len);
+		assert(old_verdict);            // 옛 코드는 이걸 '읽어도 안전' 으로 봤다
+		assert(!new_verdict);           // 새 술어는 거부한다
+		assert(old_verdict != new_verdict);
+	}
+
+	// ── pe_check 와 술어가 어긋나지 않는지 ────────────────────────────────────
+	// 경계 안이면 유효한 x64 DLL 헤더를 실제로 채워 넣으므로 두 판정이 정확히 같아야 한다.
+	// (랩 구간 값은 여기 넣지 않는다 — raw_pe 가 그 오프셋에 쓰려 들면 테스트 하네스가
+	//  OOB 쓰기로 죽는다. 랩 구간의 pe_check 쪽 커버리지는 test_pe_check 에 있다.)
+	{
+		struct { std::uint32_t e; std::size_t len; } sample[] = {
+			{ 0x40, 88 }, { 0x41, 88 }, { 0x3f, 4096 }, { 0, 4096 },
+			{ 0x80, 4096 }, { 4072, 4096 }, { 4073, 4096 }, { 0x40, 63 }, { 0x40, 24 },
+		};
+		for (const auto &s : sample) {
+			const bool ok = pe_bounds_ok(s.e, s.len);
+			const std::string b = raw_pe(s.len, s.e, ok, 0x8664, 0x2000);
+			assert(pe_check(reinterpret_cast<const unsigned char *>(b.data()), s.len, true) == ok);
+		}
+	}
+}
+
 static void test_pe_check() {
 	const unsigned short DLL = 0x2000; // IMAGE_FILE_DLL
 	const std::string x64 = make_pe(0x8664, DLL);
@@ -265,6 +340,7 @@ int main() {
 	test_is_sha256_hex();
 	test_url_allowed();
 	test_split_https_url();
+	test_pe_bounds_ok(); // pe_check 보다 먼저 — 경계 판정이 깨졌으면 역참조 전에 깨끗이 실패한다
 	test_pe_check();
 	std::printf("sherbet_update_core: ALL PASS\n");
 	return 0;

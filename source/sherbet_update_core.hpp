@@ -216,6 +216,20 @@ namespace sherbet
 			return true;
 		}
 
+		namespace detail
+		{
+			// pe_check 의 경계 판정만 떼어낸 순수 술어. 역참조가 없어 어떤 플랫폼에서도
+			// 결정적으로 단위테스트할 수 있다 — 잘못된 판정이 크래시로 드러나기를 기대하지 않는다.
+			// e_lfanew + 24 를 계산하지 않는다: uint32_t 든 32비트 size_t 든 감기기 때문에,
+			// len 을 먼저 가드하고 뺄셈으로 비교한다.
+			inline bool pe_bounds_ok(std::uint32_t e_lfanew, std::size_t len)
+			{
+				if (len < 24) return false;              // len - 24 언더플로 방지
+				if (e_lfanew < 0x40) return false;       // DOS 헤더 안을 가리키는 값은 무효
+				return static_cast<std::size_t>(e_lfanew) <= len - 24;
+			}
+		}
+
 		// 다운로드한 파일의 앞부분이 우리 아키텍처의 유효한 DLL 인지 본다.
 		// sha256 은 '바이트가 온전한가' 만 보고 '무엇인가' 는 못 본다. x64 슬롯에 32비트 DLL 을
 		// 넣는 운영 실수 한 번이면 다음 실행에 ERROR_BAD_EXE_FORMAT 으로 롤백 코드조차 안 돈다.
@@ -229,14 +243,12 @@ namespace sherbet
 				(static_cast<std::uint32_t>(head[0x3e]) << 16) |
 				(static_cast<std::uint32_t>(head[0x3f]) << 24);
 			// COFF 헤더는 서명 4바이트 + 20바이트. Characteristics 는 서명 기준 +22.
-			// ⚠️ `e_lfanew + 24 > len` 으로 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이 32비트에서
-			// 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고 head + 0xFFFFFFFF 를
-			// 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로 고르는 값이다.
-			// size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다. 반드시
-			// 이미 넓혀진 len 쪽에서 뺀다. 위 `len < 0x40` 로 len >= 64 라 아래 가드는
-			// 중복이지만, len - 24 가 언더플로하지 않음을 한 줄 안에서 증명해 둔다.
-			if (len < 24) return false;
-			if (e_lfanew < 0x40 || static_cast<std::size_t>(e_lfanew) > len - 24) return false;
+			// ⚠️ 여기서 `e_lfanew + 24 > len` 을 직접 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이
+			// 32비트에서 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고
+			// head + 0xFFFFFFFF 를 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로
+			// 고르는 값이다. size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다.
+			// 판정은 detail::pe_bounds_ok 에 있다 — 역참조가 없어 결정적으로 단위테스트된다.
+			if (!detail::pe_bounds_ok(e_lfanew, len)) return false;
 			const unsigned char *nt = head + e_lfanew;
 			if (nt[0] != 'P' || nt[1] != 'E' || nt[2] != 0 || nt[3] != 0) return false;
 			const std::uint16_t machine =
