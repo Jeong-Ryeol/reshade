@@ -9,6 +9,13 @@
 #include "hook_manager.hpp"
 #include "addon_manager.hpp"
 #include "sherbet_owner.h"
+// ⚠️ 아직 아무것도 호출하지 않는다 — **MSVC 가 이 헤더를 실제로 컴파일하게 만드는 것**이
+// 목적이다. 자동 업데이트의 판정 로직 전부(파서·상태머신·URL 피닝·SHA-256)가 이 헤더에
+// 있는데, 지금까지 어떤 출하 TU 도 포함하지 않아 맥 clang 만 통과했다. 문자열 이스케이프
+// 경계(C7744)처럼 clang 이 받아 주고 MSVC 가 거부하는 것들이 실제로 있었고(c966d30e),
+// 그걸 7분짜리 CI 왕복 대신 여기서 매 빌드마다 확인한다.
+// §5.2 의 on_process_attach(Phase 3)가 어차피 이 TU 에서 이 헤더를 쓴다.
+#include "sherbet_update_core.hpp"
 #include <Windows.h>
 #include <Psapi.h>
 #include <delayimp.h> // Delay-load helpers

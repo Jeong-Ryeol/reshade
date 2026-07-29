@@ -791,6 +791,9 @@
     <ClInclude Include="source\sherbet_ui.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_update_core.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\state_block.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
