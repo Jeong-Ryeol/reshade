@@ -25,6 +25,29 @@ def load_manifest(path: str, mtime_cache: dict) -> list[dict]:
     return data
 
 
+def load_json_object(path: str, mtime_cache: dict) -> dict:
+    """JSON 객체(dict) 파일을 읽는다. load_manifest 와 같은 mtime 캐시·fail-soft 규약.
+    파일 없음/깨짐/비-dict 이면 빈 dict — 업데이트 안내가 없을 뿐 서비스는 살아 있어야 한다."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime_cache.pop("mtime", None)
+        mtime_cache.pop("data", None)
+        return {}
+    if mtime_cache.get("mtime") == mtime and "data" in mtime_cache:
+        return mtime_cache["data"]
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        data = {}
+    mtime_cache["mtime"] = mtime
+    mtime_cache["data"] = data
+    return data
+
+
 def is_entitled(item: dict, role_ids: list[str]) -> bool:
     """item 의 role 이 falsy(무료)이거나 사용자 역할 ID 목록에 포함되면 True."""
     role = item.get("role")
