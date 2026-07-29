@@ -332,6 +332,93 @@ static void test_pe_check() {
 	}
 }
 
+// ── 매니페스트 파싱 ─────────────────────────────────────────────────────────
+static const char *kGoodManifest =
+	"{\"schema\":\"1\",\"arch\":\"x64\",\"version\":\"1.4.0\",\"min_version\":\"1.0.0\","
+	"\"allow_downgrade\":false,\"size\":\"4312576\","
+	"\"sha256\":\"3f1c9a4b5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80\","
+	"\"url\":\"https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll\","
+	"\"notice\":\"\",\"notes\":\"OSD 가로 배치 추가\\n로그인 만료 버그 수정\"}";
+
+static void test_parse_manifest_good() {
+	const info u = parse_manifest(kGoodManifest, "x64");
+	assert(u.ok);
+	assert(u.version == "1.4.0");
+	assert(u.min_version == "1.0.0");
+	assert(u.size == 4312576ULL);
+	assert(u.sha256 == "3f1c9a4b5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80");
+	assert(!u.allow_downgrade);
+	assert(u.notes.find('\n') != std::string::npos); // \n 이스케이프가 실제 개행으로 풀렸는지
+	assert(u.notice.empty());
+}
+
+static void test_parse_manifest_rejects() {
+	// arch 불일치 — 서버가 x64 를 줬는데 우리가 x86 빌드
+	assert(!parse_manifest(kGoodManifest, "x86").ok);
+
+	// 빈 바디 / 잡음 / 503 바디
+	assert(!parse_manifest("", "x64").ok);
+	assert(!parse_manifest("not json at all", "x64").ok);
+	assert(!parse_manifest("{\"error\":\"upstream_unavailable\"}", "x64").ok);
+
+	std::string m;
+	// schema 불일치
+	m = kGoodManifest; m.replace(m.find("\"schema\":\"1\""), 12, "\"schema\":\"2\"");
+	assert(m.find("\"schema\":\"2\"") != std::string::npos && m.find("\"arch\":\"x64\"") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+
+	// sha256 이 64hex 아님
+	m = kGoodManifest; m.replace(m.find("3f1c9a"), 6, "ZZZZZZ");
+	assert(m.find("\"sha256\":\"ZZZZZZ4b5d6e") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+
+	// url 이 피닝 접두사 밖
+	m = kGoodManifest;
+	m.replace(m.find("Jeong-Ryeol/reshade"), 19, "attacker/evil00000");
+	assert(m.find("\"url\":\"https://github.com/attacker/evil00000/releases/download/") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+
+	// size 범위 밖 (1MiB 미만)
+	m = kGoodManifest; m.replace(m.find("\"4312576\""), 9, "\"1000\"  ");
+	assert(m.find("\"size\":\"1000\"  ,") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+
+	// size 가 문자열이 아니라 숫자 — json_string 이 못 읽으므로 거부되어야 한다
+	m = kGoodManifest; m.replace(m.find("\"size\":\"4312576\""), 16, "\"size\":4312576  ");
+	assert(m.find("\"size\":4312576  ,") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+
+	// version 파싱 불가
+	m = kGoodManifest; m.replace(m.find("\"version\":\"1.4.0\""), 17, "\"version\":\"abc\"  ");
+	assert(m.find("\"version\":\"abc\"  ,\"min_version\":\"1.0.0\"") != std::string::npos);
+	assert(!parse_manifest(m, "x64").ok);
+}
+
+static void test_parse_manifest_key_confusion() {
+	// "version" 이 "min_version" 에 오탐하면 안 된다.
+	// json_string 은 따옴표를 포함한 needle 로 찾으므로 "version" 은 "min_version" 안의
+	// version 에 걸리지 않는다(앞이 " 가 아니라 _ 이므로). 이 성질을 회귀로 못 박는다.
+	const info u = parse_manifest(kGoodManifest, "x64");
+	assert(u.version == "1.4.0" && u.min_version == "1.0.0");
+}
+
+static void test_parse_manifest_truncated() {
+	// 잘린 입력 전수. 진짜 범위 초과 검사는 이 루프를 -fsanitize=address 로 돌릴 때 나온다
+	// (호스트 테스트를 ASan 으로도 빌드해 돌리는 것이 이 테스트의 실질적 검증 수단이다).
+	// 그와 별개로 여기서는 "ok=true 면 내용도 반드시 일관적" 을 못 박는다 — ok 여부를
+	// 통째로 무시하면 쓰레기를 ok 로 돌려주는 파서도 통과해버리기 때문이다.
+	const std::string full = kGoodManifest;
+	for (std::size_t n = 0; n < full.size(); ++n) {
+		const info u = parse_manifest(full.substr(0, n), "x64");
+		if (!u.ok) continue;                       // 잘린 입력이 거부되는 것은 정상
+		version3 tmp;
+		assert(parse_version(u.version, tmp));     // ok 라면 버전은 반드시 파싱된다
+		assert(is_sha256_hex(u.sha256));
+		assert(url_allowed(u.url));
+		assert(u.size >= (1ULL << 20) && u.size <= (32ULL << 20));
+	}
+}
+
 int main() {
 	test_parse_version();
 	test_version_cmp();
@@ -342,6 +429,10 @@ int main() {
 	test_split_https_url();
 	test_pe_bounds_ok(); // pe_check 보다 먼저 — 경계 판정이 깨졌으면 역참조 전에 깨끗이 실패한다
 	test_pe_check();
+	test_parse_manifest_good();
+	test_parse_manifest_rejects();
+	test_parse_manifest_key_confusion();
+	test_parse_manifest_truncated();
 	std::printf("sherbet_update_core: ALL PASS\n");
 	return 0;
 }

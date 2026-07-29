@@ -7,6 +7,8 @@
 // 판정 로직 100% 를 여기 몰아넣어 맥 clang 으로 실제 단위테스트한다(tools/sherbet_update_test.cpp).
 #pragma once
 
+#include "sherbet_auth_core.hpp"
+
 #include <string>
 #include <cstddef>
 #include <cstdint>
@@ -259,6 +261,70 @@ namespace sherbet
 			if (machine != want) return false;
 			if ((characteristics & 0x2000) == 0) return false; // IMAGE_FILE_DLL
 			return true;
+		}
+
+		struct info
+		{
+			bool ok = false;
+			std::string version, url, sha256, min_version, notes, notice;
+			unsigned long long size = 0;
+			bool allow_downgrade = false;
+		};
+
+		namespace detail
+		{
+			// "4312576" → 4312576. 숫자만 허용, 빈 문자열·오버플로 거부.
+			inline bool parse_u64(const std::string &s, unsigned long long &out)
+			{
+				if (s.empty() || s.size() > 20) return false;
+				unsigned long long acc = 0;
+				for (char c : s)
+				{
+					if (c < '0' || c > '9') return false;
+					if (acc > (0xffffffffffffffffULL - static_cast<unsigned>(c - '0')) / 10) return false;
+					acc = acc * 10 + static_cast<unsigned>(c - '0');
+				}
+				out = acc;
+				return true;
+			}
+		}
+
+		// 서버 응답(평면 JSON)을 판정 가능한 형태로. 하나라도 규약을 어기면 ok=false.
+		// arch 는 컴파일 타임 결정값("x64" 또는 "x86")을 넘긴다.
+		inline info parse_manifest(const std::string &body, const char *arch)
+		{
+			info u;
+			if (body.empty() || arch == nullptr) return u;
+
+			std::string s;
+			// schema
+			if (!sherbet::auth::json_string(body, "schema", s) || s != "1") return u;
+			// arch echo — 서버가 다른 아키텍처를 줬으면 절대 설치하지 않는다
+			if (!sherbet::auth::json_string(body, "arch", s) || s != arch) return u;
+			// version
+			if (!sherbet::auth::json_string(body, "version", u.version)) return u;
+			version3 probe;
+			if (!parse_version(u.version, probe)) return u;
+			// min_version 은 선택. 없거나 파싱 불가면 빈 문자열로 두고 is_mandatory 가 false 를 낸다.
+			if (sherbet::auth::json_string(body, "min_version", s) && parse_version(s, probe))
+				u.min_version = s;
+			// sha256
+			if (!sherbet::auth::json_string(body, "sha256", u.sha256)) return u;
+			if (!is_sha256_hex(u.sha256)) return u;
+			// url
+			if (!sherbet::auth::json_string(body, "url", u.url)) return u;
+			if (!url_allowed(u.url)) return u;
+			// size — 서버가 문자열로 직렬화한다(숫자로 내면 json_string 이 못 읽는다)
+			if (!sherbet::auth::json_string(body, "size", s)) return u;
+			if (!detail::parse_u64(s, u.size)) return u;
+			if (u.size < (1ULL << 20) || u.size > (32ULL << 20)) return u; // 1MiB ~ 32MiB
+			// 선택 필드
+			sherbet::auth::json_string(body, "notes", u.notes);
+			sherbet::auth::json_string(body, "notice", u.notice);
+			u.allow_downgrade = (sherbet::auth::json_bool_or_null(body, "allow_downgrade") == 1);
+
+			u.ok = true;
+			return u;
 		}
 	}
 }
