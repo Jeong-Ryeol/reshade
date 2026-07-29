@@ -446,6 +446,12 @@ namespace reshade
 		void draw_gui();
 		void draw_gui_vr();
 
+		// SHERBET: 자동 업데이트 배너(스펙 §6 '배너 배치'). 상태에 따라 제안/진행률/완료/
+		// 롤백/필수를 그린다. 그릴 것이 없으면 아무것도 그리지 않으므로 호출부는 조건을
+		// 몰라도 된다. compact=true 는 스플래시용 한 줄.
+		// ⚠️ 오버레이 안에만 두면 Home 키를 안 누르는 구매자에게 영영 도달하지 않는다 —
+		//    홈 탭 · 인증 게이트 패널 · 스플래시 **세 곳**에서 부른다.
+		void draw_sherbet_update_card(bool compact);
 		void draw_gui_home();
 		void draw_gui_settings();
 		void draw_gui_statistics();

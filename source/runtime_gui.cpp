@@ -1268,6 +1268,9 @@ void reshade::runtime::draw_gui()
 			// 판매 제품이라 reshade.me 업데이트 안내는 숨기고, 디스코드만 노출
 			ImGui::TextDisabled("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C: %s", SHERBET_DISCORD_URL); // "디스코드: ..."
 
+			// (c) 부팅 스플래시 한 줄 — 오버레이를 한 번도 안 여는 구매자에게 도달하는 유일한 경로
+			draw_sherbet_update_card(true);
+
 			ImGui::Spacing();
 
 			if (_reload_remaining_effects != 0 && _reload_remaining_effects != std::numeric_limits<size_t>::max())
@@ -1664,11 +1667,8 @@ void reshade::runtime::draw_gui()
 
 			ImGui::Spacing();
 			ImGui::Spacing();
-			{
-				const char *link = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
-				ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(link).x) * 0.5f);
-				ImGui::TextLinkOpenURL(link, SHERBET_DISCORD_URL);
-			}
+			// 복구 수단([그래도 다시 시도] · 새 버전이 있으면 [업데이트])
+			draw_sherbet_update_card(false);
 
 			ImGui::End();
 		}
@@ -1709,6 +1709,12 @@ void reshade::runtime::draw_gui()
 
 			ImGui::Spacing();
 			centered_text("\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEC\x9E\x90\xEB\x8F\x99\xEC\x9C\xBC\xEB\xA1\x9C \xEC\xA7\x84\xED\x96\x89\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "로그인 후 자동으로 진행됩니다"
+
+			// (b) 인증 게이트 패널 안 — ★ **로그인이 깨진 빌드를 구제하는 유일한 경로다.**
+			// 매니페스트 엔드포인트가 미인증이라 여기서도 업데이트가 실제로 동작한다.
+			ImGui::Spacing();
+			ImGui::Spacing();
+			draw_sherbet_update_card(false);
 
 			ImGui::End();
 		}
@@ -2002,8 +2008,157 @@ void reshade::runtime::draw_gui()
 	ImGui::SetCurrentContext(backup_context);
 }
 
+
+// SHERBET: 자동 업데이트 배너(스펙 §6 '배너 배치', §3.5, §5.4 R13).
+// ⚠️ **오버레이 안에만 두면 Home 키를 안 누르는 구매자에게 영영 도달하지 않는다.**
+//    그래서 홈 탭 최상단 · 인증 게이트 패널 안 · 부팅 스플래시 세 곳에서 부른다.
+//    (인증 게이트 안이 특히 중요하다 — 로그인이 깨진 빌드를 구제하는 유일한 경로다.)
+void reshade::runtime::draw_sherbet_update_card(bool compact)
+{
+	sherbet::update::controller &uc = sherbet::update::instance();
+
+	const bool personal = uc.personalized();
+	const bool done = uc.need_restart();
+	const bool busy = uc.busy();
+	const bool offer = uc.has_offer();
+	// ⚠️ 롤백 배너는 **rolled_back_version() 으로** 판단한다. safe_mode() 로 하면 안 된다 —
+	//    safe_mode 는 게이트1(마커 version == 지금 매핑된 버전)이 걸려 있어 롤백에 성공한
+	//    다음 부팅부터 false 가 되는데, 그때 배너까지 사라지면 [그래도 다시 시도] 가 함께
+	//    사라져 고객이 블랙리스트를 풀 방법이 영영 없어진다.
+	const std::string rolled = sherbet::update::rolled_back_version();
+
+	const sherbet::theme &t = sherbet::active_theme();
+	const ImVec4 col_accent = ImGui::ColorConvertU32ToFloat4(t.accent);
+	const ImVec4 col_danger = ImVec4(1.0f, 0.42f, 0.42f, 1.0f);
+
+	if (compact)
+	{
+		// 스플래시 한 줄. 개인화 빌드는 아무것도 띄우지 않는다(매 실행 노이즈가 된다).
+		if (personal)
+			return;
+		char line[320];
+		if (done)
+			std::snprintf(line, sizeof(line), "Sherbet \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\x99\x84\xEB\xA3\x8C \xC2\xB7 " "\xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x84 \xEA\xBB\x90\xEB\x8B\xA4 \xEC\xBC\x9C\xEB\xA9\xB4 v%s \xEA\xB0\x80 \xEC\xA0\x81\xEC\x9A\xA9\xEB\x8F\xBC\xEC\x9A\x94", uc.offer_version().c_str()); // "업데이트 완료 · 게임을 껐다 켜면 v… 가 적용돼요"
+		else if (busy)
+			std::snprintf(line, sizeof(line), "Sherbet \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 %d%%", static_cast<int>(uc.progress() * 100.0f)); // "업데이트 …%"
+		else if (offer)
+			std::snprintf(line, sizeof(line), "Sherbet \xEC\x83\x88 \xEB\xB2\x84\xEC\xA0\x84 v%s \xC2\xB7 " "Home \xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x8C\xEB\xAC\xB4\xEC\x84\x9C \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94", uc.offer_version().c_str()); // "새 버전 v… · Home 키를 눌러서 업데이트하세요"
+		else if (!rolled.empty())
+			std::snprintf(line, sizeof(line), "Sherbet v%s \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8\xEB\xA5\xBC \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94 \xC2\xB7 " "Home \xED\x82\xA4", rolled.c_str()); // "v… 업데이트를 되돌렸어요 · Home 키"
+		else
+			return;
+		ImGui::TextColored(col_accent, "%s", line);
+		return;
+	}
+
+	if (!personal && !done && !busy && !offer && rolled.empty())
+		return; // 그릴 것이 없다
+
+	sherbet::begin_card("##sherbet_update_card");
+
+	if (personal)
+	{
+		// 개인화 빌드 보호: 공용 릴리스가 각인·전용 프리셋을 지우고 노드락을 조용히 끈다.
+		ImGui::TextDisabled(ICON_FK_INFO_CIRCLE "  \xEA\xB0\x9C\xEC\x9D\xB8 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "개인 빌드는 디스코드로 문의해 주세요"
+		sherbet::end_card();
+		return;
+	}
+
+	// ── 롤백 안내 + 복구 수단(§5.4 R13) ────────────────────────────────────
+	if (!rolled.empty())
+	{
+		ImGui::TextColored(col_danger, ICON_FK_UNDO "  v%s \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8\xEA\xB0\x80 \xEC\x8B\xA4\xED\x8C\xA8\xED\x95\xB4\xEC\x84\x9C \xEC\x9D\xB4\xEC\xA0\x84 \xEB\xB2\x84\xEC\xA0\x84\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94", rolled.c_str()); // "v… 업데이트가 실패해서 이전 버전으로 되돌렸어요"
+		ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98", SHERBET_DISCORD_URL); // "디스코드 문의"
+		ImGui::SameLine();
+		// ★ [그래도 다시 시도] — 빼지 말 것. 자동 롤백 오탐(교체 rename 이 그 순간 AV 에
+		//   거부된 경우 등)의 비용을 클릭 1회로 떨어뜨린다. 이게 없으면 그 고객은 그
+		//   업데이트를 영영 못 받는다.
+		ImGui::BeginDisabled(busy);
+		if (sherbet::pill_button(ICON_FK_REFRESH "  \xEA\xB7\xB8\xEB\x9E\x98\xEB\x8F\x84 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x8B\x9C\xEB\x8F\x84", false)) // "그래도 다시 시도"
+			uc.clear_blacklist();
+		ImGui::EndDisabled();
+		if (done || busy || offer)
+			ImGui::Separator();
+	}
+
+	if (done)
+	{
+		ImGui::TextColored(col_accent, ICON_FK_OK "  \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\x99\x84\xEB\xA3\x8C \xE2\x80\x94 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x84 \xEA\xBB\x90\xEB\x8B\xA4 \xEC\xBC\x9C\xEB\xA9\xB4 v%s \xEA\xB0\x80 \xEC\xA0\x81\xEC\x9A\xA9\xEB\x8F\xBC\xEC\x9A\x94", uc.offer_version().c_str()); // "업데이트 완료 — 게임을 껐다 켜면 v… 가 적용돼요"
+	}
+	else if (busy)
+	{
+		const std::string st = uc.status_text(); // ⚠️ 락 안에서 복사된 값
+		if (!st.empty())
+			ImGui::TextUnformatted(st.c_str());
+		// 폭이 좁을 때 음수가 되지 않게 자른다(ImGui 는 음수를 '남은 폭에서 빼기' 로 해석한다).
+		const float bar_w = ImMax(60.0f, ImGui::GetContentRegionAvail().x - 110.0f);
+		ImGui::ProgressBar(uc.progress(), ImVec2(bar_w, 0.0f));
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_CANCEL "  \xEC\xB7\xA8\xEC\x86\x8C", false)) // "취소"
+			uc.cancel();
+	}
+	else if (offer)
+	{
+		const bool mandatory = uc.is_mandatory();
+		if (mandatory)
+			ImGui::TextColored(col_danger, ICON_FK_EXCLAMATION_CIRCLE "  \xED\x95\x84\xEC\x88\x98 \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 v%s", uc.offer_version().c_str()); // "필수 업데이트 v…"
+		else
+			ImGui::TextColored(col_accent, ICON_FK_DOWNLOAD "  \xEC\x83\x88 \xEB\xB2\x84\xEC\xA0\x84 v%s \xEC\x9D\xB4 \xEB\x82\x98\xEC\x99\x94\xEC\x96\xB4\xEC\x9A\x94", uc.offer_version().c_str()); // "새 버전 v… 이 나왔어요"
+
+		// 변경내역 — 줄바꿈을 그대로 렌더한다(json_string 이 \n 을 실제 개행으로 푼다).
+		// 표시 전용이므로 길이만 자른다. 서버 오타 하나가 배너를 화면 밖으로 밀지 않게.
+		std::string notes = uc.offer_notes();
+		if (notes.size() > 600)
+		{
+			notes.resize(600);
+			// ⚠️ UTF-8 경계까지 뒤로 물린다. 바이트 단위로 자르면 한글 한 글자가 반토막 나
+			//    깨진 글리프가 렌더된다(notes 는 서버가 주는 임의 길이 텍스트다).
+			while (!notes.empty() && (static_cast<unsigned char>(notes.back()) & 0xC0) == 0x80)
+				notes.pop_back();
+			if (!notes.empty() && (static_cast<unsigned char>(notes.back()) & 0x80) != 0)
+				notes.pop_back(); // 후속 바이트가 잘린 선행 바이트
+			notes += "\xE2\x80\xA6"; // "…"
+		}
+		if (!notes.empty())
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(t.text_dim));
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted(notes.c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::PopStyleColor();
+		}
+
+		if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8", true)) // "업데이트"
+			uc.begin_update();
+		ImGui::SameLine();
+		// ⚠️ **필수 업데이트도 세션 단위 닫기를 허용한다.** 서버 오타 하나(예: min_version
+		//    9.9.9)로 전 고객 UI 를 잠그면 안 된다 — sherbet_nodelock.hpp:131 의
+		//    "기록 실패 → 잠그지 않음" 원칙과 같다. 오버레이도 효과도 절대 막지 않는다.
+		if (sherbet::pill_button("\xEB\x82\x98\xEC\xA4\x91\xEC\x97\x90", false)) // "나중에"
+			uc.dismiss_session();
+		if (mandatory)
+		{
+			ImGui::SameLine();
+			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98", SHERBET_DISCORD_URL); // "디스코드 문의"
+		}
+	}
+
+	// 실패 사유 등(제안도 진행도 아닌데 문구가 남아 있는 경우)
+	if (!done && !busy && !offer)
+	{
+		const std::string st = uc.status_text();
+		if (!st.empty())
+			ImGui::TextDisabled("%s", st.c_str());
+	}
+
+	sherbet::end_card();
+}
+
 void reshade::runtime::draw_gui_home()
 {
+	// (a) 홈 탭 최상단 — 오버레이를 여는 구매자가 가장 먼저 보는 자리
+	draw_sherbet_update_card(false);
+
 	std::string tutorial_text;
 
 	// It is not possible to follow some of the tutorial steps while performance mode is active, so skip them
