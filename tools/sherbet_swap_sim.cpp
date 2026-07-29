@@ -45,6 +45,15 @@ static const char *FAILED = "dxgi.dll.sherbet-failed";
 static const char *NOTE   = "Sherbet-복구안내.txt";
 static const char *MARK   = "sherbet.update";
 
+// §4.4 S9 는 복구안내에 **실제 파일명**을 넣으라고 못 박는다 — 고객이 프록시를 dxgi.dll 이
+// 아니라 d3d11.dll/opengl32.dll 로 넣었을 수 있고, 그 이름을 모르면 안내문이 무용지물이다.
+// 기록 지점이 둘(S9 = 교체 전, R9-pre = 롤백 전)이라 문구가 갈라지지 않도록 여기서만 만든다.
+static std::string recovery_note(const char *self_name, const char *bak_name)
+{
+	return std::string("[Sherbet 복구 안내] ") + self_name + " 이(가) 없으면 " +
+		bak_name + " 의 이름을 " + self_name + " 로 바꾸면 됩니다.";
+}
+
 static const char *OLDVER = "1.3.0";
 static const char *NEWVER = "1.4.0";
 static const char *NEWSHA = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -243,7 +252,7 @@ static void run_swap(machine &M, const swap_opts &o)
 	if (has(M.fs, BAKF)) { M.aborted = true; return; }
 
 	// S9 복구안내(사람이 손으로 되살릴 유일한 수단) → 마커
-	M.fs[NOTE] = "dxgi.dll 이 없으면 dxgi.dll.sherbet-bak 을 dxgi.dll 로 이름을 바꾸세요";
+	M.fs[NOTE] = recovery_note(SELF, BAKF);
 	if (M.done("S9 복구안내 기록")) return;
 
 	// ⚠️ tries 는 물려받는다(스펙 S9 는 tries 를 안 건드린다). 직전 롤백 마커면 여기서
@@ -465,7 +474,7 @@ static void run_rollback(machine &M, const rollback_opts &o = rollback_opts())
 	// ★ R9a 전에 복구안내를 (다시) 쓴다. S13 이 교체 성공 시 지웠으므로 지금은 없고,
 	// 아래 R9a 직후부터 self 가 사라진다. 그 구간에서 전원이 나가거나 되돌리기까지
 	// 거부되면 고객에게는 이 파일이 유일한 단서다 — §4.4 S9 가 교체 전에 쓰는 것과 같은 이유.
-	M.fs[NOTE] = "dxgi.dll 이 없으면 dxgi.dll.sherbet-bak 을 dxgi.dll 로 이름을 바꾸세요";
+	M.fs[NOTE] = recovery_note(SELF, BAKF);
 	if (M.done("R9 전 복구안내 기록")) return;
 
 	if (o.r9a_fails)
@@ -593,10 +602,38 @@ static void check_session_left_self(const machine &M, bool os_refused)
 // 있어야 한다.** 그 상태에서는 다음 실행에 우리 DLL 이 로드조차 안 되므로(게임은 System32
 // 폴백으로 켜진다) 자동 복구가 영영 안 돈다 — 고객에게 남는 단서가 이 파일 하나뿐이다.
 // 이 단언 하나가 '교체 전(S9)' 과 '롤백 전(R9a 앞)' 두 기록 지점을 동시에 못 박는다.
+// ⚠️ 단순 부분문자열 검사로는 부족하다 — "dxgi.dll.sherbet-bak" 안에도 "dxgi.dll" 이 들어
+// 있어서, 백업 파일명만 적어 놓고 정작 **되살릴 이름은 빠진** 안내문이 통과해 버린다.
+// 뒤에 이름이 이어지지 않는(= 더 긴 파일명의 앞토막이 아닌) 등장만 인정한다.
+static bool mentions_file(const std::string &text, const std::string &name)
+{
+	for (std::size_t i = text.find(name); i != std::string::npos; i = text.find(name, i + 1))
+	{
+		const std::size_t end = i + name.size();
+		if (end < text.size())
+		{
+			const char nx = text[end];
+			if (nx == '.' || nx == '-' || nx == '_' ||
+				(nx >= 'a' && nx <= 'z') || (nx >= 'A' && nx <= 'Z') || (nx >= '0' && nx <= '9'))
+				continue;
+		}
+		return true;
+	}
+	return false;
+}
+
 static void check_note_when_self_gone(const fs_t &fs, const char *where)
 {
 	if (has(fs, SELF)) return;
 	check(has(fs, NOTE), std::string(where) + ": self 가 없는 종료 상태인데 복구안내가 없다 — 고객에게는 Sherbet 이 아무 설명 없이 사라진다");
+	// 있기만 해서는 소용없다. 빈 파일은 없는 것과 같고, 파일명이 없으면 고객이 무엇을
+	// 어떻게 되돌려야 하는지 알 수 없다(§4.4 S9 의 '실제 파일명 삽입' 요구).
+	const std::string note = get(fs, NOTE);
+	check(!note.empty(), std::string(where) + ": 복구안내가 비어 있다");
+	check(mentions_file(note, SELF),
+		std::string(where) + ": 복구안내에 되살릴 파일명(" + SELF + ")이 없다 — 고객이 무엇으로 이름을 바꿔야 하는지 알 수 없다");
+	check(mentions_file(note, BAKF),
+		std::string(where) + ": 복구안내에 백업 파일명(" + BAKF + ")이 없다");
 }
 
 // P5: rolledback 은 '옛 바이너리로 되돌아가 있다' 는 뜻이고, 이 상태가 §5.4 R11 안전모드
@@ -633,7 +670,8 @@ static void check_repair_preserved(const fs_t &before, const fs_t &after)
 	// 지워지면 방금 문제를 일으킨 빌드를 그대로 다시 제안하게 된다.
 	// 예외는 하나뿐: 롤백/복원이 **새로** 비난 대상을 적을 때(그때는 before.version 이 된다).
 	boot_marker b, a;
-	if (read_marker(before, b) && (!b.bad_ver.empty() || !b.bad_sha.empty()))
+	const bool had_marker = read_marker(before, b);
+	if (had_marker && (!b.bad_ver.empty() || !b.bad_sha.empty()))
 	{
 		check(read_marker(after, a), "블랙리스트를 들고 있던 마커가 사라졌다");
 		if (!b.bad_ver.empty())
@@ -645,6 +683,27 @@ static void check_repair_preserved(const fs_t &before, const fs_t &after)
 		{
 			check(!a.bad_sha.empty(), "복구가 블랙리스트 bad_sha 를 지웠다");
 			check(a.bad_sha == b.bad_sha || a.bad_sha == b.sha, "블랙리스트 bad_sha 가 엉뚱한 값으로 바뀌었다");
+		}
+	}
+
+	// ★ 지우지 않는 것만큼이나 **없던 것을 만들어 내지 않는** 것도 중요하다.
+	// bad_ver 를 새로 적으면 should_offer 가 그 (버전, sha) 를 **영구히** 거부한다 —
+	// 전원이 한 번 나갔을 뿐인 고객이 그 업데이트를 다시는 못 받는다(§5.4 R13 의
+	// [그래도 다시 시도] 를 누르기 전까지). 예: 교체가 S10 전에 끊긴 상태에서 복구가
+	// pending 으로 확정하면서 bad_ver=1.4.0 까지 적어 버리면, 1.3.0 을 쓰는 그 고객에게
+	// 1.4.0 은 영영 안 뜬다.
+	// **비난할 자격이 있는 복구 동작은 restore_from_bak 하나뿐이다**(실제로 되돌렸으므로).
+	// promote_pending / restore_from_new / give_up / none 은 블랙리스트를 건드리지 않는다.
+	// (restore_from_bak 은 self 부재에서만 나오고 복구는 self 를 없애지 않으므로, 여러 번
+	//  돌더라도 '첫 동작' 이 곧 '그 수렴 전체의 동작' 이다.)
+	if (had_marker)
+	{
+		const repair_action first = decide_repair(
+			classify(has(before, SELF), has(before, NEWF), has(before, BAKF), b));
+		if (first != repair_action::restore_from_bak && read_marker(after, a))
+		{
+			check(a.bad_ver == b.bad_ver, "롤백하지 않은 복구가 bad_ver 를 새로 적었다(그 버전이 영구히 차단된다)");
+			check(a.bad_sha == b.bad_sha, "롤백하지 않은 복구가 bad_sha 를 새로 적었다(그 빌드가 영구히 차단된다)");
 		}
 	}
 }
