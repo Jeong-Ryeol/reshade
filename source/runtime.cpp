@@ -5,6 +5,7 @@
 
 #include "runtime.hpp"
 #include "runtime_internal.hpp"
+#include "sherbet_update.hpp"
 #include "effect_parser.hpp"
 #include "effect_codegen.hpp"
 #include "effect_preprocessor.hpp"
@@ -354,6 +355,10 @@ reshade::runtime::runtime(api::swapchain *swapchain, api::command_queue *graphic
 
 	// SHERBET: 온라인 인증 컨트롤러 초기화(캐시 토큰 로드 + 비동기 시작 검증)
 	_sherbet_auth.init(_config_path.parent_path().u8string());
+	// SHERBET: 자동 업데이트 컨트롤러(프로세스 전역 싱글턴). 두 번 불러도 안전하다.
+	// ⚠️ 자기 경로는 반드시 g_reshade_dll_path 다 — _config_path.parent_path() 는
+	//    INSTALL/BasePath 로 DLL 위치와 달라질 수 있어 엉뚱한 폴더를 교체하게 된다.
+	sherbet::update::instance().init(g_reshade_dll_path.native());
 
 	fpng::fpng_init();
 }
@@ -816,6 +821,29 @@ void reshade::runtime::on_present()
 	_frame_count++;
 	const auto current_time = std::chrono::high_resolution_clock::now();
 	_last_frame_duration = current_time - _last_present_time; _last_present_time = current_time;
+
+	// SHERBET: 자동 업데이트 — 매 프레임 틱(워커 회수 + 최초 매니페스트 페치).
+	// ⚠️ runtime_gui.cpp 의 `_sherbet_auth.tick()` 옆이 아니라 **여기**서 부른다.
+	//    그 블록은 `if (_show_overlay)` 안이라, Home 키를 안 누르는 구매자에게는
+	//    페치 자체가 영영 돌지 않아 스플래시 한 줄 배너도 뜨지 않는다.
+	sherbet::update::instance().tick();
+
+	// SHERBET: 부팅 성공 래치(스펙 §5.3). 여기까지 왔으면 이 빌드는 실제로 렌더링 중이다.
+	// ⚠️ **위치가 규약이다.** runtime_gui.cpp 의 `_sherbet_auth.tick()` 옆에 두면 그 블록이
+	//    `if (_show_overlay)` 안이라, Home 키를 안 누른 세션이 통째로 '부팅 실패'로 세어진다
+	//    — 대부분의 구매자가 매번 오버레이를 열지는 않으므로, 멀쩡한 업데이트가 두 번째
+	//    실행에 스스로 롤백된다. 100% 오탐이고 CI 로는 절대 드러나지 않는다.
+	// ⚠️ `>=` 다(`==` 금지). _frame_count 는 위 on_init 에서 (재)초기화마다 0으로 리셋되므로
+	//    (전체화면 전환·해상도 변경·디바이스 리셋) 같음 비교는 통째로 놓치거나 여러 번 걸린다.
+	// ⚠️ 시각 기준은 **프로세스 전역 static** 이다. 런타임은 스왑체인당 하나이고 _frame_count
+	//    는 리셋되므로, 멤버로 두면 리셋마다 20초가 다시 시작된다.
+	// mark_boot_ok() 는 확정될 때까지 내부에서 재시도하고, 확정된 뒤에는 아토믹 확인
+	// 하나로 끝난다 — 그래서 매 프레임 불러도 되고, 한 번 실패로 포기하면 안 된다.
+	{
+		static const std::chrono::high_resolution_clock::time_point s_first_present = current_time;
+		if (_frame_count >= 300 || (current_time - s_first_present) >= std::chrono::seconds(20))
+			sherbet::update::mark_boot_ok();
+	}
 
 #if RESHADE_GUI
 	// Draw overlay
@@ -3727,6 +3755,15 @@ exit_failure:
 
 void reshade::runtime::update_effects()
 {
+	// SHERBET: 자동 롤백 직후 세션(스펙 §5.4 R11). 지금 매핑된 이미지가 마커가 비난하는
+	// 그 바이너리이므로 효과를 컴파일하지도 적용하지도 않는다.
+	// ⚠️ DllMain 에서 `return FALSE` 로 로딩을 막는 방식은 절대 쓰지 않는다 — dxgi 프록시
+	//    export 가 사라져 **게임 자체가 안 켜진다.** 로드는 하되 효과만 끄는 것이 정답이다.
+	// ⚠️ safe_mode 는 마커의 version 이 지금 매핑된 SHERBET_VERSION 과 같을 때만 true 다.
+	//    롤백에 성공한 다음 부팅(= 되돌려진 멀쩡한 옛 바이너리)에서는 꺼진다.
+	if (sherbet::update::safe_mode())
+		return;
+
 	// SHERBET: 인증 안 됐으면 이펙트 컴파일/적용을 건너뛴다(효과 잠금).
 	if (!_sherbet_auth.is_authed())
 	{

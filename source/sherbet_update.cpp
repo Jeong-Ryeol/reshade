@@ -1039,6 +1039,9 @@ void sherbet::update::controller::tick()
 	if (!_inited.load())
 		return;
 
+	// 창이 둘이면 렌더 스레드도 둘이다 — 워커 시작 경로 전체를 직렬화한다.
+	const std::lock_guard<std::mutex> guard(_worker_mtx);
+
 	// 끝난 워커 회수. std::thread 에 재대입하기 전에 반드시 join 되어 있어야 한다.
 	if (_worker_done.load())
 	{
@@ -1147,6 +1150,10 @@ void sherbet::update::controller::begin_update()
 	if (_busy.load() || _need_restart.load())
 		return; // 연타 방지 / 이미 교체 끝
 
+	const std::lock_guard<std::mutex> guard(_worker_mtx);
+	if (_busy.load())
+		return; // 락을 기다리는 사이에 다른 스레드가 시작했다
+
 	// 끝난 워커를 먼저 회수한다. 남아 있으면 아래 대입이 std::terminate 다.
 	if (_worker_done.load())
 	{
@@ -1195,6 +1202,10 @@ void sherbet::update::controller::clear_blacklist()
 	// 클릭 1회로 블랙리스트를 풀 수 있게 한다. 이 장치가 있어서 자동 판정을 더
 	// 정교하게 만들 이유가 사라진다.
 	if (!_inited.load() || _busy.load())
+		return;
+
+	const std::lock_guard<std::mutex> guard(_worker_mtx);
+	if (_busy.load())
 		return;
 
 	// 마커를 지우면 state=rolledback 도 함께 사라져 다음 부팅에 안전모드가 안 켜진다.

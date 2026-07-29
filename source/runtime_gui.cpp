@@ -21,6 +21,7 @@
 #include "sherbet_ui.hpp"
 #include "sherbet_owner.h"
 #include "sherbet_nodelock.hpp"
+#include "sherbet_update.hpp"
 #include "sherbet_license.hpp"
 #include <stb_image.h> // 커스텀 조준점 PNG 로딩
 #include <fstream>
@@ -1625,6 +1626,53 @@ void reshade::runtime::draw_gui()
 			if (added) save_config();
 			reload_effects();
 		}
+		// SHERBET: 자동 롤백 직후 세션(스펙 §5.4 R11) — 매핑된 이미지가 마커가 비난하는
+		// 그 바이너리라 update_effects 가 조기 반환한다. 그러면 오버레이가 평소처럼 보이는데
+		// 효과만 안 걸리는 상태가 되므로, 정상 UI 대신 **무슨 일이 있었는지**만 설명한다.
+		// ⚠️ 이 상태에서도 오버레이는 그린다. DllMain 에서 `return FALSE` 로 막으면
+		//    dxgi 프록시 export 가 사라져 게임 자체가 안 켜진다.
+		if (sherbet::update::safe_mode())
+		{
+			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.5f);
+			ImGui::TextUnformatted("Sherbet");
+			ImGui::PopFont();
+
+			const float avail_w = ImGui::GetContentRegionAvail().x;
+			ImGui::Dummy(ImVec2(0, ImGui::GetContentRegionAvail().y * 0.24f));
+			auto centered_text = [avail_w](const char *text) {
+				const float tw = ImGui::CalcTextSize(text).x;
+				ImGui::SetCursorPosX((avail_w - tw) * 0.5f);
+				ImGui::TextUnformatted(text);
+			};
+
+			ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.4f);
+			centered_text(ICON_FK_UNDO "  \xEC\x9D\xB4\xEC\xA0\x84 \xEB\xB2\x84\xEC\xA0\x84\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // "이전 버전으로 되돌렸습니다"
+			ImGui::PopFont();
+			ImGui::Spacing();
+
+			// 어떤 버전이 실패했는지는 마커가 알고 있다(state 와 무관하게 읽힌다).
+			const std::string bad = sherbet::update::rolled_back_version();
+			if (!bad.empty())
+			{
+				char line[160];
+				std::snprintf(line, sizeof(line),
+					"v%s \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8\xEA\xB0\x80 \xEC\x8B\xA4\xED\x8C\xA8\xED\x95\xB4\xEC\x84\x9C \xEC\x9D\xB4\xEC\xA0\x84 \xEB\xB2\x84\xEC\xA0\x84\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94.", bad.c_str()); // "v… 업데이트가 실패해서 이전 버전으로 되돌렸어요."
+				centered_text(line);
+			}
+			centered_text("\xEC\x9D\xB4\xEB\xB2\x88 \xED\x8C\x90\xEC\x97\x90\xEB\x8A\x94 \xED\x9A\xA8\xEA\xB3\xBC\xEA\xB0\x80 \xEA\xBA\xBC\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94. \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x84 \xEA\xBB\x90\xEB\x8B\xA4 \xEC\xBC\x9C\xEB\xA9\xB4 \xEC\xA0\x95\xEC\x83\x81\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "이번 판에는 효과가 꺼져 있어요. 게임을 껐다 켜면 정상으로 돌아옵니다."
+
+			ImGui::Spacing();
+			ImGui::Spacing();
+			{
+				const char *link = ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98"; // "디스코드 문의"
+				ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(link).x) * 0.5f);
+				ImGui::TextLinkOpenURL(link, SHERBET_DISCORD_URL);
+			}
+
+			ImGui::End();
+		}
+		else
 		if (sherbet::auth::enabled() && !_sherbet_auth.is_authed())
 		{
 			ImGui::SetCursorPos(ImVec2(16.0f, 9.0f));

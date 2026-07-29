@@ -145,6 +145,13 @@ namespace sherbet
 			std::atomic<unsigned long long> _recv{ 0 };
 			std::atomic<unsigned long long> _total{ 0 };
 
+			// ⚠️ 워커를 **시작**하는 경로(tick / begin_update / clear_blacklist)를 직렬화한다.
+			// `tick()` 은 runtime::on_present 에서 불리고 런타임은 스왑체인당 하나라, 창이
+			// 둘이면 렌더 스레드도 둘이다. 검사와 `std::thread` 대입 사이가 열려 있으면
+			// 두 스레드가 같은 워커 멤버에 대입해 **std::terminate** 가 난다.
+			// 락 순서는 항상 _worker_mtx → _mtx 다(워커는 _mtx 만 잡는다 — 순환이 없다).
+			std::mutex _worker_mtx;
+
 			mutable std::mutex _mtx;
 			std::string _status;   // _mtx 보호
 			info _offer;           // _mtx 보호
