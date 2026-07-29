@@ -29,7 +29,8 @@
 #include "sherbet_update.hpp"
 #include "sherbet_update_core.hpp" // ★ 판정 전부. 여기 있는 것을 다시 구현하지 않는다.
 #include "sherbet_license.hpp"     // fnv1a — 뮤텍스 이름
-#include "sherbet_owner.h"         // SHERBET_VERSION — 게이트1
+#include "sherbet_owner.h"         // SHERBET_VERSION — 게이트1 / has_owner
+#include "sherbet_http.hpp"        // 매니페스트 페치 · 스트리밍 다운로드(컨트롤러 전용)
 #include "dll_log.hpp"
 
 #include <Windows.h>
@@ -50,6 +51,27 @@ namespace
 	constexpr DWORD kMaxMarkerBytes = 64 * 1024;
 	// pe_check 가 보는 앞부분(스펙 §4.4 S6 과 같은 크기).
 	constexpr std::size_t kPeHeadBytes = 4096;
+
+	// ── 매니페스트 엔드포인트(스펙 §3.1) ───────────────────────────────────
+	// ⚠️ **미인증이다(bearer = nullptr).** 인증을 요구하면 "로그인을 망가뜨린 빌드" 를
+	// 영원히 고칠 수 없는 데드락이 생긴다 — 업데이트가 가장 필요한 순간에 못 받는다.
+	// `/auth/verify` 는 한 줄도 건드리지 않는다: 업데이트 실패는 회복 가능하지만
+	// 로그인 실패는 제품이 죽는다.
+	constexpr wchar_t kHost[] = L"wonryeol.asuscomm.com";
+	constexpr const char *kManifestPath = "/sherbet-auth/update/manifest";
+#ifdef _WIN64
+	constexpr const char *kArch = "x64";
+#else
+	constexpr const char *kArch = "x86";
+#endif
+
+	// ── 상태 문구(UTF-8) ───────────────────────────────────────────────────
+	// ⚠️ `\xNN` 뒤에 16진수 ASCII 가 바로 오면 MSVC C7744 다(커밋 c966d30e 에서 겪음).
+	// 아래 문자열은 전부 이스케이프 뒤에 공백이거나 또 다른 이스케이프라 안전하다.
+	constexpr const char *kStatusChecking = "\xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xED\x99\x95\xEC\x9D\xB8 \xEC\xA4\x91\xE2\x80\xA6"; // "업데이트 확인 중…"
+	constexpr const char *kStatusPersonal = "\xEA\xB0\x9C\xEC\x9D\xB8 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "개인 빌드는 디스코드로 문의해 주세요"
+	constexpr const char *kStatusBusyOther = "\xEB\x8B\xA4\xEB\xA5\xB8 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xB0\xBD\xEC\x97\x90\xEC\x84\x9C \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\xA4\x91\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94"; // "다른 게임 창에서 업데이트 중이에요"
+	constexpr const char *kStatusPrepare = "\xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\xA4\x80\xEB\xB9\x84 \xEC\xA4\x91\xE2\x80\xA6"; // "업데이트 준비 중…"
 
 	// ── 문자열 변환 ────────────────────────────────────────────────────────
 	// ⚠️ narrow→wide 는 **반드시 CP_UTF8** 이다.
@@ -767,4 +789,342 @@ const std::string &sherbet::update::rolled_back_sha()
 bool sherbet::update::safe_mode()
 {
 	return g_safe_mode;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  컨트롤러 — 매니페스트 페치 + 교체 오케스트레이션 (스펙 §3 / §6)
+// ══════════════════════════════════════════════════════════════════════════
+
+sherbet::update::controller &sherbet::update::instance()
+{
+	// 함수 지역 static — C++11 이 스레드 안전 초기화를 보장한다.
+	// ⚠️ 소멸은 CRT 종료(사실상 DLL_PROCESS_DETACH) 시점이다. 두 경로 모두 안전하다:
+	//  - 프로세스 종료: OS 가 다른 스레드를 **먼저** 끝내므로 join 이 즉시 돌아온다.
+	//  - FreeLibrary: 소멸자가 _stop 과 _cancel 을 세우고, get_to_file 이 청크마다
+	//    cancel 을 보므로 대기가 청크 하나(수 ms)로 줄어든다.
+	static controller c;
+	return c;
+}
+
+sherbet::update::controller::controller()
+{
+}
+
+sherbet::update::controller::~controller()
+{
+	_stop = true;
+	_cancel = true; // 다운로드 중이면 청크 단위로 즉시 빠져나온다
+	join_worker();
+	release_mutex();
+}
+
+void sherbet::update::controller::join_worker()
+{
+	// ⚠️ 이 함수는 std::thread 대입 **바로 앞**에서 반드시 불려야 한다.
+	// 끝났지만 joinable 인 스레드에 재대입하면 std::terminate — 게임이 그 자리에서 죽는다.
+	if (_worker.joinable())
+		_worker.join();
+}
+
+void sherbet::update::controller::set_status(const char *s)
+{
+	const std::lock_guard<std::mutex> lk(_mtx);
+	_status = (s != nullptr) ? s : "";
+}
+
+bool sherbet::update::controller::take_mutex()
+{
+	if (_mutex_handle != nullptr)
+		return true; // 이미 보유 중
+	if (!g_paths.ok)
+		return false;
+	const HANDLE h = CreateMutexW(nullptr, FALSE, g_paths.mutex_name.c_str());
+	if (h == nullptr)
+		return false;
+	const DWORD wait = WaitForSingleObject(h, 0); // 즉시 시도 — 절대 대기하지 않는다
+	// WAIT_ABANDONED 도 소유권 획득이다(이전 보유자가 죽었다). 반드시 해제해야 한다.
+	if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED)
+	{
+		CloseHandle(h);
+		return false;
+	}
+	_mutex_handle = h;
+	return true;
+}
+
+void sherbet::update::controller::release_mutex()
+{
+	if (_mutex_handle == nullptr)
+		return;
+	const HANDLE h = static_cast<HANDLE>(_mutex_handle);
+	_mutex_handle = nullptr;
+	ReleaseMutex(h);
+	CloseHandle(h);
+}
+
+void sherbet::update::controller::init(const std::wstring &self_path)
+{
+	const std::lock_guard<std::mutex> lk(_mtx);
+	if (_inited.load())
+		return;
+	// on_process_attach 가 이미 채웠으면 **그 경로를 그대로 쓴다.** 다시 만들면
+	// 부팅 경로와 교체 경로가 다른 파일을 볼 수 있다.
+	if (!g_paths.ok && !make_paths(self_path, g_paths))
+		return;
+	// 블랙리스트를 한 번만 복사해 온다 — 워커가 전역을 읽지 않게 해서 경합을 없앤다.
+	_bad_ver = g_bad_ver;
+	_bad_sha = g_bad_sha;
+	_inited = true;
+}
+
+bool sherbet::update::controller::personalized() const
+{
+	// 개인화 빌드 보호: 공용 릴리스가 각인·전용 프리셋을 지우고 노드락을 조용히 끄는 것을 막는다.
+	return sherbet::has_owner() || SHERBET_NODELOCK != 0;
+}
+
+void sherbet::update::controller::tick()
+{
+	if (!_inited.load())
+		return;
+
+	// 끝난 워커 회수. std::thread 에 재대입하기 전에 반드시 join 되어 있어야 한다.
+	if (_worker_done.load())
+	{
+		join_worker();
+		_worker_done = false;
+	}
+
+	if (personalized())
+	{
+		if (!_fetch_started.exchange(true))
+			set_status(kStatusPersonal);
+		return;
+	}
+
+	if (_fetch_started.load() || _busy.load() || _worker.joinable())
+		return;
+
+	_fetch_started = true;
+	_busy = true;
+	set_status(kStatusChecking);
+
+	std::string bad_ver, bad_sha;
+	{
+		const std::lock_guard<std::mutex> lk(_mtx);
+		bad_ver = _bad_ver;
+		bad_sha = _bad_sha;
+	}
+
+	join_worker(); // ★ 규약: std::thread 대입 바로 앞
+	_worker = std::thread([this, bad_ver, bad_sha]() {
+		run_fetch(bad_ver, bad_sha);
+		if (!_has_offer.load())
+			set_status(""); // 실패는 전부 **조용한** '업데이트 없음' 이다("확인 중…" 을 남기지 않는다)
+		_busy = false;
+		_worker_done = true; // ★ 반드시 마지막
+	});
+}
+
+void sherbet::update::controller::run_fetch(const std::string &bad_ver, const std::string &bad_sha)
+{
+	// ⚠️ **모든 실패는 조용한 '업데이트 없음' 이다.** 이 경로는 인증 컨트롤러의 상태를
+	// 한 비트도 건드리지 않는다 — 24시간 오프라인 유예에 영향이 없어야 한다.
+	const std::wstring path = utf8_to_wide(
+		std::string(kManifestPath) + "?arch=" + kArch + "&cur=" + SHERBET_VERSION);
+	if (path.empty())
+		return;
+
+	info found;
+	for (int attempt = 0; attempt < 3 && !_stop.load(); ++attempt)
+	{
+		if (attempt > 0)
+		{
+			// 게임 시작 직후엔 네트워크가 아직 안 붙어 있을 수 있다. 15초 / 60초 뒤 재시도.
+			// 100ms 슬라이스로 나눠 소멸(_stop)에 빠르게 반응한다(auth 폴러와 같은 패턴).
+			const int slices = (attempt == 1) ? 150 : 600;
+			for (int i = 0; i < slices && !_stop.load(); ++i)
+				Sleep(100);
+			if (_stop.load())
+				return;
+		}
+
+		std::string resp;
+		// ⚠️ bearer 는 반드시 nullptr — 미인증 엔드포인트다(스펙 §3.1).
+		const int status = sherbet::http::get(kHost, path.c_str(), resp, nullptr);
+		if (status != 200)
+			continue; // 503/전송실패 — 재시도
+
+		// arch echo 불일치·schema 불일치·URL 접두사 위반 등은 전부 여기서 걸린다.
+		// 서버가 규약을 어긴 응답을 준 것이므로 재시도해도 결과가 같다 — 즉시 포기.
+		const info u = parse_manifest(resp, kArch);
+		if (!u.ok)
+			return;
+		found = u;
+		break;
+	}
+	if (!found.ok)
+		return;
+
+	if (!should_offer(SHERBET_VERSION, found, bad_ver, bad_sha))
+		return; // 같은 버전 / 구버전 / 블랙리스트 — 조용히 없음
+
+	// ⚠️ 반드시 네임스페이스로 한정한다 — 멤버 이름(controller::is_mandatory)이 가린다.
+	const bool mandatory = sherbet::update::is_mandatory(SHERBET_VERSION, found);
+	{
+		const std::lock_guard<std::mutex> lk(_mtx);
+		_offer = found;
+		_status.clear();
+	}
+	_mandatory = mandatory;
+	_has_offer = true;
+
+	reshade::log::message(reshade::log::level::info,
+		"[sherbet-update] \xEC\x83\x88 \xEB\xB2\x84\xEC\xA0\x84 %s (\xED\x98\x84\xEC\x9E\xAC %s)%s",
+		found.version.c_str(), SHERBET_VERSION, mandatory ? " [mandatory]" : "");
+}
+
+void sherbet::update::controller::begin_update()
+{
+	if (!_inited.load())
+		return;
+	if (personalized())
+	{
+		set_status(kStatusPersonal); // 개인화 빌드는 절대 자기교체하지 않는다
+		return;
+	}
+	if (_busy.load() || _need_restart.load())
+		return; // 연타 방지 / 이미 교체 끝
+
+	// 끝난 워커를 먼저 회수한다. 남아 있으면 아래 대입이 std::terminate 다.
+	if (_worker_done.load())
+	{
+		join_worker();
+		_worker_done = false;
+	}
+	if (_worker.joinable())
+		return; // 아직 도는 워커가 있다(페치 재시도 대기 중일 수 있다)
+
+	info u;
+	{
+		const std::lock_guard<std::mutex> lk(_mtx);
+		u = _offer;
+	}
+	if (!u.ok || !_has_offer.load())
+		return;
+
+	_cancel = false;
+	_recv = 0;
+	_total = 0;
+	_busy = true;
+	set_status(kStatusPrepare);
+
+	join_worker(); // ★ 규약: std::thread 대입 바로 앞
+	_worker = std::thread([this, u]() {
+		run_swap(u);
+		_busy = false;
+		_worker_done = true; // ★ 반드시 마지막
+	});
+}
+
+void sherbet::update::controller::cancel()
+{
+	_cancel = true;
+}
+
+void sherbet::update::controller::dismiss_session()
+{
+	_dismissed = true;
+}
+
+void sherbet::update::controller::clear_blacklist()
+{
+	// 스펙 §5.4 R13 — [그래도 다시 시도].
+	// 자동 롤백이 오탐이었을 때(교체 rename 이 그 순간 AV 에 거부된 경우 등) 고객이
+	// 클릭 1회로 블랙리스트를 풀 수 있게 한다. 이 장치가 있어서 자동 판정을 더
+	// 정교하게 만들 이유가 사라진다.
+	if (!_inited.load() || _busy.load())
+		return;
+
+	// 마커를 지우면 state=rolledback 도 함께 사라져 다음 부팅에 안전모드가 안 켜진다.
+	// 다른 창이 교체 중이면 손대지 않는다.
+	if (!take_mutex())
+	{
+		set_status(kStatusBusyOther);
+		return;
+	}
+	DeleteFileW(g_paths.marker.c_str());
+	release_mutex();
+
+	{
+		const std::lock_guard<std::mutex> lk(_mtx);
+		_bad_ver.clear();
+		_bad_sha.clear();
+	}
+	// 전역은 렌더 스레드 전용이다(on_process_attach 이후로는 워커가 읽지 않는다).
+	g_bad_ver.clear();
+	g_bad_sha.clear();
+	// ⚠️ g_safe_mode 는 그대로 둔다 — 지금 매핑된 이미지는 여전히 문제를 일으킨
+	// 그 바이너리다. 이번 세션의 효과를 다시 켜는 것이 아니라 '다시 제안받기' 만 푼다.
+
+	_dismissed = false;
+	_has_offer = false;
+	_fetch_started = false; // 다음 tick() 이 다시 페치한다
+	set_status(kStatusChecking);
+}
+
+bool sherbet::update::controller::has_offer() const
+{
+	return _has_offer.load() && !_dismissed.load();
+}
+
+bool sherbet::update::controller::is_mandatory() const
+{
+	return _mandatory.load() && _has_offer.load();
+}
+
+std::string sherbet::update::controller::offer_version() const
+{
+	const std::lock_guard<std::mutex> lk(_mtx);
+	return _offer.version; // ⚠️ 값 복사
+}
+
+std::string sherbet::update::controller::offer_notes() const
+{
+	const std::lock_guard<std::mutex> lk(_mtx);
+	return _offer.notes;
+}
+
+std::string sherbet::update::controller::status_text() const
+{
+	const std::lock_guard<std::mutex> lk(_mtx);
+	return _status;
+}
+
+float sherbet::update::controller::progress() const
+{
+	const unsigned long long total = _total.load();
+	if (total == 0)
+		return 0.0f;
+	const unsigned long long recv = _recv.load();
+	if (recv >= total)
+		return 1.0f;
+	return static_cast<float>(static_cast<double>(recv) / static_cast<double>(total));
+}
+
+bool sherbet::update::controller::busy() const
+{
+	return _busy.load();
+}
+
+bool sherbet::update::controller::need_restart() const
+{
+	return _need_restart.load();
+}
+
+void sherbet::update::controller::run_swap(const info &u)
+{
+	// TODO(Task 4): 스펙 §4.4 S1~S14 (프리플라이트 · 다운로드 · 검증 · rename 2회 교체).
+	// 지금은 아무 파일도 건드리지 않는다 — UI(Task 6)가 아직 begin_update 를 부르지 않는다.
+	(void)u;
 }
