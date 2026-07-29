@@ -131,9 +131,35 @@ static void test_url_allowed() {
 	// 길이는 리터럴 실제 크기(66)여야 한다. 68 을 주면 리터럴 밖 2바이트를 읽어(ASan
 	// global-buffer-overflow) 세니타이저 빌드가 여기서 죽고 뒤 테스트가 아예 안 돈다.
 	assert(!url_allowed(std::string("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\0b.dll", 66)));
+	// ── 비ASCII: 베스트핏 매핑으로 되살아나는 경로 조작 ──────────────────────
+	// 전각 마침표·슬래시 U+FF0E U+FF0E U+FF0F(．．／). 여기서 통과시키면 글루가 URL 을
+	// wchar_t 로 바꿀 때 CP_ACP 의 "best-fit" 매핑이 이 세 글자를 ASCII "../" 로 접어,
+	// **우리 검사를 통과한 뒤에** 경로 조작이 되살아난다. 이 리포의 관행
+	// (sherbet_content.cpp 의 std::wstring(p.begin(), p.end()))이 정확히 그 변환이라
+	// "Phase 3 이 CP_UTF8 을 쓸 것" 이라는 약속에 보안을 걸 수 없다.
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/"
+		"\xEF\xBC\x8E\xEF\xBC\x8E\xEF\xBC\x8F" "attacker/evil.dll"));
+	// 접두사 뒤 어디에 있든 거부다(파일명 자리도 포함)
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/"
+		"\xEF\xBC\x8E\xEF\xBC\x8E\xEF\xBC\x8F" "evil.dll"));
+	// UTF-8 한글 파일명 — 정당해 보이지만 거부한다. 우리 릴리스 자산 이름은
+	// release.yml 이 ReShade64.dll / ReShade32.dll 로만 만들고, 태그는
+	// sherbet-<x.y.z> 뿐이라 **비ASCII URL 을 생성할 경로 자체가 없다.**
+	// 통과시킬 이유가 없는 문자군을 통과시키면 위의 전각 우회가 같이 열린다.
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/"
+		"\xED\x95\x9C\xEA\xB8\x80.dll")); // "한글.dll"
+	// 0x80 이상 단일 바이트(잘린 UTF-8·Latin-1)도 마찬가지
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\x80.dll"));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\xFF.dll"));
+	// 0x7f(DEL)은 제어문자로도, 비ASCII 경계로도 거부돼야 한다
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\x7f.dll"));
+
 	// 정상 URL 은 여전히 통과해야 한다(과잉 차단 회귀 방지)
 	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll"));
 	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-10.20.30/ReShade32.dll"));
+	// 상한 경계 — 0x7e(~)는 ASCII 인쇄가능 범위의 마지막 문자다. 여기까지는 통과해야
+	// '0x7f 이상 거부' 가 한 칸 밀려 정상 문자를 자르는 회귀를 잡아낸다.
+	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a~b.dll"));
 }
 
 static void test_split_https_url() {

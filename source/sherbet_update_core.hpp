@@ -199,9 +199,22 @@ namespace sherbet
 			if (url.find("%2e") != std::string::npos || url.find("%2E") != std::string::npos ||
 				url.find("%2f") != std::string::npos || url.find("%2F") != std::string::npos)
 				return false;
-			// 제어문자. CR/LF 가 HttpOpenRequestW 의 오브젝트명에 실리면 헤더 주입이 된다.
+			// ⚠️ **ASCII 인쇄가능 문자만 통과시킨다**(0x20 ~ 0x7e).
+			// - 제어문자: CR/LF 가 HttpOpenRequestW 의 오브젝트명에 실리면 헤더 주입이 된다.
+			// - 0x7f 이상(= UTF-8 선행/후속 바이트): **베스트핏 매핑 우회를 막는 유일한 방어다.**
+			//   글루는 URL 을 언젠가 wchar_t 로 바꿔 WinInet 에 넘긴다. 그 변환이 CP_UTF8 이
+			//   아니라 ANSI(CP_ACP)로 이뤄지면 Windows 의 "best-fit" 매핑이 전각 문자를
+			//   ASCII 로 접는다: U+FF0E U+FF0E U+FF0F(．．／) → "../". 그러면 위의 ".." 검사와
+			//   접두사 피닝을 **통과한 뒤에** 경로 조작이 되살아난다. 실측 페이로드:
+			//     ".../releases/download/" "\xEF\xBC\x8E\xEF\xBC\x8E\xEF\xBC\x8F" "attacker/evil.dll"
+			//   "글루가 CP_UTF8 을 쓰면 된다" 에 보안을 걸지 않는다 — 그 규약은 테스트가 없는
+			//   곳(Phase 3 의 .cpp)에 있고, 이 리포의 관행(sherbet_content.cpp 의
+			//   std::wstring(p.begin(), p.end()))은 정확히 그 규약을 어기는 형태다.
+			//   우리 릴리스 URL 은 구조상 전부 ASCII 다:
+			//     https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-<x.y.z>/ReShade{64,32}.dll
+			//   따라서 비ASCII 를 통째로 거부해도 잃는 정당한 URL 이 없다.
 			for (unsigned char c : url)
-				if (c < 0x20 || c == 0x7f) return false;
+				if (c < 0x20 || c >= 0x7f) return false;
 			return true;
 		}
 
