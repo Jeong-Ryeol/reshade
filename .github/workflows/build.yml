@@ -40,6 +40,34 @@ on:
 permissions: {}
 
 jobs:
+  # 윈도우 빌드와 독립적으로 도는 형제 잡. build 를 needs 로 묶지 않으므로
+  # 여기가 빨간불이어도 workflow_dispatch 고객 빌드 아티팩트는 그대로 나온다.
+  host-tests:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: 순수 로직 호스트 테스트
+        run: |
+          set -euo pipefail
+          # 주의: -DNDEBUG 를 절대 붙이지 않는다. 이 스위트들은 전부 assert 로
+          # 검증하므로 NDEBUG 가 켜지면 단언이 전부 사라져 무조건 통과한다(무의미한 green).
+          # 최적화도 켜지 않는다 — -O0 로도 세 스위트 합쳐 1 초 안에 끝난다.
+          for t in sherbet_auth_test sherbet_update_test sherbet_swap_sim; do
+            echo "=== $t ==="
+            clang++ -std=c++17 -Wall -Isource "tools/$t.cpp" -o "$RUNNER_TEMP/$t"
+            # set -e 가 켜져 있으므로 종료코드 != 0 이면 여기서 잡이 실패한다.
+            # 출력 grep 이 아니라 종료코드로 판정한다.
+            "$RUNNER_TEMP/$t"
+          done
+
   build:
     runs-on: windows-latest
 
