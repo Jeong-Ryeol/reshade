@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 
 using namespace sherbet::update;
@@ -89,6 +90,24 @@ static bool mv(fs_t &fs, const char *from, const char *to)
 	return true;
 }
 
+// ── 마커 IO ────────────────────────────────────────────────────────────────
+// unknown 은 오직 parse_marker 만 채운다 — 손으로 채우면 조작된 줄이 아는 필드로 승격된다.
+static bool read_marker(const fs_t &fs, boot_marker &m)
+{
+	if (!has(fs, MARK)) return false;
+	return parse_marker(get(fs, MARK), m);
+}
+
+static void write_marker(fs_t &fs, const boot_marker &m)
+{
+	const std::string text = serialize_marker(m);
+	boot_marker rt;
+	check(parse_marker(text, rt), "우리가 쓴 마커가 다시 파싱되지 않는다(라운드트립 파괴)");
+	fs[MARK] = text;
+}
+
+static std::string version_of(const std::string &content) { return content == "NEW" ? NEWVER : OLDVER; }
+
 // ── 불변식 ─────────────────────────────────────────────────────────────────
 // DLL 소스가 하나라도 남아 있는가. 이게 깨지는 순간이 곧 '고객 게임이 안 켜짐' 이다.
 static bool recoverable(const fs_t &fs)
@@ -108,6 +127,24 @@ static void check_slots(const fs_t &fs)
 		}
 }
 
+// ★ P5 의 숨은 전제: **.sherbet-bak 은 마커가 비난하는 그 바이너리를 절대 담지 않는다.**
+// 실제 알고리즘에서 참인 이유: S10 이 .bak 에 넣는 것은 '교체 **전**의 self'(지금 돌고 있는
+// 바이너리)이고, S9/R10 이 version/bad_ver 에 적는 것은 '교체 **후**의 버전' 이다. 정의상
+// 다른 파일이다. 이 전제가 깨지면(= .bak 에 불량 바이너리가 들어 있으면) restore_from_bak 이
+// 불량 바이너리를 self 에 앉히면서 마커에 rolledback 을 적어 P5 가 무너진다 — 즉 P5 는
+// '무조건' 이 아니라 **이 전제 위에서** 성립한다. 우리 절차가 이 전제를 유지하는지는
+// machine::done 이 단계마다 귀납적으로 확인한다.
+static bool bak_not_blamed(const fs_t &fs)
+{
+	if (!has(fs, BAKF)) return true;
+	boot_marker m;
+	if (!read_marker(fs, m)) return true;
+	const std::string bv = version_of(get(fs, BAKF));
+	if (!m.version.empty() && bv == m.version) return false;
+	if (!m.bad_ver.empty() && bv == m.bad_ver) return false;
+	return true;
+}
+
 // 단계 실행기. cut == k 이면 k 번째 단계 직후 전원이 나간다(그 이후 단계는 실행 안 됨).
 struct machine
 {
@@ -118,8 +155,10 @@ struct machine
 	bool cut_hit = false;
 	bool aborted = false;
 	bool started_recoverable;
+	bool started_bak_ok;
 
-	machine(const fs_t &f, int c) : fs(f), prev(f), cut(c), started_recoverable(recoverable(f)) {}
+	machine(const fs_t &f, int c)
+		: fs(f), prev(f), cut(c), started_recoverable(recoverable(f)), started_bak_ok(bak_not_blamed(f)) {}
 
 	bool done(const char *what)
 	{
@@ -142,28 +181,26 @@ struct machine
 					check(has(fs, SELF) && get(fs, SELF) == get(prev, c),
 						std::string("단계 '") + what + "' 에서 self 가 없는데 DLL 사본 " + c + " 을 지웠다");
 		}
+		// ★ self 가 없는 동안에는 **복구안내도** 지우지 않는다. self 가 없으면 다음 실행에
+		// 우리 DLL 이 로드조차 안 되므로(게임은 System32 폴백으로 켜진다) 자동 복구가 영영
+		// 안 돈다 — 그때 고객에게 남는 유일한 단서가 이 파일이다. 이게 없으면 Sherbet 은
+		// 아무 설명 없이 사라진 것처럼 보인다.
+		if (!has(fs, SELF) && has(prev, NOTE))
+			check(has(fs, NOTE),
+				std::string("단계 '") + what + "' 에서 self 가 없는데 복구안내를 지웠다");
+
+		// ★ .sherbet-bak 이 마커가 비난하는 바이너리를 담게 되면 안 된다(P5 의 전제).
+		// 귀납으로 본다 — 그 전제를 만족하는 상태에서 시작했으면 끝까지 유지해야 한다.
+		if (started_bak_ok)
+			check(bak_not_blamed(fs),
+				std::string("단계 '") + what + "' 뒤 .sherbet-bak 이 마커가 비난하는 바이너리를 담고 있다");
+
 		prev = fs;
 
 		if (cut != 0 && step == cut) { cut_hit = true; return true; }
 		return false;
 	}
 };
-
-// ── 마커 IO ────────────────────────────────────────────────────────────────
-// unknown 은 오직 parse_marker 만 채운다 — 손으로 채우면 조작된 줄이 아는 필드로 승격된다.
-static bool read_marker(const fs_t &fs, boot_marker &m)
-{
-	if (!has(fs, MARK)) return false;
-	return parse_marker(get(fs, MARK), m);
-}
-
-static void write_marker(fs_t &fs, const boot_marker &m)
-{
-	const std::string text = serialize_marker(m);
-	boot_marker rt;
-	check(parse_marker(text, rt), "우리가 쓴 마커가 다시 파싱되지 않는다(라운드트립 파괴)");
-	fs[MARK] = text;
-}
 
 // ── 교체 절차(스펙 §4.4) ───────────────────────────────────────────────────
 // rename 거부(ERROR_ACCESS_DENIED)는 **그 실행 안에서만** 유효한 일시적 상황으로 모델링한다
@@ -267,6 +304,19 @@ static void run_swap(machine &M, const swap_opts &o)
 static const int kStates = 6;
 static long g_seen[kStates];
 
+static long g_interference_wiped = 0;   // 간섭으로 DLL 사본이 전멸한 시나리오 수
+
+// 복구에 들어간 **서로 다른** 디스크 상태의 개수. 단언 총수는 루프를 늘리기만 해도 커지지만
+// 이 숫자는 '진짜로 새로운 상황을 봤는가' 를 나타낸다.
+static std::set<std::string> g_repair_inputs;
+
+static std::string fs_key(const fs_t &fs)
+{
+	std::string k;
+	for (const auto &e : fs) { k += e.first; k += '\x01'; k += e.second; k += '\x02'; }
+	return k;
+}
+
 static const char *state_name(disk_state s)
 {
 	switch (s)
@@ -281,7 +331,13 @@ static const char *state_name(disk_state s)
 	return "?";
 }
 
-static void startup_repair(machine &M)
+// 복구 자신의 rename 도 거부될 수 있다 — self 가 이미 없는 그 순간이 가장 위험한 지점이다.
+struct repair_opts
+{
+	bool restore_denied = false;   // .bak → self / .new → self 가 거부된다
+};
+
+static void startup_repair(machine &M, const repair_opts &o = repair_opts())
 {
 	boot_marker m;
 	const bool marker_ok = read_marker(M.fs, m);
@@ -291,6 +347,7 @@ static void startup_repair(machine &M)
 
 	const disk_state s = classify(has(M.fs, SELF), has(M.fs, NEWF), has(M.fs, BAKF), m);
 	g_seen[static_cast<int>(s)]++;
+	g_repair_inputs.insert(fs_key(M.fs));
 	switch (decide_repair(s))
 	{
 	case repair_action::promote_pending:
@@ -311,6 +368,10 @@ static void startup_repair(machine &M)
 			write_marker(M.fs, m);
 			if (M.done("R10 마커 rolledback")) return;
 		}
+		// 거부되면 아무것도 되돌리지 않는다 — 마커는 이미 rolledback 이고 .bak 은 그대로라
+		// 다음 실행이 같은 판정을 내려 다시 시도한다. self 는 여전히 없으므로 복구안내가
+		// 유일한 단서로 남아 있어야 한다(불변식이 확인한다).
+		if (o.restore_denied) { M.done("R3 .sherbet-bak → self 거부"); return; }
 		check(mv(M.fs, BAKF, SELF), "R3 .sherbet-bak → self rename 실패");
 		if (M.done("R3 .sherbet-bak → self")) return;
 		break;
@@ -325,6 +386,7 @@ static void startup_repair(machine &M)
 			write_marker(M.fs, m);
 			if (M.done("R3 마커 pending(재개)")) return;
 		}
+		if (o.restore_denied) { M.done("R3 .sherbet-new → self 거부"); return; }
 		check(mv(M.fs, NEWF, SELF), "R3 .sherbet-new → self rename 실패");
 		if (M.done("R3 .sherbet-new → self")) return;
 		break;
@@ -375,6 +437,7 @@ static int repair_to_fixpoint(fs_t &fs)
 // ── 롤백 절차(스펙 §5.4 R8~R10) ────────────────────────────────────────────
 struct rollback_opts
 {
+	bool r9a_fails = false;      // self → .sherbet-failed 가 거부된다(AV 가 self 를 물고 있다)
 	bool r9b_fails = false;      // .bak → self 가 거부된다(→ 첫 이동을 즉시 되돌린다)
 	bool r9b_undo_fails = false; //   그 되돌리기마저 거부된다
 };
@@ -384,13 +447,34 @@ static void run_rollback(machine &M, const rollback_opts &o = rollback_opts())
 	boot_marker m;
 	if (!read_marker(M.fs, m)) { M.aborted = true; return; }
 
+	// 블랙리스트는 '되돌리기에 성공했는가' 와 무관한 사실이다. decide_boot 이 rollback 을
+	// 낸 시점에 이미 '이 버전은 2회 연속 부팅에 실패했다' 가 확정됐으므로, 아래 어느
+	// 실패 경로로 빠지든 bad_ver/bad_sha 는 남긴다(§5.4 R4 가 state 와 무관하게 읽는다).
+	const std::string blamed_ver = m.version, blamed_sha = m.sha;
+
 	// R8 재료 검증이 먼저다. .bak 이 없으면 **아무 파일도 건드리지 않는다** —
 	// self 를 먼저 밀어내고 뒤늦게 알면 디렉터리에 DLL 이 아예 없게 된다.
 	if (!has(M.fs, BAKF))
 	{
-		m.state = "rollback_failed";
+		m.state = "rollback_failed"; m.bad_ver = blamed_ver; m.bad_sha = blamed_sha;
 		write_marker(M.fs, m);
 		M.done("R8 재료 없음 → rollback_failed");
+		return;
+	}
+
+	// ★ R9a 전에 복구안내를 (다시) 쓴다. S13 이 교체 성공 시 지웠으므로 지금은 없고,
+	// 아래 R9a 직후부터 self 가 사라진다. 그 구간에서 전원이 나가거나 되돌리기까지
+	// 거부되면 고객에게는 이 파일이 유일한 단서다 — §4.4 S9 가 교체 전에 쓰는 것과 같은 이유.
+	M.fs[NOTE] = "dxgi.dll 이 없으면 dxgi.dll.sherbet-bak 을 dxgi.dll 로 이름을 바꾸세요";
+	if (M.done("R9 전 복구안내 기록")) return;
+
+	if (o.r9a_fails)
+	{
+		// self 를 밀어내지 못했다 = 아무것도 안 옮겼다. §5.4 R8 과 같은 원칙으로 파일은
+		// 그대로 두고 기록만 남긴다. self 는 여전히 불량 바이너리이므로 rollback_failed 가 진실이다.
+		m.state = "rollback_failed"; m.bad_ver = blamed_ver; m.bad_sha = blamed_sha;
+		write_marker(M.fs, m);
+		M.done("R9a 거부 → rollback_failed(파일 무변화)");
 		return;
 	}
 
@@ -417,17 +501,23 @@ static void run_rollback(machine &M, const rollback_opts &o = rollback_opts())
 	// ⚠️ 되돌리기 **전에** rollback_failed 를 기록한다. self 가 없는 지금 쓰는 것이 규칙이고,
 	// 되돌린 뒤에 쓰면 그 사이에 끊겼을 때 (self=새 바이너리 + 마커 rolledback) 이 되어
 	// 거짓 안전모드가 켜진 채로 **고정점**이 된다(복구가 손댈 이유를 못 찾는다).
-	m.state = "rollback_failed";
+	m.state = "rollback_failed"; m.bad_ver = blamed_ver; m.bad_sha = blamed_sha;
 	write_marker(M.fs, m);
 	if (M.done("R9b 거부 → rollback_failed 기록")) return;
 
 	if (o.r9b_undo_fails)
 	{
-		// 둘 다 실패. self 부재지만 .bak/.failed 가 남아 다음 실행이 되살릴 수 있다.
+		// 둘 다 실패. self 부재지만 .bak/.failed 와 복구안내가 남아 다음 실행(또는 사람)이
+		// 되살릴 수 있다.
 		M.done("R9b 거부 + 되돌리기 거부(self 부재)");
 		return;
 	}
+	// ★ 되돌리기는 **방금 밀어낸 바로 그 파일**을 도로 앉히는 것이다. 여기서 .bak 을
+	// 앉히면 롤백이 사실상 성공한 셈인데 마커는 rollback_failed 라, 디스크와 마커가
+	// 어긋나고 증거 파일(.sherbet-failed)만 덩그러니 남는다.
+	const std::string evidence = get(M.fs, FAILED);
 	check(mv(M.fs, FAILED, SELF), "R9 되돌리기(.sherbet-failed → self)가 실패");
+	check(get(M.fs, SELF) == evidence, "R9 되돌리기가 밀어냈던 그 바이너리를 앉히지 않았다");
 	if (M.done("R9 되돌리기 .sherbet-failed → self")) return;
 }
 
@@ -486,8 +576,6 @@ static boot_action simulate_boot(fs_t &fs, const std::string &running)
 	return decide_boot(on_disk);
 }
 
-static std::string version_of(const std::string &content) { return content == "NEW" ? NEWVER : OLDVER; }
-
 // ★ 절차가 **스스로** 끝났다면(전원차단도, OS 거부도 없었다면) 반드시 self 를 남겨야 한다.
 // self 가 없는 채로 세션이 끝나면 다음 실행에는 우리 DLL 이 **로드조차 되지 않아**
 // startup_repair 가 영영 안 돈다(게임은 System32 폴백으로 켜지고 Sherbet 만 사라진다).
@@ -499,6 +587,16 @@ static void check_session_left_self(const machine &M, bool os_refused)
 	if (M.cut_hit) return;      // 전원차단은 아무것도 마무리할 기회를 주지 않는다
 	if (os_refused) return;     // OS 가 되돌리기까지 거부한 경우(주입된 최악)
 	check(has(M.fs, SELF), "절차가 스스로 끝났는데 self 가 없다 — 다음 실행에 복구 코드가 아예 안 돈다");
+}
+
+// ★ self 가 없는 채로 절차가 끝났다면(전원차단이든 OS 거부든) **복구안내가 반드시 남아
+// 있어야 한다.** 그 상태에서는 다음 실행에 우리 DLL 이 로드조차 안 되므로(게임은 System32
+// 폴백으로 켜진다) 자동 복구가 영영 안 돈다 — 고객에게 남는 단서가 이 파일 하나뿐이다.
+// 이 단언 하나가 '교체 전(S9)' 과 '롤백 전(R9a 앞)' 두 기록 지점을 동시에 못 박는다.
+static void check_note_when_self_gone(const fs_t &fs, const char *where)
+{
+	if (has(fs, SELF)) return;
+	check(has(fs, NOTE), std::string(where) + ": self 가 없는 종료 상태인데 복구안내가 없다 — 고객에게는 Sherbet 이 아무 설명 없이 사라진다");
 }
 
 // P5: rolledback 은 '옛 바이너리로 되돌아가 있다' 는 뜻이고, 이 상태가 §5.4 R11 안전모드
@@ -528,6 +626,27 @@ static void check_repair_preserved(const fs_t &before, const fs_t &after)
 		check(has(after, FAILED), "복구가 §5.4 R9 증거(.sherbet-failed)를 지웠다");
 		check(get(after, FAILED) == get(before, FAILED), "복구가 증거 파일의 내용을 바꿨다");
 	}
+
+	// ★ 블랙리스트는 상태가 아니라 **사실**이다. 복구가 마커를 다시 쓰더라도(promote_pending
+	// 이든 restore_from_new 든) bad_ver/bad_sha 는 그대로 넘어가야 한다 — 이것이
+	// 'restore_from_new 가 rolledback 마커를 pending 으로 확정해도 된다' 는 판단의 **전제**다.
+	// 지워지면 방금 문제를 일으킨 빌드를 그대로 다시 제안하게 된다.
+	// 예외는 하나뿐: 롤백/복원이 **새로** 비난 대상을 적을 때(그때는 before.version 이 된다).
+	boot_marker b, a;
+	if (read_marker(before, b) && (!b.bad_ver.empty() || !b.bad_sha.empty()))
+	{
+		check(read_marker(after, a), "블랙리스트를 들고 있던 마커가 사라졌다");
+		if (!b.bad_ver.empty())
+		{
+			check(!a.bad_ver.empty(), "복구가 블랙리스트 bad_ver 를 지웠다");
+			check(a.bad_ver == b.bad_ver || a.bad_ver == b.version, "블랙리스트 bad_ver 가 엉뚱한 값으로 바뀌었다");
+		}
+		if (!b.bad_sha.empty())
+		{
+			check(!a.bad_sha.empty(), "복구가 블랙리스트 bad_sha 를 지웠다");
+			check(a.bad_sha == b.bad_sha || a.bad_sha == b.sha, "블랙리스트 bad_sha 가 엉뚱한 값으로 바뀌었다");
+		}
+	}
 }
 
 // 수렴 상태에 대한 공통 단언.
@@ -544,8 +663,11 @@ static void check_converged(const fs_t &before, const fs_t &after, int fixture)
 	check(!has(after, NOTE), "수렴 후 복구안내 잔재");
 	check_repair_preserved(before, after);
 
-	// P5 는 귀납적으로 — 복구가 성질을 **깨뜨리지 않는다**
-	if (p5_holds(before))
+	// P5 는 귀납적으로 — 복구가 성질을 **깨뜨리지 않는다**.
+	// 단 .bak 이 마커가 비난하는 바이너리를 담고 있으면(우리 절차는 그런 상태를 만들지
+	// 않는다 — machine::done 이 확인한다) restore_from_bak 이 불량 바이너리를 앉히므로
+	// P5 는 성립할 수 없다. 그 전제를 명시적으로 건다.
+	if (p5_holds(before) && bak_not_blamed(before))
 		check(p5_holds(after), "복구가 P5 를 깨뜨렸다(rolledback 인데 self 가 새 바이너리)");
 
 	// P4 마커 무결성
@@ -628,6 +750,7 @@ static void test_swap_interruptions()
 					machine S(start, swap_cut);
 					run_swap(S, kOpts[opt]);
 					check_session_left_self(S, kOpts[opt].s11_undo_fails);
+					check_note_when_self_gone(S.fs, "교체 종료");
 
 					// 시작조차 못 한 경우(파싱 불가 마커 / S8 총체적 실패)는 디스크가 그대로여야 한다.
 					if (S.aborted && S.step == 0)
@@ -637,6 +760,7 @@ static void test_swap_interruptions()
 					machine R(S.fs, repair_cut);
 					startup_repair(R);
 					check(recoverable(R.fs), "복구 중 2차 중단으로 DLL 소스가 전부 사라짐");
+					check_note_when_self_gone(R.fs, "교체 후 복구 종료");
 
 					// P2 수렴
 					fs_t conv = R.fs;
@@ -672,28 +796,42 @@ static void check_rollback_outcome(const fs_t &fs)
 	check(has(fs, SELF), "롤백 후 self 가 없다");
 	boot_marker m;
 	check(parse_marker(get(fs, MARK), m), "롤백 후 마커가 파싱되지 않는다");
+
+	// 롤백이 아무것도 기록·이동하지 못한 채 끊긴 지점(복구안내만 쓰고 전원차단)에서는
+	// 디스크가 롤백 직전 그대로여야 한다. 블랙리스트도 아직 없는 게 맞다 — 그 판정은
+	// 부팅 실패가 다시 두 번 쌓이면 그대로 다시 내려진다.
+	if (m.state == "pending")
+	{
+		check(get(fs, SELF) == "NEW", "롤백이 시작도 못 했는데 self 가 바뀌었다");
+		check(has(fs, BAKF), "롤백이 시작도 못 했는데 롤백 재료가 사라졌다");
+		check(m.tries == 0, "확정된 pending 마커의 tries 가 0 이 아니다");
+		return;
+	}
 	// P8 — 끊기든 거부되든 블랙리스트는 살아남는다
 	check(m.bad_ver == NEWVER && m.bad_sha == NEWSHA, "롤백 후 블랙리스트가 비었다");
 	info u;
 	u.ok = true; u.version = NEWVER; u.sha256 = NEWSHA;
 	check(!should_offer(version_of(get(fs, SELF)), u, m.bad_ver, m.bad_sha), "방금 되돌린 버전을 다시 제안한다");
-	if (m.state == "rolledback")
-		check(get(fs, SELF) == "OLD", "rolledback 인데 self 가 옛 바이너리가 아니다");
-	else
-		check(m.state == "rollback_failed",
-			std::string("롤백 후 상태가 rolledback 도 rollback_failed 도 아니다: ") + m.state);
+	// ★ 한쪽 함의가 아니라 **동치**다. rollback_failed 는 'self 가 아직 불량 바이너리' 라는
+	// 뜻이고, 되돌리기에 성공했는데 rollback_failed 라고 적으면 지원팀도 R13 도 디스크
+	// 상태를 거꾸로 읽는다(그 반대도 마찬가지다). 두 상태는 서로 대체할 수 없다.
+	check(m.state == "rolledback" || m.state == "rollback_failed",
+		std::string("롤백 후 상태가 rolledback 도 rollback_failed 도 아니다: ") + m.state);
+	check((m.state == "rolledback") == (get(fs, SELF) == "OLD"),
+		std::string("롤백 상태와 디스크가 어긋난다: state=") + m.state + ", self=" + get(fs, SELF));
 }
 
 static void test_rollback_interruptions()
 {
-	static const rollback_opts kR[3] = {
-		rollback_opts{ false, false },
-		rollback_opts{ true,  false },   // .bak → self 거부 → 첫 이동 되돌림
-		rollback_opts{ true,  true  }    // 되돌리기까지 거부
+	static const rollback_opts kR[4] = {
+		rollback_opts{ false, false, false },
+		rollback_opts{ true,  false, false },   // R9a(self → .sherbet-failed) 거부
+		rollback_opts{ false, true,  false },   // R9b(.bak → self) 거부 → 첫 이동 되돌림
+		rollback_opts{ false, true,  true  }    // 되돌리기까지 거부
 	};
 
 	for (int rb_cut = 0; rb_cut <= 6; ++rb_cut)
-		for (int ropt = 0; ropt < 3; ++ropt)
+		for (int ropt = 0; ropt < 4; ++ropt)
 			for (int fixture = 0; fixture < 2; ++fixture)
 				for (int repair_cut = 0; repair_cut <= 6; ++repair_cut)
 				{
@@ -709,11 +847,13 @@ static void test_rollback_interruptions()
 					machine B(fs, rb_cut);
 					run_rollback(B, kR[ropt]);
 					check_session_left_self(B, kR[ropt].r9b_undo_fails);
+					check_note_when_self_gone(B.fs, "롤백 종료");
 					check(recoverable(B.fs), "롤백 중 중단으로 DLL 소스가 전부 사라짐");
 
 					machine R(B.fs, repair_cut);
 					startup_repair(R);
 					check(recoverable(R.fs), "롤백 복구 중 2차 중단으로 DLL 소스가 전부 사라짐");
+					check_note_when_self_gone(R.fs, "롤백 후 복구 종료");
 
 					fs_t conv = R.fs;
 					repair_to_fixpoint(conv);
@@ -731,12 +871,13 @@ static void test_rollback_interruptions()
 // 유일한 경로이고, 다른 스위트의 롤백(pending 에서 시작)과 진입 상태가 다르다.
 static void test_s12_mismatch_rollback()
 {
-	static const rollback_opts kR[3] = {
-		rollback_opts{ false, false }, rollback_opts{ true, false }, rollback_opts{ true, true }
+	static const rollback_opts kR[4] = {
+		rollback_opts{ false, false, false }, rollback_opts{ true, false, false },
+		rollback_opts{ false, true, false },  rollback_opts{ false, true, true }
 	};
 
 	for (int rb_cut = 0; rb_cut <= 6; ++rb_cut)
-		for (int ropt = 0; ropt < 3; ++ropt)
+		for (int ropt = 0; ropt < 4; ++ropt)
 			for (int repair_cut = 0; repair_cut <= 6; ++repair_cut)
 			{
 				scene("S12", rb_cut, ropt, 0, repair_cut);
@@ -755,17 +896,96 @@ static void test_s12_mismatch_rollback()
 				machine B(fs, rb_cut);
 				run_rollback(B, kR[ropt]);
 				check_session_left_self(B, kR[ropt].r9b_undo_fails);
+				check_note_when_self_gone(B.fs, "S12 롤백 종료");
 				check(recoverable(B.fs), "S12 롤백 중 중단으로 DLL 소스가 전부 사라짐");
 
 				machine R(B.fs, repair_cut);
 				startup_repair(R);
 				check(recoverable(R.fs), "S12 롤백 복구 중 2차 중단으로 DLL 소스가 전부 사라짐");
+				check_note_when_self_gone(R.fs, "S12 롤백 후 복구 종료");
 
 				fs_t conv = R.fs;
 				repair_to_fixpoint(conv);
 				check_converged(B.fs, conv, 0);
 				check_rollback_outcome(conv);
 				check(!has(conv, NOTE), "S12 롤백 후 복구안내가 남았다");
+			}
+}
+
+static void check_rollback_outcome(const fs_t &fs);
+
+// ── 2b-2. 복구 자신의 rename 이 거부되는 경우 ──────────────────────────────
+// self 가 이미 없는 상태에서 복구가 도는데 그 rename 마저 거부된다 — 가장 나쁜 순간이다.
+// 여기서 요구하는 것: (a) 아무것도 잃지 않는다, (b) self 가 없으니 복구안내가 남아 있다,
+// (c) 블랙리스트가 보존된다, (d) 거부가 풀린 다음 실행에서 반드시 수렴한다.
+static void test_repair_denial()
+{
+	static const swap_opts kOpts[3] = {
+		swap_opts{ false, false, false },
+		swap_opts{ false, false, false, false, /*s11_fails*/true },
+		swap_opts{ false, false, false, false, true, /*s11_undo_fails*/true }
+	};
+	for (int swap_cut = 0; swap_cut <= 9; ++swap_cut)
+		for (int opt = 0; opt < 3; ++opt)
+			for (int fixture = 0; fixture < kFixtures; ++fixture)
+				for (int denial_cut = 0; denial_cut <= 4; ++denial_cut)
+				{
+					scene("복구거부", swap_cut, opt, fixture, denial_cut);
+					fs_t fs = make_fixture(fixture, kOpts[opt]);
+					{
+						machine S(fs, swap_cut);
+						run_swap(S, kOpts[opt]);
+						fs = S.fs;
+					}
+
+					repair_opts ro;
+					ro.restore_denied = true;
+					machine R(fs, denial_cut);
+					startup_repair(R, ro);
+					check(recoverable(R.fs), "복구 rename 거부로 DLL 소스가 전부 사라짐");
+					check_note_when_self_gone(R.fs, "복구 rename 거부");
+					check_repair_preserved(fs, R.fs);
+
+					// 거부가 풀리면(= 다음 실행) 반드시 수렴한다.
+					fs_t conv = R.fs;
+					repair_to_fixpoint(conv);
+					check_converged(fs, conv, fixture);
+				}
+
+	// 롤백 뒤에도 같은 성질이 성립해야 한다(self 가 없는 상태가 훨씬 잘 만들어진다).
+	static const rollback_opts kR[3] = {
+		rollback_opts{ false, false, false }, rollback_opts{ false, true, false },
+		rollback_opts{ false, true, true }
+	};
+	for (int rb_cut = 0; rb_cut <= 6; ++rb_cut)
+		for (int ropt = 0; ropt < 3; ++ropt)
+			for (int denial_cut = 0; denial_cut <= 4; ++denial_cut)
+			{
+				scene("복구거부(롤백 뒤)", rb_cut, ropt, 0, denial_cut);
+				fs_t fs = make_fixture(0, swap_opts());
+				{
+					machine S(fs, 0);
+					run_swap(S, swap_opts());
+					fs = S.fs;
+				}
+				{
+					machine B(fs, rb_cut);
+					run_rollback(B, kR[ropt]);
+					fs = B.fs;
+				}
+
+				repair_opts ro;
+				ro.restore_denied = true;
+				machine R(fs, denial_cut);
+				startup_repair(R, ro);
+				check(recoverable(R.fs), "롤백 뒤 복구 rename 거부로 DLL 소스가 전부 사라짐");
+				check_note_when_self_gone(R.fs, "롤백 뒤 복구 rename 거부");
+				check_repair_preserved(fs, R.fs);
+
+				fs_t conv = R.fs;
+				repair_to_fixpoint(conv);
+				check_converged(fs, conv, 0);
+				check_rollback_outcome(conv);
 			}
 }
 
@@ -787,8 +1007,22 @@ static void test_external_interference()
 						run_swap(S, swap_opts());
 						fs = S.fs;
 					}
+					check_note_when_self_gone(fs, "간섭 전 교체 종료");
 					rm(fs, kVictims[v]);
-					if (!recoverable(fs)) continue;   // 마지막 사본까지 지운 경우는 아래 probe 스위트 담당
+					if (!recoverable(fs))
+					{
+						// 마지막 사본까지 외부에서 지워진 경우. 조용히 넘기지 않고 여기서
+						// 성립해야 하는 것을 단언한다: 복구는 **아무 파일도 만들지 않고**
+						// 기록만 남긴다(§5.4 R8). 건수는 마지막에 출력해 눈에 보이게 한다.
+						++g_interference_wiped;
+						fs_t wiped = fs;
+						repair_to_fixpoint(wiped);
+						check(!recoverable(wiped), "DLL 이 하나도 없는데 복구가 파일을 만들어 냈다");
+						boot_marker wm;
+						if (read_marker(wiped, wm))
+							check(wm.state == "rollback_failed", "재료가 전멸했는데 포기 기록을 안 남겼다");
+						continue;
+					}
 
 					machine R(fs, repair_cut);
 					startup_repair(R);
@@ -877,11 +1111,15 @@ static void test_probe_states()
 	for (int bits = 0; bits < 16; ++bits)
 		for (int st = 0; st < kMarkerStateCount; ++st)
 			for (int selfnew = 0; selfnew < 2; ++selfnew)
+				for (int baknew = 0; baknew < 2; ++baknew)
 			{
 				fs_t start;
 				if (bits & 1) start[SELF]   = selfnew ? "NEW" : "OLD";
 				if (bits & 2) start[NEWF]   = "NEW";
-				if (bits & 4) start[BAKF]   = "OLD";
+				// ⚠️ .bak 이 '마커가 비난하는 바이너리' 를 담는 경우도 만든다. 우리 절차는
+				// 그런 상태를 만들지 않지만(machine::done 이 확인한다) 만들어졌을 때 무엇이
+				// 성립하고 무엇이 성립하지 않는지를 명시적으로 남겨 둔다 — P5 는 그때만 빠진다.
+				if (bits & 4) start[BAKF]   = baknew ? "NEW" : "OLD";
 				if (bits & 8) start[BAKOLD] = "OLD";
 				if (*kMarkerStates[st])
 				{
@@ -889,10 +1127,10 @@ static void test_probe_states()
 					m.state = kMarkerStates[st]; m.version = NEWVER; m.sha = NEWSHA; m.tries = 1;
 					start[MARK] = serialize_marker(m);
 				}
-				char buf[192];
-				std::snprintf(buf, sizeof(buf), "probe self=%d(%s) new=%d bak=%d bakold=%d state='%s'",
+				char buf[224];
+				std::snprintf(buf, sizeof(buf), "probe self=%d(%s) new=%d bak=%d(%s) bakold=%d state='%s'",
 					(bits & 1) != 0, selfnew ? "NEW" : "OLD", (bits & 2) != 0, (bits & 4) != 0,
-					(bits & 8) != 0, kMarkerStates[st]);
+					baknew ? "NEW" : "OLD", (bits & 8) != 0, kMarkerStates[st]);
 				g_scene = buf;
 
 				// 복구 도중 어디서 끊겨도 마지막 사본을 잃지 않는다
@@ -910,7 +1148,7 @@ static void test_probe_states()
 				check_repair_preserved(start, conv);
 				if (recoverable(start))
 					check(has(conv, SELF), "재료가 있는데 복구가 self 를 되살리지 못했다");
-				if (p5_holds(start))
+				if (p5_holds(start) && bak_not_blamed(start))
 					check(p5_holds(conv), "복구가 P5 를 깨뜨렸다(rolledback 인데 self 가 새 바이너리)");
 
 				fs_t again = conv;
@@ -1124,6 +1362,7 @@ int main()
 	test_totality();
 	test_probe_states();
 	test_swap_interruptions();
+	test_repair_denial();
 	test_external_interference();
 	test_rollback_interruptions();
 	test_s12_mismatch_rollback();
@@ -1140,6 +1379,8 @@ int main()
 	std::printf("sherbet_swap_sim: 단언 %ld 개 통과, 복구 진입 상태 분포:\n", g_checks);
 	for (int i = 0; i < kStates; ++i)
 		std::printf("  %-20s %ld\n", state_name(static_cast<disk_state>(i)), g_seen[i]);
+	std::printf("  서로 다른 복구 입력 상태 %zu 종\n", g_repair_inputs.size());
+	std::printf("  간섭 스위트에서 재료가 전멸해 별도 처리한 시나리오 %ld 건\n", g_interference_wiped);
 	std::printf("sherbet_swap_sim: ALL PASS\n");
 	return 0;
 }
