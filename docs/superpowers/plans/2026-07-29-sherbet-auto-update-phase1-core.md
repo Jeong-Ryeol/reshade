@@ -691,6 +691,30 @@ static std::string make_pe(unsigned short machine, unsigned short characteristic
 	return b;
 }
 
+// make_pe 는 e_lfanew + 24 <= 버퍼크기 일 때만 PE 서명을 쓴다. 경계검사 자체를 시험하려면
+// 버퍼 밖을 가리키는 e_lfanew 도 그대로 기록해야 하므로 여기서 직접 만든다.
+// write_nt 를 켤 때는 호출자가 e_lfanew + 24 <= len 을 보장할 것.
+static std::string raw_pe(std::size_t len, std::uint32_t e_lfanew, bool write_nt,
+                          unsigned short machine = 0x8664, unsigned short characteristics = 0x2000) {
+	std::string b(len, '\0');
+	if (len >= 2) { b[0] = 'M'; b[1] = 'Z'; }
+	if (len >= 0x40) {
+		b[0x3c] = static_cast<char>(e_lfanew & 0xff);
+		b[0x3d] = static_cast<char>((e_lfanew >> 8) & 0xff);
+		b[0x3e] = static_cast<char>((e_lfanew >> 16) & 0xff);
+		b[0x3f] = static_cast<char>((e_lfanew >> 24) & 0xff);
+	}
+	if (write_nt) {
+		const std::size_t o = static_cast<std::size_t>(e_lfanew);
+		b[o] = 'P'; b[o + 1] = 'E'; b[o + 2] = '\0'; b[o + 3] = '\0';
+		b[o + 4] = static_cast<char>(machine & 0xff);
+		b[o + 5] = static_cast<char>((machine >> 8) & 0xff);
+		b[o + 22] = static_cast<char>(characteristics & 0xff);
+		b[o + 23] = static_cast<char>((characteristics >> 8) & 0xff);
+	}
+	return b;
+}
+
 static void test_pe_check() {
 	const unsigned short DLL = 0x2000; // IMAGE_FILE_DLL
 	const std::string x64 = make_pe(0x8664, DLL);
@@ -722,10 +746,50 @@ static void test_pe_check() {
 	// 버퍼가 너무 짧음
 	assert(!pe_check(reinterpret_cast<const unsigned char *>(x64.data()), 8, true));
 	assert(!pe_check(nullptr, 0, true));
+
+	// ── e_lfanew 32비트 랩어라운드 ────────────────────────────────────────
+	// `e_lfanew + 24 > len` 을 uint32 로 계산하면 0xFFFFFFFF + 24 == 23 이 되어
+	// 경계검사를 통과하고 head + 0xFFFFFFFF 를 역참조한다(SIGSEGV 또는 무관한 메모리 읽기).
+	// 입력 4바이트는 전부 공격자가 고르는 값이다. 아래 세 개는 크래시 없이 false 여야 한다.
+	{
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFFFu, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+	{
+		// 랩 구간의 하한 — 0xFFFFFFE8 + 24 == 0
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFE8u, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+	{
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFF0u, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+
+	// ── 경계 정확도: e_lfanew + 24 == len 은 통과, +1 이면 거부 ────────────
+	// COFF 헤더에서 우리가 읽는 최대 오프셋이 +23 이므로 딱 24바이트면 충분하다.
+	{
+		const std::uint32_t e = 0x40;
+		const std::string tight = raw_pe(e + 24, e, true, 0x8664, DLL); // len == e_lfanew + 24
+		assert(pe_check(reinterpret_cast<const unsigned char *>(tight.data()), tight.size(), true));
+		// 1바이트 부족(= e_lfanew + 24 == len + 1)이면 마지막 바이트를 못 읽으므로 거부
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(tight.data()), tight.size() - 1, true));
+	}
+
+	// len == 0 인데 포인터는 유효 — 널 검사와 별개로 길이만으로 걸러야 한다
+	{
+		const std::string any = raw_pe(0x40, 0x40, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(any.data()), 0, true));
+	}
 }
 ```
 
 `main()`에 `test_pe_check();` 추가.
+
+> **경계검사 오버플로가 이 태스크의 핵심 위험이다.** `pe_check` 의 입력은 네트워크에서 받은
+> 4MB 파일 그대로이고 `e_lfanew` 4바이트는 공격자가 통째로 고른다. 위 테스트 목록에
+> `0xFFFFFFFF`·`0xFFFFFFE8`(랩 하한)·`0xFFFFFFF0`·정확 경계쌍(`e_lfanew + 24 == len` 통과,
+> `== len + 1` 거부)·`len == 0` + 유효 포인터가 **반드시** 있어야 한다. 이것들이 없으면
+> 32비트 덧셈 랩어라운드가 테스트를 다 통과한 채로 살아남는다.
 
 - [ ] **Step 2: 테스트가 실패하는지 확인**
 
@@ -750,7 +814,14 @@ Expected: FAIL — `use of undeclared identifier 'pe_check'`
 				(static_cast<std::uint32_t>(head[0x3e]) << 16) |
 				(static_cast<std::uint32_t>(head[0x3f]) << 24);
 			// COFF 헤더는 서명 4바이트 + 20바이트. Characteristics 는 서명 기준 +22.
-			if (e_lfanew < 0x40 || e_lfanew + 24 > len) return false;
+			// ⚠️ `e_lfanew + 24 > len` 으로 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이 32비트에서
+			// 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고 head + 0xFFFFFFFF 를
+			// 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로 고르는 값이다.
+			// size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다. 반드시
+			// 이미 넓혀진 len 쪽에서 뺀다. 위 `len < 0x40` 로 len >= 64 라 아래 가드는
+			// 중복이지만, len - 24 가 언더플로하지 않음을 한 줄 안에서 증명해 둔다.
+			if (len < 24) return false;
+			if (e_lfanew < 0x40 || static_cast<std::size_t>(e_lfanew) > len - 24) return false;
 			const unsigned char *nt = head + e_lfanew;
 			if (nt[0] != 'P' || nt[1] != 'E' || nt[2] != 0 || nt[3] != 0) return false;
 			const std::uint16_t machine =

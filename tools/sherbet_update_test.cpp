@@ -126,7 +126,9 @@ static void test_url_allowed() {
 	// 제어문자 — CRLF 헤더 주입
 	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a.dll\r\nHost: evil.kr"));
 	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\ndll"));
-	assert(!url_allowed(std::string("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\0b.dll", 68)));
+	// 길이는 리터럴 실제 크기(66)여야 한다. 68 을 주면 리터럴 밖 2바이트를 읽어(ASan
+	// global-buffer-overflow) 세니타이저 빌드가 여기서 죽고 뒤 테스트가 아예 안 돈다.
+	assert(!url_allowed(std::string("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\0b.dll", 66)));
 	// 정상 URL 은 여전히 통과해야 한다(과잉 차단 회귀 방지)
 	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll"));
 	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-10.20.30/ReShade32.dll"));
@@ -164,6 +166,30 @@ static std::string make_pe(unsigned short machine, unsigned short characteristic
 	return b;
 }
 
+// make_pe 는 e_lfanew + 24 <= 버퍼크기 일 때만 PE 서명을 쓴다. 경계검사 자체를 시험하려면
+// 버퍼 밖을 가리키는 e_lfanew 도 그대로 기록해야 하므로 여기서 직접 만든다.
+// write_nt 를 켤 때는 호출자가 e_lfanew + 24 <= len 을 보장할 것.
+static std::string raw_pe(std::size_t len, std::uint32_t e_lfanew, bool write_nt,
+                          unsigned short machine = 0x8664, unsigned short characteristics = 0x2000) {
+	std::string b(len, '\0');
+	if (len >= 2) { b[0] = 'M'; b[1] = 'Z'; }
+	if (len >= 0x40) {
+		b[0x3c] = static_cast<char>(e_lfanew & 0xff);
+		b[0x3d] = static_cast<char>((e_lfanew >> 8) & 0xff);
+		b[0x3e] = static_cast<char>((e_lfanew >> 16) & 0xff);
+		b[0x3f] = static_cast<char>((e_lfanew >> 24) & 0xff);
+	}
+	if (write_nt) {
+		const std::size_t o = static_cast<std::size_t>(e_lfanew);
+		b[o] = 'P'; b[o + 1] = 'E'; b[o + 2] = '\0'; b[o + 3] = '\0';
+		b[o + 4] = static_cast<char>(machine & 0xff);
+		b[o + 5] = static_cast<char>((machine >> 8) & 0xff);
+		b[o + 22] = static_cast<char>(characteristics & 0xff);
+		b[o + 23] = static_cast<char>((characteristics >> 8) & 0xff);
+	}
+	return b;
+}
+
 static void test_pe_check() {
 	const unsigned short DLL = 0x2000; // IMAGE_FILE_DLL
 	const std::string x64 = make_pe(0x8664, DLL);
@@ -195,6 +221,40 @@ static void test_pe_check() {
 	// 버퍼가 너무 짧음
 	assert(!pe_check(reinterpret_cast<const unsigned char *>(x64.data()), 8, true));
 	assert(!pe_check(nullptr, 0, true));
+
+	// ── e_lfanew 32비트 랩어라운드 ────────────────────────────────────────
+	// `e_lfanew + 24 > len` 을 uint32 로 계산하면 0xFFFFFFFF + 24 == 23 이 되어
+	// 경계검사를 통과하고 head + 0xFFFFFFFF 를 역참조한다(SIGSEGV 또는 무관한 메모리 읽기).
+	// 입력 4바이트는 전부 공격자가 고르는 값이다. 아래 세 개는 크래시 없이 false 여야 한다.
+	{
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFFFu, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+	{
+		// 랩 구간의 하한 — 0xFFFFFFE8 + 24 == 0
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFE8u, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+	{
+		const std::string w32 = raw_pe(0x40, 0xFFFFFFF0u, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(w32.data()), w32.size(), true));
+	}
+
+	// ── 경계 정확도: e_lfanew + 24 == len 은 통과, +1 이면 거부 ────────────
+	// COFF 헤더에서 우리가 읽는 최대 오프셋이 +23 이므로 딱 24바이트면 충분하다.
+	{
+		const std::uint32_t e = 0x40;
+		const std::string tight = raw_pe(e + 24, e, true, 0x8664, DLL); // len == e_lfanew + 24
+		assert(pe_check(reinterpret_cast<const unsigned char *>(tight.data()), tight.size(), true));
+		// 1바이트 부족(= e_lfanew + 24 == len + 1)이면 마지막 바이트를 못 읽으므로 거부
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(tight.data()), tight.size() - 1, true));
+	}
+
+	// len == 0 인데 포인터는 유효 — 널 검사와 별개로 길이만으로 걸러야 한다
+	{
+		const std::string any = raw_pe(0x40, 0x40, false);
+		assert(!pe_check(reinterpret_cast<const unsigned char *>(any.data()), 0, true));
+	}
 }
 
 int main() {

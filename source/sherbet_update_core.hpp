@@ -229,7 +229,14 @@ namespace sherbet
 				(static_cast<std::uint32_t>(head[0x3e]) << 16) |
 				(static_cast<std::uint32_t>(head[0x3f]) << 24);
 			// COFF 헤더는 서명 4바이트 + 20바이트. Characteristics 는 서명 기준 +22.
-			if (e_lfanew < 0x40 || e_lfanew + 24 > len) return false;
+			// ⚠️ `e_lfanew + 24 > len` 으로 쓰면 안 된다. e_lfanew 는 uint32 라 덧셈이 32비트에서
+			// 랩어라운드해(0xFFFFFFFF + 24 == 23) 경계검사를 통과하고 head + 0xFFFFFFFF 를
+			// 역참조한다. 이 4바이트는 네트워크에서 온 파일이 통째로 고르는 값이다.
+			// size_t 로 캐스팅한 덧셈도 32비트 빌드(ReShade32)에선 여전히 랩한다. 반드시
+			// 이미 넓혀진 len 쪽에서 뺀다. 위 `len < 0x40` 로 len >= 64 라 아래 가드는
+			// 중복이지만, len - 24 가 언더플로하지 않음을 한 줄 안에서 증명해 둔다.
+			if (len < 24) return false;
+			if (e_lfanew < 0x40 || static_cast<std::size_t>(e_lfanew) > len - 24) return false;
 			const unsigned char *nt = head + e_lfanew;
 			if (nt[0] != 'P' || nt[1] != 'E' || nt[2] != 0 || nt[3] != 0) return false;
 			const std::uint16_t machine =
