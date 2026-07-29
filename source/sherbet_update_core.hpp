@@ -400,6 +400,43 @@ namespace sherbet
 			return u;
 		}
 
+		// ── 파일 이름 규약 (스펙 §4.3) ─────────────────────────────────────
+		// ⚠️ **여기가 유일한 정의처다.** 접미사와 복구안내 문구를 글루(.cpp)나 테스트에
+		// 다시 타이핑하면, 시뮬레이터(tools/sherbet_swap_sim.cpp)가 자기 사본을 검증하는
+		// 꼴이 되어 제품에 대해 아무것도 못 박지 못한다 — 제품이 ".sherbet-backup" 을 쓰고
+		// 시뮬레이터가 ".sherbet-bak" 을 써도 초록불이다. 그래서 시뮬레이터는 이 함수들을
+		// 소비한다. 이름을 바꾸려면 여기만 고치면 되고, 고치는 순간 시뮬레이터가 따라온다.
+		//
+		// self(= 지금 이 DLL 의 파일 이름)는 설치마다 다르다(dxgi.dll / d3d11.dll / opengl32.dll…).
+		// 상수로 둘 수 없고, 항상 g_reshade_dll_path.filename() 에서 온다.
+		inline const char *suffix_new_part() { return ".sherbet-new.part"; } // 검증 전 스트리밍 대상
+		inline const char *suffix_new()      { return ".sherbet-new"; }      // 검증 통과한 새 바이너리
+		inline const char *suffix_bak()      { return ".sherbet-bak"; }      // 교체 전 self(롤백 재료)
+		inline const char *suffix_bak_old()  { return ".sherbet-bak.old"; }  // 못 지운 묵은 .bak
+		inline const char *suffix_failed()   { return ".sherbet-failed"; }   // §5.4 R9 증거 1개
+		inline const char *marker_name()     { return "sherbet.update"; }
+
+		// ⚠️ 파일명에 비ASCII 가 들어간다. Phase 3 이 이 이름으로 CreateFileW 를 부를 때는
+		// 반드시 MultiByteToWideChar(CP_UTF8, …) 를 쓸 것 —
+		// std::wstring(s.begin(), s.end()) 는 UTF-8 바이트를 그대로 wchar 로 늘려 깨진
+		// 이름의 파일을 만든다(그러면 고객에게 남는 유일한 단서가 읽을 수 없는 이름이 된다).
+		inline const char *recovery_note_name() { return "Sherbet-\xEB\xB3\xB5\xEA\xB5\xAC\xEC\x95\x88\xEB\x82\xB4.txt"; } // "Sherbet-복구안내.txt"
+
+		// §4.4 S9 는 복구안내에 **실제 파일명**을 넣으라고 못 박는다 — 고객이 프록시를
+		// dxgi.dll 이 아니라 d3d11.dll/opengl32.dll 로 넣었을 수 있고, 그 이름을 모르면
+		// 안내문이 무용지물이다. 기록 지점이 둘(§4.4 S9 = 교체 전, §5.4 R9-pre = 롤백 전)이라
+		// 문구가 갈라지지 않도록 여기서만 만든다.
+		// ⚠️ 두 이름을 **모두** 넣어야 한다. 백업 이름만 적힌 안내문은 "무엇으로 이름을
+		// 바꿔야 하는지" 를 빠뜨리는데, "dxgi.dll.sherbet-bak" 안에 "dxgi.dll" 이 들어 있어서
+		// 단순 부분문자열 검사로는 그 결함이 잡히지 않는다(시뮬레이터의 mentions_file 참고).
+		inline std::string make_recovery_note(const std::string &self_name, const std::string &bak_name)
+		{
+			return std::string("[Sherbet \xEB\xB3\xB5\xEA\xB5\xAC \xEC\x95\x88\xEB\x82\xB4] ") + self_name + // "[Sherbet 복구 안내] "
+				" \xEC\x9D\xB4(\xEA\xB0\x80) \xEC\x97\x86\xEC\x9C\xBC\xEB\xA9\xB4 " + bak_name +             // " 이(가) 없으면 "
+				" \xEC\x9D\x98 \xEC\x9D\xB4\xEB\xA6\x84\xEC\x9D\x84 " + self_name +                          // " 의 이름을 "
+				" \xEB\xA1\x9C \xEB\xB0\x94\xEA\xBE\xB8\xEB\xA9\xB4 \xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4.";  // " 로 바꾸면 됩니다."
+		}
+
 		// ── 부팅 마커 ──────────────────────────────────────────────────────
 		// <DLL 과 같은 폴더>/sherbet.update. sherbet.auth 와 같은 key=value 줄 포맷.
 		// writer 가 셋(교체 워커 / 렌더 스레드 / 다른 프로세스의 attach)이라

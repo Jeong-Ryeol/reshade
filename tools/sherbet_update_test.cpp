@@ -162,6 +162,43 @@ static void test_url_allowed() {
 	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a~b.dll"));
 }
 
+// 실제 파일명과 복구안내 문구는 제품 헤더에만 있다(시뮬레이터가 사본을 들고 있으면
+// Phase 3 이 다른 이름을 써도 아무도 못 잡는다).
+static void test_file_names_and_note() {
+	assert(std::string(suffix_new_part()) == ".sherbet-new.part");
+	assert(std::string(suffix_new()) == ".sherbet-new");
+	assert(std::string(suffix_bak()) == ".sherbet-bak");
+	assert(std::string(suffix_bak_old()) == ".sherbet-bak.old");
+	assert(std::string(suffix_failed()) == ".sherbet-failed");
+	assert(std::string(marker_name()) == "sherbet.update");
+
+	// ⚠️ .sherbet-bak.old 는 .sherbet-bak 의 **연장**이어야 한다(S8 이 밀어내는 대상).
+	assert(std::string(suffix_bak_old()).compare(0, std::string(suffix_bak()).size(), suffix_bak()) == 0);
+	// .part 는 .sherbet-new 의 연장 — S7 의 rename 이 접미사 한 조각만 떼는 형태다.
+	assert(std::string(suffix_new_part()).compare(0, std::string(suffix_new()).size(), suffix_new()) == 0);
+
+	// 복구안내 파일명은 UTF-8 이고(비ASCII), 깨지면 고객에게 남는 유일한 단서가 무너진다.
+	const std::string nm = recovery_note_name();
+	assert(nm == "Sherbet-\xEB\xB3\xB5\xEA\xB5\xAC\xEC\x95\x88\xEB\x82\xB4.txt");
+	assert(nm.size() > 12 && nm.compare(nm.size() - 4, 4, ".txt") == 0);
+
+	// 안내문에는 **두 이름이 모두** 들어가야 한다. 부분문자열 검사로는 이 결함이 안 잡힌다:
+	// "dxgi.dll.sherbet-bak" 안에 "dxgi.dll" 이 들어 있기 때문이다.
+	const std::string self = "d3d11.dll";
+	const std::string bak = self + suffix_bak();
+	const std::string note = make_recovery_note(self, bak);
+	assert(note.find(bak) != std::string::npos);
+	// self 가 '더 긴 이름의 앞토막이 아닌' 형태로 최소 한 번은 나와야 한다
+	bool standalone = false;
+	for (std::size_t i = note.find(self); i != std::string::npos; i = note.find(self, i + 1)) {
+		const std::size_t end = i + self.size();
+		if (end >= note.size() || note[end] == ' ') { standalone = true; break; }
+	}
+	assert(standalone);
+	// 문구가 통째로 비거나 파일명만 나열되면 고객이 무엇을 할지 알 수 없다
+	assert(note.size() > self.size() + bak.size() + 10);
+}
+
 static void test_split_https_url() {
 	std::string host, path;
 	assert(split_https_url(
@@ -1155,6 +1192,7 @@ int main() {
 	test_sha256_padding_boundaries();
 	test_is_sha256_hex();
 	test_url_allowed();
+	test_file_names_and_note();
 	test_split_https_url();
 	test_pe_bounds_ok(); // pe_check 보다 먼저 — 경계 판정이 깨졌으면 역참조 전에 깨끗이 실패한다
 	test_pe_check();

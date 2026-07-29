@@ -37,22 +37,24 @@ using namespace sherbet::update;
 // 가짜 파일시스템: 경로 → 내용("OLD"/"NEW"/마커 텍스트)
 using fs_t = std::map<std::string, std::string>;
 
-static const char *SELF   = "dxgi.dll";
-static const char *NEWF   = "dxgi.dll.sherbet-new";
-static const char *BAKF   = "dxgi.dll.sherbet-bak";
-static const char *BAKOLD = "dxgi.dll.sherbet-bak.old";
-static const char *FAILED = "dxgi.dll.sherbet-failed";
-static const char *NOTE   = "Sherbet-복구안내.txt";
-static const char *MARK   = "sherbet.update";
+// ⚠️ 접미사와 복구안내 문구를 **여기서 다시 타이핑하지 않는다.** 제품
+// (sherbet_update_core.hpp)에서 가져온다 — 사본을 두면 Phase 3 의 sherbet_update.cpp 가
+// 다른 이름·다른 문구를 써도 이 시뮬레이터는 자기 사본을 검증하며 초록불이 된다.
+// (아래 mentions_file 단언들이 그때 아무것도 못 박게 된다.)
+// self 는 설치마다 다른 이름이라 제품에 상수로 둘 수 없다 — 여기서만 고른다.
+static const char *SELF = "dxgi.dll";
 
-// §4.4 S9 는 복구안내에 **실제 파일명**을 넣으라고 못 박는다 — 고객이 프록시를 dxgi.dll 이
-// 아니라 d3d11.dll/opengl32.dll 로 넣었을 수 있고, 그 이름을 모르면 안내문이 무용지물이다.
-// 기록 지점이 둘(S9 = 교체 전, R9-pre = 롤백 전)이라 문구가 갈라지지 않도록 여기서만 만든다.
-static std::string recovery_note(const char *self_name, const char *bak_name)
-{
-	return std::string("[Sherbet 복구 안내] ") + self_name + " 이(가) 없으면 " +
-		bak_name + " 의 이름을 " + self_name + " 로 바꾸면 됩니다.";
-}
+static const std::string kNewF   = std::string(SELF) + suffix_new();
+static const std::string kBakF   = std::string(SELF) + suffix_bak();
+static const std::string kBakOld = std::string(SELF) + suffix_bak_old();
+static const std::string kFailed = std::string(SELF) + suffix_failed();
+
+static const char *NEWF   = kNewF.c_str();
+static const char *BAKF   = kBakF.c_str();
+static const char *BAKOLD = kBakOld.c_str();
+static const char *FAILED = kFailed.c_str();
+static const char *NOTE   = recovery_note_name();
+static const char *MARK   = marker_name();
 
 static const char *OLDVER = "1.3.0";
 static const char *NEWVER = "1.4.0";
@@ -252,7 +254,7 @@ static void run_swap(machine &M, const swap_opts &o)
 	if (has(M.fs, BAKF)) { M.aborted = true; return; }
 
 	// S9 복구안내(사람이 손으로 되살릴 유일한 수단) → 마커
-	M.fs[NOTE] = recovery_note(SELF, BAKF);
+	M.fs[NOTE] = make_recovery_note(SELF, BAKF);
 	if (M.done("S9 복구안내 기록")) return;
 
 	// ⚠️ tries 는 물려받는다(스펙 S9 는 tries 를 안 건드린다). 직전 롤백 마커면 여기서
@@ -474,7 +476,7 @@ static void run_rollback(machine &M, const rollback_opts &o = rollback_opts())
 	// ★ R9a 전에 복구안내를 (다시) 쓴다. S13 이 교체 성공 시 지웠으므로 지금은 없고,
 	// 아래 R9a 직후부터 self 가 사라진다. 그 구간에서 전원이 나가거나 되돌리기까지
 	// 거부되면 고객에게는 이 파일이 유일한 단서다 — §4.4 S9 가 교체 전에 쓰는 것과 같은 이유.
-	M.fs[NOTE] = recovery_note(SELF, BAKF);
+	M.fs[NOTE] = make_recovery_note(SELF, BAKF);
 	if (M.done("R9 전 복구안내 기록")) return;
 
 	if (o.r9a_fails)
