@@ -8,12 +8,14 @@
 #include "ini_file.hpp"
 #include "hook_manager.hpp"
 #include "addon_manager.hpp"
+#include "sherbet_owner.h"
 #include <Windows.h>
 #include <Psapi.h>
 #include <delayimp.h> // Delay-load helpers
 
 // Export special symbol to identify modules as ReShade instances
 extern "C" __declspec(dllexport) const char *ReShadeVersion = VERSION_STRING_PRODUCT;
+extern "C" __declspec(dllexport) const char *SherbetVersion = SHERBET_VERSION;
 
 HANDLE g_exit_event = nullptr;
 HMODULE g_module_handle = nullptr;

@@ -14,7 +14,7 @@ $version = 0,0,0,0
 if ($exists -and $(Get-Content $path | Out-String) -match "VERSION_FULL (\d+).(\d+).(\d+).(\d+)") {
 	$version = [int]::Parse($matches[1]), [int]::Parse($matches[2]), [int]::Parse($matches[3]), [int]::Parse($matches[4])
 }
-elseif ($(git describe --tags) -match "v(\d+)\.(\d+)\.(\d+)(-\d+-\w+)?") {
+elseif ($(git describe --tags --match "v[0-9]*") -match "v(\d+)\.(\d+)\.(\d+)(-\d+-\w+)?") {
 	$version = [int]::Parse($matches[1]), [int]::Parse($matches[2]), [int]::Parse($matches[3]), 0
 }
 
