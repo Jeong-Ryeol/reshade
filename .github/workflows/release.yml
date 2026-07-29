@@ -1,0 +1,160 @@
+name: release
+
+# 태그를 밀었을 때만 릴리스를 만든다. 평소 커밋 푸시는 build.yml 이 검증만 하고
+# 구매자에겐 알림이 안 간다.
+# ⚠️ 태그는 반드시 v 없는 sherbet-1.4.0 형식. sherbet-v1.4.0 은 tools/update_version.ps1 의
+#    앵커 없는 -match 에 걸려 리쉐이드 res/version.h 를 탈취한다.
+on:
+  push:
+    tags:
+      - 'sherbet-[0-9]*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        # 이 입력은 안내용이다. 발행 스텝의 실제 게이트는 startsWith(github.ref, 'refs/tags/')
+        # 이므로 workflow_dispatch 로는 값을 무엇으로 주든 릴리스가 만들어지지 않는다.
+        description: '빌드·해시까지만 하고 릴리스는 만들지 않음 (dispatch 는 항상 발행하지 않음)'
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write   # gh release create 에 필요. build.yml 의 contents: read 와 다르다.
+
+    env:
+      GH_TOKEN: ${{ github.token }}   # checkout 이 persist-credentials:false 라 명시 필요
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: 태그와 SHERBET_VERSION 이 일치하는지 확인
+        shell: pwsh
+        run: |
+          $header = Get-Content -Raw source/sherbet_owner.h
+          if ($header -notmatch '#define SHERBET_VERSION "([0-9]+\.[0-9]+\.[0-9]+)"') {
+            Write-Error "sherbet_owner.h 에서 SHERBET_VERSION 을 찾지 못했습니다"; exit 1
+          }
+          $ver = $matches[1]
+          if ($ver -eq "0.0.0") {
+            Write-Error "SHERBET_VERSION 이 0.0.0 입니다 — 버전을 올리고 커밋한 뒤 태그를 미세요"; exit 1
+          }
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
+            $suffix = $tag -replace '^sherbet-', ''
+            if ($suffix -ne $ver) {
+              Write-Error "태그($tag)와 SHERBET_VERSION($ver)이 다릅니다. 서버는 새 버전이라 하고 DLL 은 구버전이라 하면 무한 알림 루프가 됩니다."; exit 1
+            }
+          }
+          # ⚠️ GITHUB_ENV 는 NAME=VALUE 를 그대로 쪼갠다. '=' 앞뒤 공백을 트림하지 않으므로
+          #    "NAME = value" 로 쓰면 이름이 'NAME ' 가 되어 이후 스텝에서 참조가 안 된다.
+          "SHERBET_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SHERBET_TAG=sherbet-$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "SHERBET_VERSION=$ver / SHERBET_TAG=sherbet-$ver"
+
+      - name: 공용 릴리스 빌드 인자 강제
+        shell: pwsh
+        run: |
+          # 공개 릴리스에 게이트 없는 DLL 이 올라가면 제품이 공짜가 되고,
+          # 노드락이 켜진 공용 빌드는 전원을 브릭시킨다. 무조건 치환한다.
+          $c = Get-Content -Raw source/sherbet_owner.h
+
+          # OWNER / ORDER_NO / DEFAULT_THEME 는 공용 빌드의 기본값이어야 한다.
+          # 값을 자기 자신으로 바꾸는 -replace 는 아무것도 검증하지 못하므로 단언으로 둔다 —
+          # 구매자 닉네임이 박힌 sherbet_owner.h 가 커밋되면 여기서 걸려야 한다.
+          foreach ($must in @('#define SHERBET_OWNER ""',
+                              '#define SHERBET_ORDER_NO ""',
+                              '#define SHERBET_DEFAULT_THEME "mint"')) {
+            if (-not $c.Contains($must)) {
+              Write-Error "공용 릴리스인데 기본값이 아닙니다: $must — 개인화된 sherbet_owner.h 가 커밋된 것 같습니다"; exit 1
+            }
+          }
+
+          # 현재 값이 무엇이든 강제로 덮어쓴다(0 만 노리면 이미 1 인 헤더를 놓친다).
+          $c = $c -replace '#define SHERBET_NODELOCK [01]', '#define SHERBET_NODELOCK 0'
+          $c = $c -replace '#define SHERBET_ONLINE_AUTH [01]', '#define SHERBET_ONLINE_AUTH 1'
+          Set-Content -Path source/sherbet_owner.h -Value $c -Encoding UTF8 -NoNewline
+
+          $now = Get-Content -Raw source/sherbet_owner.h
+          if ($now -notmatch 'SHERBET_ONLINE_AUTH 1') { Write-Error "ONLINE_AUTH 치환 실패"; exit 1 }
+          if ($now -match 'SHERBET_NODELOCK 1')       { Write-Error "NODELOCK 이 1 입니다"; exit 1 }
+
+          # 개인 프리셋 유출 방지.
+          # res/presets/personal.ini 는 주석만 든 자리표시자로 리포에 커밋돼 있다.
+          # 존재 여부만 보면 모든 릴리스가 무조건 막히므로, build.yml 이 "진짜 프리셋" 을
+          # 판정할 때 쓰는 것과 같은 기준(줄 시작 Techniques 키)으로 내용을 본다.
+          if (Test-Path res/presets/personal.ini) {
+            $preset = Get-Content -Raw res/presets/personal.ini
+            if ($preset -match '(?m)^Techniques') {
+              Write-Error "res/presets/personal.ini 에 실제 프리셋이 들어 있습니다 — 구매자 전용 프리셋이 공개 릴리스에 실릴 뻔했습니다"; exit 1
+            }
+            Write-Host "res/presets/personal.ini: 자리표시자(프리셋 키 없음) — 통과"
+          }
+
+      - name: Build (32-bit)
+        run: msbuild ReShade.sln /p:Configuration=Release /p:Platform=32-bit
+
+      - name: Build (64-bit)
+        run: msbuild ReShade.sln /p:Configuration=Release /p:Platform=64-bit
+
+      - name: 산출물에 SherbetVersion 심볼이 박혔는지 확인
+        # pwsh 는 히어독(<<)을 지원하지 않는다(`<` 는 예약 연산자). bash 로 돌린다.
+        shell: bash
+        run: |
+          # findstr 은 NUL 을 포함한 바이너리에서 신뢰할 수 없다. python 으로 바이트 검색.
+          python - <<'PY'
+          import os, sys
+          ver = os.environ["SHERBET_VERSION"].encode()
+          for p in (r"bin\x64\Release\ReShade64.dll", r"bin\Win32\Release\ReShade32.dll"):
+              data = open(p, "rb").read()
+              if b"SherbetVersion" not in data:
+                  sys.exit(f"{p}: SherbetVersion 심볼이 없습니다")
+              if ver not in data:
+                  sys.exit(f"{p}: 버전 문자열 {ver.decode()} 이 없습니다")
+              print(f"{p}: OK ({len(data)} bytes)")
+          PY
+
+      - name: SHA-256 기록 (참고용 — 권위 있는 값은 맥이 직접 계산한다)
+        shell: pwsh
+        run: |
+          foreach ($p in @("bin\x64\Release\ReShade64.dll", "bin\Win32\Release\ReShade32.dll")) {
+            $h = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLower()
+            $s = (Get-Item $p).Length
+            "$([System.IO.Path]::GetFileName($p))  sha256=$h  size=$s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+      - name: 릴리스 발행
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          # 멱등: 업로드 중 러너가 죽어도 재실행할 수 있다(태그 삭제/재푸시라는 지저분한 복구를 없앤다).
+          # ⚠️ gh 의 stderr 를 리다이렉트하지 않는다. pwsh 는 $ErrorActionPreference='Stop' 아래에서
+          #    리다이렉트된 네이티브 stderr 를 종료 오류로 바꾸므로, 2>$null 을 쓰면 create 가
+          #    실패한 순간 upload 폴백에 도달하지도 못하고 스텝이 죽는다.
+          $ErrorActionPreference = 'Continue'
+          $tag = $env:SHERBET_TAG
+          $files = @("bin\x64\Release\ReShade64.dll", "bin\Win32\Release\ReShade32.dll")
+          gh release create $tag $files --title "Sherbet $env:SHERBET_VERSION" --notes "자동 발행"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "릴리스 생성 실패(이미 존재하는 것으로 간주) — 에셋만 덮어씁니다."
+            gh release upload $tag $files --clobber
+            if ($LASTEXITCODE -ne 0) { Write-Error "릴리스 업로드 실패"; exit 1 }
+          }
+          exit 0
