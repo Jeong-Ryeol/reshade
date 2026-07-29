@@ -99,12 +99,48 @@ static void test_is_sha256_hex() {
 	assert(!is_sha256_hex("g3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")); // hex 아님
 }
 
+static void test_url_allowed() {
+	const std::string good =
+		"https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll";
+	assert(url_allowed(good));
+
+	// 다른 소유자·리포 — 호스트만 검사했다면 통과해버리는 케이스
+	assert(!url_allowed("https://github.com/attacker/evil/releases/download/x/ReShade64.dll"));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/other/releases/download/x/a.dll"));
+	// 유사 호스트
+	assert(!url_allowed("https://github.com.evil.kr/Jeong-Ryeol/reshade/releases/download/x/a.dll"));
+	// 스킴
+	assert(!url_allowed("http://github.com/Jeong-Ryeol/reshade/releases/download/x/a.dll"));
+	// 경로 조작
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/../../../x.dll"));
+	// userinfo 를 이용한 호스트 위장
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/@evil.kr/a.dll"));
+	// 빈 문자열·접두사만
+	assert(!url_allowed(""));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/"));
+}
+
+static void test_split_https_url() {
+	std::string host, path;
+	assert(split_https_url(
+		"https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll",
+		host, path));
+	assert(host == "github.com");
+	assert(path == "/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll");
+
+	assert(!split_https_url("http://github.com/a", host, path)); // https 아님
+	assert(!split_https_url("https://github.com", host, path));  // 경로 없음
+	assert(!split_https_url("", host, path));
+}
+
 int main() {
 	test_parse_version();
 	test_version_cmp();
 	test_sha256_nist();
 	test_sha256_padding_boundaries();
 	test_is_sha256_hex();
+	test_url_allowed();
+	test_split_https_url();
 	std::printf("sherbet_update_core: ALL PASS\n");
 	return 0;
 }

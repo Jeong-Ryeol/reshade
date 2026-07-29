@@ -175,5 +175,37 @@ namespace sherbet
 				if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return false;
 			return true;
 		}
+
+		// ⚠️ 리터럴 접두사. 변경하려면 스펙 §3.4 를 먼저 읽을 것.
+		// 호스트만 화이트리스트하면 github.com 은 누구나 릴리스를 올릴 수 있는 멀티테넌트
+		// 호스트라 방어가 되지 않는다. 전체 접두사 피닝이 홈서버 단독 침해 방어의 유일한 근거다.
+		inline const char *update_url_prefix()
+		{
+			return "https://github.com/Jeong-Ryeol/reshade/releases/download/";
+		}
+
+		inline bool url_allowed(const std::string &url)
+		{
+			const std::string prefix = update_url_prefix();
+			if (url.size() <= prefix.size()) return false;          // 접두사만 있고 파일명 없음
+			if (url.compare(0, prefix.size(), prefix) != 0) return false;
+			if (url.find("..") != std::string::npos) return false;  // 경로 조작
+			if (url.find('@') != std::string::npos) return false;   // userinfo 로 호스트 위장
+			return true;
+		}
+
+		// "https://host/path…" → host, "/path…". https 전용.
+		inline bool split_https_url(const std::string &url, std::string &host, std::string &path)
+		{
+			const std::string scheme = "https://";
+			if (url.compare(0, scheme.size(), scheme) != 0) return false;
+			const std::size_t slash = url.find('/', scheme.size());
+			if (slash == std::string::npos) return false;           // 경로 없음
+			const std::string h = url.substr(scheme.size(), slash - scheme.size());
+			if (h.empty()) return false;
+			host = h;
+			path = url.substr(slash);
+			return true;
+		}
 	}
 }
