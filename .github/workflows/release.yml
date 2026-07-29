@@ -137,7 +137,11 @@ jobs:
           foreach ($p in @("bin\x64\Release\ReShade64.dll", "bin\Win32\Release\ReShade32.dll")) {
             $h = (Get-FileHash -Algorithm SHA256 $p).Hash.ToLower()
             $s = (Get-Item $p).Length
-            "$([System.IO.Path]::GetFileName($p))  sha256=$h  size=$s" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            $line = "$([System.IO.Path]::GetFileName($p))  sha256=$h  size=$s"
+            $line | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            # 로그에도 남긴다 — Step Summary 는 API/gh 로 못 읽어서, 폰에서 gh run view --log
+            # 만 보는 상황이면 이 값이 아예 안 보인다.
+            Write-Host $line
           }
 
       - name: 릴리스 발행
