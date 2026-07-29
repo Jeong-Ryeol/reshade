@@ -145,6 +145,58 @@ static void test_split_https_url() {
 	assert(!split_https_url("", host, path));
 }
 
+// 최소한의 가짜 PE 헤더를 만든다. e_lfanew 는 0x80 에 둔다.
+static std::string make_pe(unsigned short machine, unsigned short characteristics,
+                           unsigned int e_lfanew = 0x80, bool mz = true, bool sig = true) {
+	std::string b(0x200, '\0');
+	if (mz) { b[0] = 'M'; b[1] = 'Z'; }
+	b[0x3c] = static_cast<char>(e_lfanew & 0xff);
+	b[0x3d] = static_cast<char>((e_lfanew >> 8) & 0xff);
+	b[0x3e] = static_cast<char>((e_lfanew >> 16) & 0xff);
+	b[0x3f] = static_cast<char>((e_lfanew >> 24) & 0xff);
+	if (sig && e_lfanew + 24 <= b.size()) {
+		b[e_lfanew] = 'P'; b[e_lfanew + 1] = 'E'; b[e_lfanew + 2] = '\0'; b[e_lfanew + 3] = '\0';
+		b[e_lfanew + 4] = static_cast<char>(machine & 0xff);
+		b[e_lfanew + 5] = static_cast<char>((machine >> 8) & 0xff);
+		b[e_lfanew + 22] = static_cast<char>(characteristics & 0xff);
+		b[e_lfanew + 23] = static_cast<char>((characteristics >> 8) & 0xff);
+	}
+	return b;
+}
+
+static void test_pe_check() {
+	const unsigned short DLL = 0x2000; // IMAGE_FILE_DLL
+	const std::string x64 = make_pe(0x8664, DLL);
+	const std::string x86 = make_pe(0x014c, DLL);
+
+	assert(pe_check(reinterpret_cast<const unsigned char *>(x64.data()), x64.size(), true));
+	assert(pe_check(reinterpret_cast<const unsigned char *>(x86.data()), x86.size(), false));
+
+	// 아키텍처 교차 — 이 한 줄이 유일한 브릭 시나리오를 막는다
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(x86.data()), x86.size(), true));
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(x64.data()), x64.size(), false));
+
+	// DLL 비트 없음(EXE)
+	const std::string exe = make_pe(0x8664, 0x0002);
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(exe.data()), exe.size(), true));
+
+	// MZ 아님
+	const std::string nomz = make_pe(0x8664, DLL, 0x80, false);
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(nomz.data()), nomz.size(), true));
+
+	// PE 서명 없음
+	const std::string nosig = make_pe(0x8664, DLL, 0x80, true, false);
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(nosig.data()), nosig.size(), true));
+
+	// e_lfanew 가 버퍼 밖
+	const std::string far = make_pe(0x8664, DLL, 0x00100000);
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(far.data()), far.size(), true));
+
+	// 버퍼가 너무 짧음
+	assert(!pe_check(reinterpret_cast<const unsigned char *>(x64.data()), 8, true));
+	assert(!pe_check(nullptr, 0, true));
+}
+
 int main() {
 	test_parse_version();
 	test_version_cmp();
@@ -153,6 +205,7 @@ int main() {
 	test_is_sha256_hex();
 	test_url_allowed();
 	test_split_https_url();
+	test_pe_check();
 	std::printf("sherbet_update_core: ALL PASS\n");
 	return 0;
 }

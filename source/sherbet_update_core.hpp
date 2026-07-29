@@ -215,5 +215,31 @@ namespace sherbet
 			path = url.substr(slash);
 			return true;
 		}
+
+		// 다운로드한 파일의 앞부분이 우리 아키텍처의 유효한 DLL 인지 본다.
+		// sha256 은 '바이트가 온전한가' 만 보고 '무엇인가' 는 못 본다. x64 슬롯에 32비트 DLL 을
+		// 넣는 운영 실수 한 번이면 다음 실행에 ERROR_BAD_EXE_FORMAT 으로 롤백 코드조차 안 돈다.
+		inline bool pe_check(const unsigned char *head, std::size_t len, bool want_x64)
+		{
+			if (head == nullptr || len < 0x40) return false;
+			if (head[0] != 'M' || head[1] != 'Z') return false;
+			const std::uint32_t e_lfanew =
+				static_cast<std::uint32_t>(head[0x3c]) |
+				(static_cast<std::uint32_t>(head[0x3d]) << 8) |
+				(static_cast<std::uint32_t>(head[0x3e]) << 16) |
+				(static_cast<std::uint32_t>(head[0x3f]) << 24);
+			// COFF 헤더는 서명 4바이트 + 20바이트. Characteristics 는 서명 기준 +22.
+			if (e_lfanew < 0x40 || e_lfanew + 24 > len) return false;
+			const unsigned char *nt = head + e_lfanew;
+			if (nt[0] != 'P' || nt[1] != 'E' || nt[2] != 0 || nt[3] != 0) return false;
+			const std::uint16_t machine =
+				static_cast<std::uint16_t>(nt[4] | (nt[5] << 8));
+			const std::uint16_t characteristics =
+				static_cast<std::uint16_t>(nt[22] | (nt[23] << 8));
+			const std::uint16_t want = want_x64 ? 0x8664 : 0x014c;
+			if (machine != want) return false;
+			if ((characteristics & 0x2000) == 0) return false; // IMAGE_FILE_DLL
+			return true;
+		}
 	}
 }
