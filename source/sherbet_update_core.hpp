@@ -409,24 +409,78 @@ namespace sherbet
 		// 롤백을 영원히 미룬다 — 깨진 게임에 갇히는 쪽이 훨씬 나쁘므로 위로 클램프한다.
 		inline int marker_tries_cap() { return 1000000; }
 
+		namespace detail
+		{
+			// 값 하나를 마커 파일에 안전하게 쓸 수 있는 형태로 만든다.
+			// ⚠️ 줄 단위 포맷이라 값 안의 CR/LF 는 그 자체로 새 key=value 줄이 된다.
+			// exe 는 g_target_executable_path.filename() — 파일시스템에서 온 임의 문자열이다.
+			// 실측: exe = "evil\nstate=rolledback" 을 날것으로 쓰면 라운드트립 후 state 가
+			// rolledback 이 되어 decide_boot 이 rollback → none 으로 뒤집힌다(= 롤백 소멸).
+			// 지우지 않고 공백으로 '치환' 한다: 양옆 토큰이 붙어 다른 의미가 되는 일이 없고,
+			// 사람이 파일을 열어 봤을 때 무엇이 소독됐는지 보인다.
+			// 뒤쪽 공백류는 마저 잘라낸다 — parse_marker 가 어차피 자르므로, 여기서 안 자르면
+			// serialize → parse → serialize 가 고정점이 아니게 된다.
+			inline std::string marker_value(const std::string &v)
+			{
+				std::string o = v;
+				for (char &c : o)
+					if (c == '\n' || c == '\r') c = ' ';
+				while (!o.empty() && (o.back() == ' ' || o.back() == '\t')) o.pop_back();
+				return o;
+			}
+
+			// 줄 앞뒤의 [ \t\r] 를 잘라낸다. 앞쪽을 안 자르면 "  state=pending" 이 모르는
+			// 줄로 밀려나 마커 전체가 '없음' 이 되고, 뒤쪽에서 탭을 안 자르면 state 가
+			// "pending\t" 가 되어 parse 는 성공하는데 decide_boot 만 조용히 none 이 된다.
+			// 값 '안' 은 건드리지 않는다 — 파일명에 공백이 정당하게 들어간다("Grand Theft Auto V.exe").
+			inline void marker_trim(std::string &s)
+			{
+				std::size_t b = 0, e = s.size();
+				while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r')) ++b;
+				while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r')) --e;
+				s = s.substr(b, e - b);
+			}
+
+			// 값이 소독 후 비면 줄 자체를 쓰지 않는다. "key=" 를 남기면 파서가 빈 문자열을
+			// 돌려주므로 다음 serialize 가 그 줄을 빼버려 고정점이 깨진다.
+			inline void marker_line(std::string &o, const char *key, const std::string &raw)
+			{
+				const std::string v = marker_value(raw);
+				if (v.empty()) return;
+				o += key; o += '='; o += v; o += '\n';
+			}
+		}
+
+		// ⚠️ 전제조건: m.state 는 비어 있으면 안 된다. state 가 빈 마커는 "state=\ntries=0\n"
+		// 으로 직렬화되는데 parse_marker 는 그것을 거부하므로 파일이 영구히 '마커 없음' 이
+		// 되고, 그 파일을 나중에 다시 쓰는 쪽은 unknown(다른 writer 의 필드)을 통째로 잃는다.
+		// 마커를 없애려면 빈 state 로 쓰지 말고 파일을 지워라.
 		inline std::string serialize_marker(const boot_marker &m)
 		{
 			std::string o;
-			o += "state=" + m.state + "\n";
-			if (!m.version.empty()) o += "version=" + m.version + "\n";
-			if (!m.prev.empty())    o += "prev=" + m.prev + "\n";
-			if (!m.bak.empty())     o += "bak=" + m.bak + "\n";
-			if (!m.exe.empty())     o += "exe=" + m.exe + "\n";
-			if (!m.sha.empty())     o += "sha=" + m.sha + "\n";
-			if (!m.bad_ver.empty()) o += "bad_ver=" + m.bad_ver + "\n";
-			if (!m.bad_sha.empty()) o += "bad_sha=" + m.bad_sha + "\n";
+			o += "state=" + detail::marker_value(m.state) + "\n";
+			detail::marker_line(o, "version", m.version);
+			detail::marker_line(o, "prev",    m.prev);
+			detail::marker_line(o, "bak",     m.bak);
+			detail::marker_line(o, "exe",     m.exe);
+			detail::marker_line(o, "sha",     m.sha);
+			detail::marker_line(o, "bad_ver", m.bad_ver);
+			detail::marker_line(o, "bad_sha", m.bad_sha);
 			o += "tries=" + std::to_string(m.tries) + "\n";
 			// 모르는 줄은 항상 마지막에, 읽은 순서 그대로. 순서가 흔들리면 세 writer 가
-			// 서로의 파일을 끝없이 다시 쓴다.
-			for (const std::string &line : m.unknown) o += line + "\n";
+			// 서로의 파일을 끝없이 다시 쓴다. 이것도 소독한다 — 손으로 채워 넣는 호출자가
+			// 생기면 위조 경로가 다시 열린다.
+			for (const std::string &line : m.unknown)
+			{
+				const std::string v = detail::marker_value(line);
+				if (!v.empty()) o += v + "\n";
+			}
 			return o;
 		}
 
+		// 중복 키 정책: **마지막 값이 이긴다**(모든 키 동일). 단 tries 만 예외적으로
+		// '정수가 아닌 줄은 무시' 한다 — 손상된 한 줄이 앞서 읽은 진짜 카운트를 0 으로
+		// 지우면 롤백이 통째로 사라지기 때문이다(유효한 tries 가 하나도 없으면 그대로 0).
 		inline bool parse_marker(const std::string &text, boot_marker &out)
 		{
 			boot_marker t;
@@ -436,11 +490,13 @@ namespace sherbet
 				const std::size_t eol = text.find('\n', i);
 				std::string line = text.substr(i, eol == std::string::npos ? std::string::npos : eol - i);
 				i = (eol == std::string::npos) ? text.size() : eol + 1;
-				while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+				detail::marker_trim(line);
 				if (line.empty()) continue;
 				const std::size_t eq = line.find('=');
 				if (eq == std::string::npos || eq == 0) { t.unknown.push_back(line); continue; }
-				const std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+				std::string key = line.substr(0, eq);
+				detail::marker_trim(key);              // "tries =3" 도 tries 로 읽는다
+				const std::string val = line.substr(eq + 1);
 				if      (key == "state")   t.state = val;
 				else if (key == "version") t.version = val;
 				else if (key == "prev")    t.prev = val;
@@ -451,12 +507,13 @@ namespace sherbet
 				else if (key == "bad_sha") t.bad_sha = val;
 				else if (key == "tries")
 				{
-					// 비정수는 0. 정수지만 int 를 넘으면 클램프 — 캐스팅이 감기면 음수가 되고
+					// 비정수는 '무시'(0 으로 덮어쓰지 않는다 — 위 정책 주석 참고).
+					// 정수지만 int 를 넘으면 클램프 — 캐스팅이 감기면 음수가 되고
 					// 음수는 롤백을 막는다(고객이 깨진 게임에 갇힌다).
 					unsigned long long n = 0;
-					if (!detail::parse_u64(val, n)) t.tries = 0;
-					else t.tries = (n > static_cast<unsigned long long>(marker_tries_cap()))
-						? marker_tries_cap() : static_cast<int>(n);
+					if (detail::parse_u64(val, n))
+						t.tries = (n > static_cast<unsigned long long>(marker_tries_cap()))
+							? marker_tries_cap() : static_cast<int>(n);
 				}
 				else t.unknown.push_back(line); // 모르는 키는 원문 보존
 			}
@@ -468,9 +525,20 @@ namespace sherbet
 		enum class boot_action { none, count, rollback };
 
 		// 스펙 §5.4 '2회 연속 부팅 실패' 의 정확한 정의.
-		//   m.tries = 지금까지 관찰된 부팅 실패 횟수. 이번 부팅은 아직 세지 않았다.
-		//   호출자는 count 를 받으면 tries+1 을 적고 나서 진행한다(증가는 행동 전에).
-		// 따라서 '이번 부팅이 max_tries 번째 실패가 되는 순간' 롤백한다: tries + 1 >= max_tries.
+		//   m.tries = 마커 파일에 적혀 있는, 지금까지 관찰된 부팅 실패 횟수.
+		//
+		// ⚠️ 계약: **디스크에서 읽은 그대로의 마커**를 넘겨야 한다.
+		// R6 로 디스크에 tries+1 을 써도 이 함수에는 읽은 그대로의 마커를 넘긴다 —
+		// 구조체의 tries 를 먼저 증가시키면 임계값이 절반이 된다.
+		// R6 가 증가분을 판정 '전에' 디스크에 쓰라고 하는 것은 쓰기 전에 크래시하면
+		// 카운트가 안 늘어 미탐이 나기 때문이고, 그것은 파일 내용에 대한 요구일 뿐이다.
+		// 디스크에 쓰는 값과 이 함수에 넘기는 값은 의도적으로 다르다:
+		//   디스크 = tries + 1,  인자 = tries(읽은 값).
+		// 인자까지 증가시키면 첫 번째 부팅 실패가 곧바로 rollback 이 되어, 알트탭이나
+		// 드라이버 결함 한 번에 멀쩡한 설치가 되돌아간다. test_decide_boot 에 이 오용의
+		// 결과를 실행 가능한 형태로 박아 두었다.
+		//
+		// 판정: 이번 부팅이 max_tries 번째 실패가 되는 순간 롤백 → tries + 1 >= max_tries.
 		// max_tries 기본값 2 → tries 가 1 인 마커로 부팅한 것이 곧 '2회 연속 실패' 다.
 		// pending 이 아닌 상태는 전부 none: rolledback/rollback_failed 를 세면 이미 되돌린
 		// 사용자를 또 되돌리고, swapping(교체 중단)은 startup_repair 가 따로 다룬다.

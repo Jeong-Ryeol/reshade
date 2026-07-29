@@ -750,14 +750,181 @@ static void test_marker_tolerates_garbage() {
 	assert(decide_boot(huge2) == boot_action::rollback);
 }
 
+static void test_marker_value_cannot_forge_fields() {
+	// exe 는 g_target_executable_path.filename() — 파일시스템에서 온 임의 문자열이다.
+	// 줄 단위 포맷이라 값 안의 개행은 그대로 새 key=value 줄이 된다. 소독하지 않으면
+	// 아래 마커가 라운드트립 후 state=rolledback 이 되어 rollback → none 으로 뒤집힌다.
+	{
+		boot_marker m;
+		m.state = "pending"; m.tries = 1;
+		m.exe = "evil\nstate=rolledback";
+		const std::string out = serialize_marker(m);
+
+		boot_marker back;
+		assert(parse_marker(out, back));
+		assert(back.state == "pending");                    // 위조 실패
+		assert(back.tries == 1);
+		assert(decide_boot(back) == boot_action::rollback);  // 판정이 뒤집히지 않는다
+		assert(back.exe == "evil state=rolledback");         // 소독된 값이 그대로 라운드트립
+		assert(serialize_marker(back) == out);               // 고정점
+		assert(back.unknown.empty());                        // 위조 줄이 생기지도 않았다
+	}
+	// CR/CRLF 도 같다. tries 위조도 막힌다.
+	{
+		boot_marker m;
+		m.state = "pending"; m.tries = 1; m.bak = "x\r\ntries=0";
+		boot_marker back;
+		assert(parse_marker(serialize_marker(m), back));
+		assert(back.tries == 1 && back.bak == "x  tries=0");
+		assert(decide_boot(back) == boot_action::rollback);
+	}
+	// 값이 소독 후 비면 그 줄은 아예 쓰지 않는다 — "prev=" 를 남기면 고정점이 깨진다.
+	{
+		boot_marker m;
+		m.state = "pending"; m.prev = "\n\r";
+		const std::string out = serialize_marker(m);
+		assert(out.find("prev=") == std::string::npos);
+		boot_marker back;
+		assert(parse_marker(out, back) && back.prev.empty());
+		assert(serialize_marker(back) == out);
+	}
+	// unknown 줄도 소독한다 — 손으로 채워 넣는 호출자가 생기면 위조 경로가 다시 열린다.
+	{
+		boot_marker m;
+		m.state = "pending"; m.tries = 1;
+		m.unknown.push_back("future=a\nstate=rolledback");
+		boot_marker back;
+		assert(parse_marker(serialize_marker(m), back));
+		assert(back.state == "pending");
+		assert(decide_boot(back) == boot_action::rollback);
+	}
+}
+
+static void test_marker_whitespace() {
+	// 뒤쪽 탭 — parse 는 true 를 내는데(호출자는 마커가 유효하다고 믿는다)
+	// state 가 "pending\t" 라 decide_boot 만 조용히 none 이 되면 롤백이 사라진다.
+	boot_marker tab;
+	assert(parse_marker("state=pending\t\ntries=1\n", tab));
+	assert(tab.state == "pending");
+	assert(decide_boot(tab) == boot_action::rollback);
+
+	// 줄 앞 공백/탭 — 아는 키가 unknown 으로 밀려 '마커 없음' 이 되면 안 된다
+	boot_marker lead;
+	assert(parse_marker("  state=pending\n\tversion=1.4.0\n \ttries=1\n", lead));
+	assert(lead.state == "pending" && lead.version == "1.4.0" && lead.tries == 1);
+	assert(lead.unknown.empty());
+	assert(decide_boot(lead) == boot_action::rollback);
+
+	// '=' 앞 공백 — 키도 다듬는다
+	boot_marker k;
+	assert(parse_marker("state =pending\ntries\t=1\n", k));
+	assert(k.state == "pending" && k.tries == 1);
+	assert(k.unknown.empty());
+	assert(decide_boot(k) == boot_action::rollback);
+
+	// 값 '안' 의 공백은 건드리지 않는다 — 파일명에 정당하게 들어간다
+	boot_marker sp;
+	assert(parse_marker("state=pending\nexe=Grand Theft Auto V.exe\n", sp));
+	assert(sp.exe == "Grand Theft Auto V.exe");
+	assert(serialize_marker(sp).find("exe=Grand Theft Auto V.exe\n") != std::string::npos);
+
+	// 값 앞 공백은 값의 일부로 남긴다(파일명 일부일 수 있다) — 그리고 라운드트립한다
+	boot_marker lv;
+	assert(parse_marker("state=pending\nexe= a.exe\n", lv));
+	assert(lv.exe == " a.exe");
+	const std::string lv_out = serialize_marker(lv);
+	assert(lv_out.find("exe= a.exe\n") != std::string::npos);
+	boot_marker lv2;
+	assert(parse_marker(lv_out, lv2) && lv2.exe == " a.exe");
+	assert(serialize_marker(lv2) == lv_out);
+
+	// 값 끝 공백은 잘린다 — serialize 쪽도 같이 잘라야 고정점이 유지된다
+	boot_marker tv;
+	tv.state = "pending"; tv.exe = "a.exe  ";
+	const std::string tv_out = serialize_marker(tv);
+	assert(tv_out.find("exe=a.exe\n") != std::string::npos);
+	boot_marker tv2;
+	assert(parse_marker(tv_out, tv2) && tv2.exe == "a.exe");
+	assert(serialize_marker(tv2) == tv_out);
+
+	// 공백뿐인 줄은 빈 줄과 같이 취급(unknown 을 쓰레기로 채우지 않는다)
+	boot_marker ws;
+	assert(parse_marker("state=pending\n   \n\t\n", ws));
+	assert(ws.unknown.empty());
+}
+
+static void test_marker_duplicate_keys() {
+	// 정책: 중복 키는 마지막 값이 이긴다(모든 키 동일). 단 tries 는 정수가 아닌 줄을
+	// '무시' 한다 — 손상된 한 줄이 앞서 읽은 진짜 카운트를 0 으로 지우면 롤백이 사라진다.
+	{
+		boot_marker a;
+		assert(parse_marker("state=pending\ntries=1\ntries=notanumber\n", a));
+		assert(a.tries == 1);                                // 지워지지 않는다
+		assert(decide_boot(a) == boot_action::rollback);
+	}
+	// 유효한 값끼리는 마지막이 이긴다(양방향으로 못 박는다)
+	{
+		boot_marker b;
+		assert(parse_marker("state=pending\ntries=0\ntries=1\n", b));
+		assert(b.tries == 1);
+		boot_marker c;
+		assert(parse_marker("state=pending\ntries=1\ntries=0\n", c));
+		assert(c.tries == 0);
+	}
+	// 유효한 tries 가 하나도 없으면 0 (브리프에 적힌 동작 유지)
+	{
+		boot_marker d;
+		assert(parse_marker("state=pending\ntries=notanumber\n", d));
+		assert(d.tries == 0);
+		assert(decide_boot(d) == boot_action::count);
+	}
+	// 문자열 키도 마지막이 이긴다 — 정책이 한 가지여야 읽는 사람이 헷갈리지 않는다
+	{
+		boot_marker e;
+		assert(parse_marker("state=pending\nstate=rolledback\n", e));
+		assert(e.state == "rolledback");
+		boot_marker f;
+		assert(parse_marker("state=rolledback\nstate=pending\n", f));
+		assert(f.state == "pending");
+		boot_marker g;
+		assert(parse_marker("state=pending\nexe=a.exe\nexe=b.exe\n", g));
+		assert(g.exe == "b.exe");
+	}
+}
+
 static void test_decide_boot() {
 	// ── 의미(읽는 사람이 오해할 수 없도록 못 박는다) ──────────────────────────
-	// m.tries = '지금까지 관찰된 부팅 실패 횟수'. 이번 부팅은 아직 세지 않았다.
-	// 호출자는 count 를 받으면 tries+1 을 적고 진행한다(= 증가는 행동 전에 한다).
-	// 따라서 '이번 부팅이 max_tries 번째 실패가 되는 순간' 롤백한다: tries + 1 >= max_tries.
+	// m.tries = 마커 파일에 적혀 있는 '지금까지 관찰된 부팅 실패 횟수'.
+	// 이 함수에는 **디스크에서 읽은 그대로의 마커**를 넘긴다. 스펙 R6 는 판정 전에
+	// tries+1 을 디스크에 먼저 쓰라고 하지만(쓰기 전 크래시하면 카운트가 안 늘어 미탐),
+	// 그것은 파일 내용에 대한 요구일 뿐이고 인자까지 증가시키라는 뜻이 아니다.
+	// 판정: 이번 부팅이 max_tries 번째 실패가 되는 순간 롤백 → tries + 1 >= max_tries.
 	// 스펙 §5.4 의 '2회 연속 부팅 실패' = max_tries 2 = tries 가 1 인 마커로 부팅한 것.
 	boot_marker none;
 	assert(decide_boot(none) == boot_action::none); // 마커 없음(state 비어있음)
+
+	// ── 계약 위반의 결과를 실행 가능한 형태로 박아 둔다 ────────────────────────
+	// R6 대로 디스크에 tries+1 을 쓰면서 구조체의 tries 까지 증가시켜 넘기면
+	// 임계값이 절반이 된다. 아래 두 줄이 그 차이다 — 경고문이 아니라 결과다.
+	{
+		boot_marker disk;                                  // 디스크에서 막 읽은 마커: 첫 실패
+		disk.state = "pending"; disk.tries = 0;
+		assert(decide_boot(disk) == boot_action::count);   // 올바른 사용 — 세기만 한다
+
+		boot_marker misused = disk;
+		++misused.tries;                                   // ← 금지된 사용법(R6 오독)
+		// 첫 번째 부팅 실패가 곧바로 롤백이 된다. 알트탭·GPU 드라이버 결함 한 번에
+		// 멀쩡한 설치가 되돌아간다는 뜻이다.
+		assert(decide_boot(misused) == boot_action::rollback);
+		assert(decide_boot(misused) != decide_boot(disk)); // 두 사용법은 다른 답을 낸다
+		// 오용은 임계값을 정확히 절반으로 만든다: max_tries=3 에서도 한 부팅 빠르다.
+		assert(decide_boot(disk, 3) == boot_action::count);
+		assert(decide_boot(misused, 3) == boot_action::count);
+		boot_marker disk2; disk2.state = "pending"; disk2.tries = 1;
+		boot_marker misused2 = disk2; ++misused2.tries;
+		assert(decide_boot(disk2, 3) == boot_action::count);
+		assert(decide_boot(misused2, 3) == boot_action::rollback);
+	}
 
 	// 기본 인자가 2 여야 한다. 3 이면 롤백이 한 부팅 늦어진다.
 	{
@@ -978,6 +1145,9 @@ int main() {
 	test_marker_roundtrip();
 	test_marker_preserves_unknown_keys();
 	test_marker_tolerates_garbage();
+	test_marker_value_cannot_forge_fields();
+	test_marker_whitespace();
+	test_marker_duplicate_keys();
 	test_decide_boot();
 	test_should_offer();
 	test_should_offer_downgrade();
