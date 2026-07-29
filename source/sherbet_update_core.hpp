@@ -590,5 +590,110 @@ namespace sherbet
 			if (!parse_version(u.min_version, m)) return false;
 			return version_cmp(a, m) < 0;
 		}
+
+		// ── 교체 중단 복구 상태머신 (스펙 §4.4 S7~S13 / §5.4 R3~R10) ───────
+		// 맥에서는 실제 파일 교체를 검증할 수 없으므로 판정을 순수 함수로 뽑아
+		// tools/sherbet_swap_sim.cpp 가 가짜 파일시스템 위에서 모든 중단 지점에
+		// 전원차단을 주입하며 전수 검사한다. 판정을 글루(.cpp)에 흩뿌리면 그 검사가
+		// 통째로 불가능해진다 — 새 판정을 여기 밖에 쓰지 말 것.
+		//
+		// ⚠️ 이 상태머신은 **파일 존재 여부만** 본다. 부팅 초기 경로(§5.2)는 원시 Win32 만
+		// 쓸 수 있어(CRT·std::filesystem·new·crypto 금지) self 를 해시해 '지금 이게 옛
+		// 바이너리냐 새 바이너리냐' 를 물을 수 없다. 그래서 판정은 다음 한 줄에만 기댄다:
+		//     self 가 있으면 그건 **유효한 DLL 이다**(교체 경로가 self 자리에 놓는 것은
+		//     S6 에서 sha256+pe_check 를 통과한 파일뿐이고, rename 은 원자적이다).
+		// **어느 버전인지는 모른다.** (self 있음 + .bak 있음 + swapping) 이면 S11 이
+		// 끝났다는 뜻이라 새 바이너리일 '가능성이 높지만', AV 가 .bak 을 격리해 가면 같은
+		// 모양이 나온다. 그래서 이 상태머신은 버전을 아는 척하지 않고, 버전을 아는 척해야
+		// 하는 판정(부팅 실패 카운트)은 전부 §5.2 게이트1(marker.version == 지금 매핑된
+		// SHERBET_VERSION)에 넘긴다. **게이트1 은 exe 오탐 방지용이 아니라 크래시 정합성의
+		// 마지막 방어선이다 — 빼면 여기서 남을 수 있는 낡은 마커가 곧바로 해롭게 변한다.**
+		//
+		// ⚠️ 마커 쓰기 순서 규칙 — 복구를 구현할 때 반드시 지킬 것(시뮬레이터가 못 박는다):
+		//     **self 가 없는 동안에는 마커를 먼저 쓰고 파일을 나중에 옮긴다.**
+		// self 가 없는 구간에서는 순서로 잃을 게 없다(어차피 DLL 이 없어 이번 부팅엔 우리
+		// 코드가 아예 안 돈다). 반대로 파일을 먼저 옮기고 마커 쓰기 직전에 끊기면
+		// (self 있음 + .bak 없음 + pending) 이 되는데, 이건 '정상적으로 새 버전이 깔려
+		// 확정 대기 중' 과 디스크상 구별이 불가능해서 **블랙리스트(bad_ver/bad_sha)가 통째로
+		// 증발한다** — 방금 되돌린 불량 빌드를 그대로 다시 제안하게 된다.
+		// (§5.4 R10 이 마커를 맨 뒤에 두는 것처럼 읽히지만, R9 가 self 를 .sherbet-failed 로
+		//  밀어낸 **뒤**라면 그 시점부터는 이 규칙이 우선한다.)
+		//
+		// ⚠️ self 가 없는 갈래는 '다음 부팅' 에는 안 돈다 — self 가 곧 이 DLL 이라 없으면
+		// 로드조차 안 되고 게임은 System32 의 진짜 dxgi.dll 로 폴백해 켜진다(§4.4 각주).
+		// 이 갈래의 실사용자는 (a) **같은 세션의 교체 워커**(이미지는 이미 매핑돼 있어 파일이
+		// 사라져도 계속 돈다 — S11 실패 원복이 이것이다), (b) 사람이 손으로 하는 §4.4 S9
+		// '복구안내' 절차, (c) 훗날의 외부 복구 도구다. 그래서 여기서도 전부 정의해 둔다.
+		enum class disk_state
+		{
+			normal,             // self 있음, 교체 중 아님, .bak 없음 → 할 일 없음
+			staged,             // self 있음 + state==swapping
+			                    //   = 교체가 확정(S13) 전에 끊겼다. self 는 유효한 DLL 이지만
+			                    //     옛 것인지 새 것인지는 알 수 없다(위 ⚠️ 참고).
+			swapping_lost_self, // self 없음 + .bak 있음 → 옛 바이너리로 되돌릴 수 있다
+			resume_from_new,    // self 없음 + .bak 없음 + .sherbet-new 있음
+			                    //   → .new 를 앉히는 것 말고 DLL 을 되살릴 방법이 없다
+			rollback_ready,     // self 있음 + .bak 있음 + 교체 중 아님
+			                    //   = 정상. 되돌릴 재료가 있을 뿐이고 롤백 판정은 decide_boot 담당.
+			broken_no_dll       // self / .bak / .new 전부 없음 → 재료가 하나도 없다
+		};
+
+		// ⚠️ 전순함수여야 한다: (has_self, has_new, has_bak) 8가지 × 모든 마커 상태가
+		// 빠짐없이 하나의 disk_state 로 간다. 시뮬레이터가 전수로 단언한다.
+		inline disk_state classify(bool has_self, bool has_new, bool has_bak, const boot_marker &m)
+		{
+			// self 부재가 최우선이다. 마커가 rolledback 이라고 해서 여기서 먼저 리턴하면
+			// (스펙 R4 의 문면대로) DLL 이 없는 디렉터리를 그대로 두게 된다 — R4 의
+			// '마커를 지우지 않는다' 는 파일 복구를 하지 말라는 뜻이 아니다.
+			if (!has_self)
+			{
+				if (has_bak) return disk_state::swapping_lost_self; // §5.4 R3: 옛 것 우선
+				if (has_new) return disk_state::resume_from_new;    // 남은 유일한 소스
+				return disk_state::broken_no_dll;
+			}
+			if (m.state == "swapping") return disk_state::staged;
+			if (has_bak) return disk_state::rollback_ready;
+			return disk_state::normal;
+		}
+
+		// ⚠️ 각 동작이 요구하는 '소스 파일' 은 classify 가 그 상태를 낸 시점에 반드시
+		// 존재한다(restore_from_bak↔.bak, restore_from_new↔.new, promote_pending↔self).
+		// 없는 파일을 옮기라고 시키면 rename 이 조용히 실패해 self 가 영영 안 돌아온다 —
+		// 시뮬레이터가 8×마커상태 전수로 이걸 단언한다.
+		enum class repair_action
+		{
+			none,             // 아무것도 하지 않는다
+			promote_pending,  // 교체 확정: state=pending, tries=0 (파일은 건드리지 않는다)
+			restore_from_bak, // rolledback 기록 **후** .bak → self (§5.4 R3)
+			restore_from_new, // pending 기록 **후** .new → self (남은 소스가 그것뿐이다)
+			give_up           // 재료 없음. rollback_failed 만 남기고 조용히 계속 실행(§5.4 R8)
+		};
+
+		// staged → promote_pending 인 이유(대안을 고르지 않은 근거를 남긴다):
+		// staged 는 '새 버전이 깔렸는데 확정만 못 했다' 와 'S10 전에 끊겨 아직 옛 버전이다'
+		// 두 가지를 다 포함한다. 디스크만 봐서는 구별할 수 없으므로 **틀렸을 때 덜 해로운
+		// 쪽**을 고른다.
+		//   promote_pending 이 틀린 경우 → 마커가 '1.4.0 이 깔림' 이라고 적는데 실제로는
+		//     1.3.0 이다. 게이트1 이 버전 불일치를 잡아 부팅 카운트도 롤백도 일어나지 않고,
+		//     classify 는 그 마커를 normal/rollback_ready(=none)로만 보낸다. **무해하게 낡은
+		//     마커**로 남았다가 다음 교체가 덮어쓴다. 블랙리스트도 안 건드린다.
+		//   rolledback 을 적는 대안이 틀린 경우 → 실제로는 새 버전이 잘 깔렸는데 §5.4 R11 의
+		//     안전모드가 켜져 **효과가 통째로 꺼지고**(고객이 산 기능이 사라진다) 멀쩡한
+		//     버전이 블랙리스트된다. 게다가 전원이 나갔을 뿐인 고객에게 '되돌렸습니다' 라고
+		//     거짓말을 한다.
+		// 전자는 조용히 낡은 값, 후자는 소리나는 기능 상실이다. 그래서 promote_pending.
+		inline repair_action decide_repair(disk_state s)
+		{
+			switch (s)
+			{
+			case disk_state::staged:             return repair_action::promote_pending;
+			case disk_state::swapping_lost_self: return repair_action::restore_from_bak;
+			case disk_state::resume_from_new:    return repair_action::restore_from_new;
+			case disk_state::broken_no_dll:      return repair_action::give_up;
+			case disk_state::rollback_ready:     return repair_action::none;
+			case disk_state::normal:             return repair_action::none;
+			}
+			return repair_action::none;
+		}
 	}
 }
