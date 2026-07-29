@@ -7,6 +7,8 @@
 #include "sherbet_update_core.hpp"
 #include <cassert>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 using namespace sherbet::update;
 
@@ -655,6 +657,304 @@ static void test_parse_manifest_truncated() {
 	}
 }
 
+// ── 부팅 마커 ───────────────────────────────────────────────────────────────
+static void test_marker_roundtrip() {
+	boot_marker m;
+	m.state = "pending"; m.version = "1.4.0"; m.prev = "1.3.0";
+	m.bak = "dxgi.dll.sherbet-bak"; m.exe = "FiveM_b3095_GTAProcess.exe";
+	m.sha = "3f1c9a4b5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80";
+	m.bad_ver = "1.3.9";
+	m.bad_sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+	m.tries = 1;
+
+	boot_marker back;
+	assert(parse_marker(serialize_marker(m), back));
+	assert(back.state == m.state && back.version == m.version && back.prev == m.prev);
+	assert(back.bak == m.bak && back.exe == m.exe && back.sha == m.sha && back.tries == 1);
+	// bad_ver/bad_sha 는 블랙리스트의 두 반쪽이다. 한쪽만 살아 돌아오면 should_offer 가
+	// 이미 브릭시킨 빌드를 다시 제안한다.
+	assert(back.bad_ver == m.bad_ver && back.bad_sha == m.bad_sha);
+	assert(back.unknown.empty());
+	assert(serialize_marker(back) == serialize_marker(m));
+
+	// tries=0 도 반드시 적어야 한다 — 생략하면 다음 writer 가 '필드 없음' 으로 읽는다.
+	boot_marker zero; zero.state = "pending";
+	assert(serialize_marker(zero).find("tries=0") != std::string::npos);
+	boot_marker zb;
+	assert(parse_marker(serialize_marker(zero), zb) && zb.tries == 0);
+}
+
+static void test_marker_preserves_unknown_keys() {
+	// writer 가 셋(교체 워커 / 렌더 스레드 / 다른 프로세스의 attach)이라 모르는 키를
+	// 지우면 서로의 필드가 조용히 날아간다. 보존은 선택이 아니라 정합성 요구다.
+	const std::string text =
+		"state=pending\nversion=1.4.0\nfuture_field=hello\ntries=1\nanother=42\n";
+	boot_marker m;
+	assert(parse_marker(text, m));
+	assert(m.unknown.size() == 2);
+	assert(m.unknown[0] == "future_field=hello" && m.unknown[1] == "another=42");
+
+	const std::string out = serialize_marker(m);
+	assert(out.find("future_field=hello") != std::string::npos);
+	assert(out.find("another=42") != std::string::npos);
+	assert(out.find("state=pending") != std::string::npos);
+	assert(out.find("version=1.4.0") != std::string::npos);
+	assert(out.find("tries=1") != std::string::npos);
+
+	// 순서가 안정적이어야 한다: 아는 키 뒤에, 원래 등장 순서대로.
+	// 흔들리면 세 writer 가 서로의 파일을 끝없이 다시 쓰고 diff 가 무의미해진다.
+	assert(out.find("future_field=hello") > out.find("tries="));
+	assert(out.find("future_field=hello") < out.find("another=42"));
+
+	// serialize → parse → serialize 는 고정점이어야 한다(2회, 3회차 모두).
+	boot_marker again;
+	assert(parse_marker(out, again));
+	assert(again.unknown == m.unknown);
+	assert(serialize_marker(again) == out);
+	boot_marker third;
+	assert(parse_marker(serialize_marker(again), third));
+	assert(serialize_marker(third) == out);
+}
+
+static void test_marker_tolerates_garbage() {
+	boot_marker m;
+	assert(parse_marker("state=pending\n\n= \nno-equals-here\ntries=notanumber\n", m));
+	assert(m.state == "pending");
+	assert(m.tries == 0); // 비정수는 0 으로
+	// 깨진 줄도 버리지 않는다 — 우리가 모르는 writer 의 필드일 수 있다.
+	assert(m.unknown.size() == 2);
+
+	boot_marker empty;
+	assert(!parse_marker("", empty));           // state 없으면 실패
+	assert(!parse_marker("tries=3\n", empty));  // state 없으면 실패
+
+	// 실패했을 때 out 을 오염시키지 않아야 한다 — 호출자는 실패 시 기존 마커를 그대로 쓴다.
+	boot_marker keep; keep.state = "rolledback"; keep.tries = 9;
+	assert(!parse_marker("tries=3\n", keep));
+	assert(keep.state == "rolledback" && keep.tries == 9);
+
+	// CRLF(윈도우 메모장) 와 마지막 개행 없음
+	boot_marker crlf;
+	assert(parse_marker("state=pending\r\nversion=1.4.0\r\ntries=1", crlf));
+	assert(crlf.state == "pending" && crlf.version == "1.4.0" && crlf.tries == 1);
+
+	// 손상된 tries — int 범위를 넘는 값이 감겨 음수가 되면 롤백이 영원히 미뤄진다.
+	// 마커는 디스크에서 오고 세 프로세스가 쓴다. 위로 클램프해야 안전한 방향으로 틀린다.
+	boot_marker huge;
+	assert(parse_marker("state=pending\ntries=18446744073709551615\n", huge));
+	assert(huge.tries > 0);
+	assert(decide_boot(huge) == boot_action::rollback);
+	boot_marker huge2;
+	assert(parse_marker("state=pending\ntries=4294967296\n", huge2));
+	assert(huge2.tries > 0);
+	assert(decide_boot(huge2) == boot_action::rollback);
+}
+
+static void test_decide_boot() {
+	// ── 의미(읽는 사람이 오해할 수 없도록 못 박는다) ──────────────────────────
+	// m.tries = '지금까지 관찰된 부팅 실패 횟수'. 이번 부팅은 아직 세지 않았다.
+	// 호출자는 count 를 받으면 tries+1 을 적고 진행한다(= 증가는 행동 전에 한다).
+	// 따라서 '이번 부팅이 max_tries 번째 실패가 되는 순간' 롤백한다: tries + 1 >= max_tries.
+	// 스펙 §5.4 의 '2회 연속 부팅 실패' = max_tries 2 = tries 가 1 인 마커로 부팅한 것.
+	boot_marker none;
+	assert(decide_boot(none) == boot_action::none); // 마커 없음(state 비어있음)
+
+	// 기본 인자가 2 여야 한다. 3 이면 롤백이 한 부팅 늦어진다.
+	{
+		boot_marker d; d.state = "pending"; d.tries = 1;
+		assert(decide_boot(d) == boot_action::rollback);
+		assert(decide_boot(d) == decide_boot(d, 2));
+		assert(decide_boot(d, 3) == boot_action::count);
+	}
+
+	// pending 진리표 — tries × max_tries 전부.
+	struct row { int tries; int max_tries; boot_action want; };
+	static const row pending_table[] = {
+		{ 0, 2, boot_action::count    }, // 0+1 = 1 < 2 → 첫 실패는 세기만 한다
+		{ 1, 2, boot_action::rollback }, // 1+1 = 2 >= 2 → 두 번째 실패에서 되돌린다
+		{ 2, 2, boot_action::rollback },
+		{ 5, 2, boot_action::rollback },
+		{ 0, 3, boot_action::count    },
+		{ 1, 3, boot_action::count    }, // 1+1 = 2 < 3
+		{ 2, 3, boot_action::rollback }, // 2+1 = 3 >= 3
+		{ 5, 3, boot_action::rollback },
+	};
+	for (const row &r : pending_table) {
+		boot_marker p; p.state = "pending"; p.tries = r.tries;
+		assert(decide_boot(p, r.max_tries) == r.want);
+	}
+
+	// pending 이 아닌 상태는 tries·max_tries 와 무관하게 전부 none.
+	//  - rolledback / rollback_failed: 블랙리스트 상태. 여기서 또 세면 이미 되돌린
+	//    사용자를 다시 되돌려 되돌리기 루프가 된다.
+	//  - swapping: 교체 중단은 startup_repair 가 다룬다. 여기서도 손대면 두 주체가
+	//    같은 파일을 동시에 만진다.
+	//  - 빈 문자열: 마커 없음.
+	//  - 모르는 문자열(대소문자 포함): 미래의 writer 가 쓴 상태를 롤백으로 오해하면 안 된다.
+	static const char *const inert[] = {
+		"", "swapping", "rolledback", "rollback_failed", "Pending", "sherbet-from-the-future"
+	};
+	const int tries_v[] = { 0, 1, 2, 5 };
+	const int max_v[] = { 2, 3 };
+	for (const char *s : inert)
+		for (int t : tries_v)
+			for (int mx : max_v) {
+				boot_marker q; q.state = s; q.tries = t;
+				assert(decide_boot(q, mx) == boot_action::none);
+			}
+
+	// INT_MAX — int 로 더하면 UB(부호 오버플로). 마커는 디스크에서 온다.
+	{
+		boot_marker p; p.state = "pending"; p.tries = 2147483647;
+		assert(decide_boot(p) == boot_action::rollback);
+	}
+}
+
+// ── 제안·강제 판정 ──────────────────────────────────────────────────────────
+static void test_should_offer() {
+	const info u = parse_manifest(kGoodManifest, "x64"); // version 1.4.0
+	assert(u.ok);
+
+	assert(should_offer("1.3.0", u, "", ""));   // 신버전 → 제안
+	assert(!should_offer("1.4.0", u, "", ""));  // 같음 → 안 함
+	assert(!should_offer("1.5.0", u, "", ""));  // 내가 더 최신 → 안 함(allow_downgrade=false)
+
+	// 문자열 비교였다면 틀리는 케이스
+	assert(should_offer("1.9.0", parse_manifest(manifest_with("version", "\"1.10.0\""), "x64"), "", ""));
+
+	// 블랙리스트: (버전, sha) 쌍이 모두 일치할 때만 차단
+	assert(!should_offer("1.3.0", u, "1.4.0", u.sha256));
+	// 같은 번호로 고쳐 재배포하면 sha 가 달라 다시 제안되어야 한다
+	assert(should_offer("1.3.0", u, "1.4.0",
+		"0000000000000000000000000000000000000000000000000000000000000000"));
+	// 버전만 다르면 차단하지 않는다
+	assert(should_offer("1.3.0", u, "1.2.0", u.sha256));
+	// 둘 다 비어 있으면 블랙리스트 자체가 없는 것 — 아무것도 막지 않는다
+	assert(should_offer("1.3.0", u, "", ""));
+
+	// 반쪽만 기록된 블랙리스트는 와일드카드로 본다(브리프 대비 강화 — 보고서 참고).
+	// 롤백 코드가 한쪽만 적고 죽었다면 '어떤 빌드인지 확실치 않으나 나빴다' 는 뜻이고,
+	// 그때 다시 제안해 재브릭시키는 쪽이 업데이트 한 번 놓치는 것보다 훨씬 나쁘다.
+	assert(!should_offer("1.3.0", u, "1.4.0", ""));      // 버전만 기록됨 → 차단
+	assert(!should_offer("1.3.0", u, "", u.sha256));     // sha 만 기록됨 → 차단(정확한 지목)
+	assert(should_offer("1.3.0", u, "1.2.0", ""));       // 다른 버전 → 통과
+	assert(should_offer("1.3.0", u, "",
+		"0000000000000000000000000000000000000000000000000000000000000000")); // 다른 sha → 통과
+
+	// 현재 버전이 파싱 불가면 제안하지 않는다(안전 측)
+	assert(!should_offer("garbage", u, "", ""));
+	assert(!should_offer("", u, "", ""));
+
+	// ok 가 아닌 매니페스트는 제안하지 않는다
+	info bad;
+	assert(!should_offer("1.0.0", bad, "", ""));
+
+	// 심층 방어: 파서가 이미 보장하지만, ok=true 인데 version 이 깨진 info 를 손으로 만들어도
+	// 제안하지 않아야 한다(다른 경로가 info 를 조립하게 되는 날을 위해).
+	{
+		info hand;
+		hand.ok = true; hand.version = "not-a-version";
+		hand.sha256 = u.sha256; hand.url = u.url; hand.size = u.size;
+		assert(!should_offer("1.3.0", hand, "", ""));
+	}
+}
+
+static void test_should_offer_downgrade() {
+	const info d = parse_manifest(manifest_with("allow_downgrade", "true"), "x64");
+	assert(d.ok && d.allow_downgrade);
+	// 킬스위치: 이미 더 최신을 쓰는 사람도 권장 버전으로 되돌리도록 제안한다
+	assert(should_offer("1.5.0", d, "", ""));
+	assert(!should_offer("1.4.0", d, "", "")); // 같으면 여전히 안 함
+	assert(should_offer("1.3.0", d, "", ""));  // 정방향도 그대로 제안
+	// 킬스위치라고 블랙리스트를 무시하면 안 된다
+	assert(!should_offer("1.5.0", d, "1.4.0", d.sha256));
+
+	// allow_downgrade=false 면 강등은 절대 제안하지 않는다(위 케이스의 대조군)
+	const info n = parse_manifest(kGoodManifest, "x64");
+	assert(n.ok && !n.allow_downgrade);
+	assert(!should_offer("1.5.0", n, "", ""));
+}
+
+static void test_is_mandatory() {
+	const info u = parse_manifest(kGoodManifest, "x64"); // min_version 1.0.0
+	assert(!is_mandatory("1.3.0", u));  // 1.3.0 >= 1.0.0
+	assert(!is_mandatory("1.0.0", u));  // 경계: 같으면 필수 아님
+	assert(is_mandatory("0.9.9", u));   // 미만이면 필수
+
+	{
+		const info hi = parse_manifest(manifest_with("min_version", "\"1.3.5\""), "x64");
+		assert(hi.ok);
+		assert(is_mandatory("1.3.0", hi));   // 1.3.0 < 1.3.5
+		assert(!is_mandatory("1.3.5", hi));  // 경계
+		assert(!is_mandatory("1.3.6", hi));
+		// 문자열 비교였다면 틀리는 케이스: "1.10.0" < "1.3.5" 가 되어 전 고객이 강제 업데이트에 걸린다
+		assert(!is_mandatory("1.10.0", hi));
+	}
+
+	// min_version 없음 → 절대 필수 아님. 오타 하나로 전 고객 UI 를 잠그지 않는다(스펙 §3.5).
+	{
+		const info nomin = parse_manifest(manifest_without("min_version"), "x64");
+		assert(nomin.ok && nomin.min_version.empty());
+		assert(!is_mandatory("0.1.0", nomin));
+		assert(!is_mandatory("0.0.0", nomin));
+	}
+
+	// 현재 버전 파싱 불가 → false
+	assert(!is_mandatory("garbage", u));
+	assert(!is_mandatory("", u));
+	// ok 아님 → false
+	info bad;
+	assert(!is_mandatory("1.0.0", bad));
+
+	// 심층 방어: parse_manifest 가 이미 깨진 min_version 을 통째로 거부하므로 아래 info 는
+	// 정상 경로로는 만들어질 수 없다. 그래도 false 여야 한다.
+	{
+		info hand;
+		hand.ok = true; hand.version = "1.4.0"; hand.min_version = "9.9.x";
+		assert(!is_mandatory("1.0.0", hand));
+	}
+}
+
+// 거부된 매니페스트는 판정을 아무것도 촉발하지 않아야 한다.
+// parse_manifest 는 모든 거부 경로에서 완전히 빈 info() 를 돌려주므로 필드가 비어 있지만,
+// 그 '비어 있음' 에 기대는 판정은 새 필드가 생기는 순간 무너진다. ok 가드가 유일한 방어다.
+static void test_rejected_manifest_decides_nothing() {
+	const char *const bodies[] = { "", "not json at all", kShadowManifest, kDupSizeManifest };
+	for (const char *b : bodies) {
+		assert_rejected(b);
+		const info r = parse_manifest(b, "x64");
+		assert(!r.ok);
+		assert(!should_offer("1.3.0", r, "", ""));
+		assert(!should_offer("0.0.1", r, "", ""));
+		assert(!is_mandatory("1.3.0", r));
+		assert(!is_mandatory("0.0.1", r));
+	}
+	// arch 불일치도 마찬가지 — x86 빌드가 x64 매니페스트로 무언가를 하면 브릭이다
+	const info wrong_arch = parse_manifest(kGoodManifest, "x86");
+	assert(!wrong_arch.ok);
+	assert(!should_offer("1.3.0", wrong_arch, "", ""));
+	assert(!is_mandatory("1.3.0", wrong_arch));
+
+	// ⚠️ 위 단언들만으로는 ok 가드를 지운 구현도 통과한다 — parse_manifest 가 거부 시
+	// 필드를 전부 비우기 때문에 parse_version(u.version) 이 대신 실패해 주기 때문이다.
+	// 그래서 'ok 는 false 인데 필드는 멀쩡한' info 를 손으로 만들어 가드 자체를 못 박는다.
+	// 실제로 생길 수 있는 상태다: 지난 폴링의 성공 결과를 들고 있다가 이번 폴링 실패로
+	// ok 만 내리는 캐시(Task 8·9)가 정확히 이 모양이 된다.
+	{
+		info stale;
+		stale.ok = false;                 // ← 이것만이 유효성의 근거다
+		stale.version = "1.4.0";
+		stale.min_version = "9.9.9";
+		stale.sha256 = "3f1c9a4b5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80912a3b4c5d6e7f80";
+		stale.url = "https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll";
+		stale.size = 4312576ULL;
+		stale.allow_downgrade = true;
+		assert(!should_offer("1.3.0", stale, "", ""));  // 신버전처럼 보여도 제안 금지
+		assert(!should_offer("1.5.0", stale, "", ""));  // 강등 경로도 금지
+		assert(!is_mandatory("1.3.0", stale));          // 1.3.0 < 9.9.9 라도 강제 금지
+	}
+}
+
 int main() {
 	test_parse_version();
 	test_version_cmp();
@@ -675,6 +975,14 @@ int main() {
 	test_parse_manifest_optional_fields();
 	test_parse_manifest_min_version();
 	test_parse_manifest_truncated();
+	test_marker_roundtrip();
+	test_marker_preserves_unknown_keys();
+	test_marker_tolerates_garbage();
+	test_decide_boot();
+	test_should_offer();
+	test_should_offer_downgrade();
+	test_is_mandatory();
+	test_rejected_manifest_decides_nothing();
 	std::printf("sherbet_update_core: ALL PASS\n");
 	return 0;
 }

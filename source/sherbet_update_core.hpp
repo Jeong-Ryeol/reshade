@@ -10,6 +10,7 @@
 #include "sherbet_auth_core.hpp"
 
 #include <string>
+#include <vector>
 #include <cstddef>
 #include <cstdint>
 
@@ -384,6 +385,142 @@ namespace sherbet
 
 			u.ok = true;
 			return u;
+		}
+
+		// ── 부팅 마커 ──────────────────────────────────────────────────────
+		// <DLL 과 같은 폴더>/sherbet.update. sherbet.auth 와 같은 key=value 줄 포맷.
+		// writer 가 셋(교체 워커 / 렌더 스레드 / 다른 프로세스의 attach)이라
+		// 모르는 키를 반드시 보존해야 서로의 필드를 지우지 않는다.
+		struct boot_marker
+		{
+			std::string state;     // pending | swapping | rolledback | rollback_failed
+			std::string version;   // 이 마커가 서술하는 바이너리
+			std::string prev;
+			std::string bak;
+			std::string exe;       // 교체 당시 대상 실행파일 이름
+			std::string sha;
+			std::string bad_ver;
+			std::string bad_sha;
+			int tries = 0;
+			std::vector<std::string> unknown; // 모르는 줄 원문(그대로 되돌려 쓴다)
+		};
+
+		// 손상된 마커의 tries 상한. static_cast<int>(2^64-1) 은 -1 이 되고, 음수 tries 는
+		// 롤백을 영원히 미룬다 — 깨진 게임에 갇히는 쪽이 훨씬 나쁘므로 위로 클램프한다.
+		inline int marker_tries_cap() { return 1000000; }
+
+		inline std::string serialize_marker(const boot_marker &m)
+		{
+			std::string o;
+			o += "state=" + m.state + "\n";
+			if (!m.version.empty()) o += "version=" + m.version + "\n";
+			if (!m.prev.empty())    o += "prev=" + m.prev + "\n";
+			if (!m.bak.empty())     o += "bak=" + m.bak + "\n";
+			if (!m.exe.empty())     o += "exe=" + m.exe + "\n";
+			if (!m.sha.empty())     o += "sha=" + m.sha + "\n";
+			if (!m.bad_ver.empty()) o += "bad_ver=" + m.bad_ver + "\n";
+			if (!m.bad_sha.empty()) o += "bad_sha=" + m.bad_sha + "\n";
+			o += "tries=" + std::to_string(m.tries) + "\n";
+			// 모르는 줄은 항상 마지막에, 읽은 순서 그대로. 순서가 흔들리면 세 writer 가
+			// 서로의 파일을 끝없이 다시 쓴다.
+			for (const std::string &line : m.unknown) o += line + "\n";
+			return o;
+		}
+
+		inline bool parse_marker(const std::string &text, boot_marker &out)
+		{
+			boot_marker t;
+			std::size_t i = 0;
+			while (i < text.size())
+			{
+				const std::size_t eol = text.find('\n', i);
+				std::string line = text.substr(i, eol == std::string::npos ? std::string::npos : eol - i);
+				i = (eol == std::string::npos) ? text.size() : eol + 1;
+				while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+				if (line.empty()) continue;
+				const std::size_t eq = line.find('=');
+				if (eq == std::string::npos || eq == 0) { t.unknown.push_back(line); continue; }
+				const std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+				if      (key == "state")   t.state = val;
+				else if (key == "version") t.version = val;
+				else if (key == "prev")    t.prev = val;
+				else if (key == "bak")     t.bak = val;
+				else if (key == "exe")     t.exe = val;
+				else if (key == "sha")     t.sha = val;
+				else if (key == "bad_ver") t.bad_ver = val;
+				else if (key == "bad_sha") t.bad_sha = val;
+				else if (key == "tries")
+				{
+					// 비정수는 0. 정수지만 int 를 넘으면 클램프 — 캐스팅이 감기면 음수가 되고
+					// 음수는 롤백을 막는다(고객이 깨진 게임에 갇힌다).
+					unsigned long long n = 0;
+					if (!detail::parse_u64(val, n)) t.tries = 0;
+					else t.tries = (n > static_cast<unsigned long long>(marker_tries_cap()))
+						? marker_tries_cap() : static_cast<int>(n);
+				}
+				else t.unknown.push_back(line); // 모르는 키는 원문 보존
+			}
+			if (t.state.empty()) return false;  // 실패 시 out 은 건드리지 않는다
+			out = t;
+			return true;
+		}
+
+		enum class boot_action { none, count, rollback };
+
+		// 스펙 §5.4 '2회 연속 부팅 실패' 의 정확한 정의.
+		//   m.tries = 지금까지 관찰된 부팅 실패 횟수. 이번 부팅은 아직 세지 않았다.
+		//   호출자는 count 를 받으면 tries+1 을 적고 나서 진행한다(증가는 행동 전에).
+		// 따라서 '이번 부팅이 max_tries 번째 실패가 되는 순간' 롤백한다: tries + 1 >= max_tries.
+		// max_tries 기본값 2 → tries 가 1 인 마커로 부팅한 것이 곧 '2회 연속 실패' 다.
+		// pending 이 아닌 상태는 전부 none: rolledback/rollback_failed 를 세면 이미 되돌린
+		// 사용자를 또 되돌리고, swapping(교체 중단)은 startup_repair 가 따로 다룬다.
+		inline boot_action decide_boot(const boot_marker &m, int max_tries = 2)
+		{
+			if (m.state != "pending") return boot_action::none;
+			// long long 으로 더한다 — tries 가 INT_MAX 면 int 덧셈은 부호 오버플로(UB)다.
+			// 마커는 디스크에서 오고 세 프로세스가 쓴다. 판정이 UB 로 흔들리면 롤백이 사라진다.
+			const long long next = static_cast<long long>(m.tries) + 1;
+			return (next >= static_cast<long long>(max_tries)) ? boot_action::rollback : boot_action::count;
+		}
+
+		// 배너를 띄울 것인가. 블랙리스트는 (버전, sha) 쌍으로 본다 —
+		// 같은 번호로 고쳐 재배포하면 sha 가 달라 자동으로 다시 제안된다.
+		// 비어 있는 반쪽은 와일드카드다: 롤백 코드가 한쪽만 적고 죽었다면 '어떤 빌드인지
+		// 확실치 않지만 나빴다' 는 뜻이고, 그때 다시 제안해 재브릭시키는 쪽이 업데이트를
+		// 한 번 놓치는 것보다 훨씬 나쁘다. 둘 다 비어 있으면 블랙리스트 자체가 없는 것이다.
+		inline bool should_offer(const std::string &cur, const info &u,
+			const std::string &bad_ver, const std::string &bad_sha)
+		{
+			// ⚠️ ok 가드가 유일한 방어다. parse_manifest 는 거부 시 완전히 빈 info() 를
+			// 돌려주지만 그 '비어 있음' 에 기대면 안 된다(필드가 하나 늘면 무너진다).
+			if (!u.ok) return false;
+			version3 a, b;
+			if (!parse_version(cur, a)) return false;   // 내 버전을 모르면 아무것도 하지 않는다
+			if (!parse_version(u.version, b)) return false;
+			if (!bad_ver.empty() || !bad_sha.empty())
+			{
+				const bool ver_hit = bad_ver.empty() || u.version == bad_ver;
+				const bool sha_hit = bad_sha.empty() || u.sha256 == bad_sha;
+				if (ver_hit && sha_hit) return false;
+			}
+			const int c = version_cmp(b, a);
+			if (c > 0) return true;                     // 서버가 더 최신
+			if (c < 0) return u.allow_downgrade;        // 킬스위치 강등
+			return false;                               // 같음
+		}
+
+		// 필수 업데이트 표시 여부. 값 없음/파싱 실패면 반드시 false —
+		// 오타 한 번(예: 9.9.9)으로 전 고객 UI 를 잠그면 안 된다(스펙 §3.5).
+		// parse_manifest 가 이미 '키는 있는데 파싱 불가' 인 매니페스트를 통째로 거부하므로
+		// ok=true 인 info 의 min_version 은 빈 문자열이거나 파싱 가능하다. 아래 두 가드는
+		// 그 위의 심층 방어다 — 다른 경로가 info 를 조립하게 되는 날을 위해 남긴다.
+		inline bool is_mandatory(const std::string &cur, const info &u)
+		{
+			if (!u.ok || u.min_version.empty()) return false;
+			version3 a, m;
+			if (!parse_version(cur, a)) return false;
+			if (!parse_version(u.min_version, m)) return false;
+			return version_cmp(a, m) < 0;
 		}
 	}
 }
