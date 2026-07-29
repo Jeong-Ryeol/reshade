@@ -221,7 +221,10 @@ static std::string make_pe(unsigned short machine, unsigned short characteristic
 	b[0x3d] = static_cast<char>((e_lfanew >> 8) & 0xff);
 	b[0x3e] = static_cast<char>((e_lfanew >> 16) & 0xff);
 	b[0x3f] = static_cast<char>((e_lfanew >> 24) & 0xff);
-	if (sig && e_lfanew + 24 <= b.size()) {
+	// ⚠️ `e_lfanew + 24 <= b.size()` 로 쓰면 안 된다. 덧셈이 unsigned int(32비트)에서
+	// 끝나므로 0xFFFFFFFF + 24 == 23 으로 감겨 가드를 통과하고, 아래에서 b[0xFFFFFFFF] 에
+	// **쓴다**(하네스 안의 OOB write). pe_bounds_ok 와 똑같이 뺄셈으로 비교한다.
+	if (sig && b.size() >= 24 && static_cast<std::size_t>(e_lfanew) <= b.size() - 24) {
 		b[e_lfanew] = 'P'; b[e_lfanew + 1] = 'E'; b[e_lfanew + 2] = '\0'; b[e_lfanew + 3] = '\0';
 		b[e_lfanew + 4] = static_cast<char>(machine & 0xff);
 		b[e_lfanew + 5] = static_cast<char>((machine >> 8) & 0xff);
@@ -783,7 +786,11 @@ static void test_marker_tolerates_garbage() {
 	boot_marker m;
 	assert(parse_marker("state=pending\n\n= \nno-equals-here\ntries=notanumber\n", m));
 	assert(m.state == "pending");
-	assert(m.tries == 0); // 비정수는 0 으로
+	// 비정수 tries 는 **무시**한다(0 으로 덮어쓰지 않는다). 여기서 0 이 나오는 것은
+	// 유효한 tries 줄이 하나도 없어 기본값 0 이 그대로 남았기 때문이다 —
+	// '비정수를 0 으로 바꾼다' 가 아니다. 그 차이는 test_marker_duplicate_keys 가
+	// "tries=1\ntries=notanumber" → 1 로 못 박는다(0 이 되면 롤백이 통째로 사라진다).
+	assert(m.tries == 0);
 	// 깨진 줄도 버리지 않는다 — 우리가 모르는 writer 의 필드일 수 있다.
 	assert(m.unknown.size() == 2);
 
