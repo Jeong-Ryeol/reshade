@@ -16,6 +16,7 @@
 // 그걸 7분짜리 CI 왕복 대신 여기서 매 빌드마다 확인한다.
 // §5.2 의 on_process_attach(Phase 3)가 어차피 이 TU 에서 이 헤더를 쓴다.
 #include "sherbet_update_core.hpp"
+#include "sherbet_update.hpp"
 #include <Windows.h>
 #include <Psapi.h>
 #include <delayimp.h> // Delay-load helpers
@@ -218,6 +219,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD fdwReason, LPVOID)
 					}
 				}
 			}
+
+			// Sherbet 자동 업데이트 부팅 경로(스펙 §5.2 / §5.4 R1~R11).
+			// ⚠️ 위치가 규약이다: "다른 ReShade 인스턴스 이미 로드됨" 검사(`return FALSE`)
+			//    **다음**, hooks 등록 **앞**. 앞에 두면 로드가 취소될 프로세스에서도 부팅
+			//    실패를 세게 되고, 뒤에 두면 후킹이 먼저 붙어 실패 시 디스크와 메모리가 어긋난다.
+			// 자기 경로는 반드시 g_reshade_dll_path(위 GetModuleFileNameW) — config.path()
+			//    계열은 INSTALL/BasePath 로 DLL 위치와 달라질 수 있다.
+			sherbet::update::on_process_attach(g_reshade_dll_path.native());
 
 #ifndef NDEBUG
 			if (config.get("INSTALL", "DumpExceptions"))

@@ -423,6 +423,9 @@
     <ClCompile Include="source\sherbet_ui.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\sherbet_update.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\state_block.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
@@ -789,6 +792,9 @@
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_ui.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_update.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_update_core.hpp">
