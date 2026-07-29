@@ -287,38 +287,97 @@ namespace sherbet
 				out = acc;
 				return true;
 			}
+
+			// 평면 JSON 에 `"key"` 가 있기만 한지. has_unique_keys 를 먼저 통과한 바디에서만
+			// 의미가 있다(거기서 등장 횟수가 1 이하로 보장된다).
+			inline bool has_key(const std::string &body, const char *key)
+			{
+				return body.find(std::string("\"") + key + "\"") != std::string::npos;
+			}
+
+			// 중요한 키가 바디 전체에서 두 번 이상 나오면 매니페스트를 통째로 거부한다.
+			// sherbet::auth::json_string 은 바디 전체에서 `"key"` 의 '첫 등장' 을 찾는다.
+			// 따라서 다른 값(예: notes) 안에 `"url":"…"` 처럼 생긴 텍스트가 앞서 있으면
+			// 그쪽이 잡혀 진짜 url/sha256/size 를 통째로 가린다. 가짜 삼총사를 자체 정합적으로
+			// (같은 리포 접두사 + 64hex + 범위 안 크기) 심으면 뒤따르는 검사가 전부 통과한다.
+			// 중복 키(첫 값 우선)도 같은 메커니즘이라 함께 막힌다.
+			// json.dumps 는 `"` 를 `\"` 로 이스케이프해 이 needle 을 깨뜨리지만, 매니페스트
+			// 라우트는 아직 없고 손으로 조립한 JSON 은 이스케이프하지 않는다.
+			// 서버가 이스케이프해 준다는 가정에 클라이언트 보안을 걸지 않는다.
+			// ⚠️ needle 은 앞뒤 따옴표를 포함한다. 그래서 "version" 은 "min_version" 안에서
+			// 잡히지 않는다(version 앞 글자가 " 가 아니라 _). 이 성질은 테스트로 못 박혀 있다.
+			inline bool has_unique_keys(const std::string &body)
+			{
+				static const char *const keys[] = {
+					"\"schema\"", "\"arch\"", "\"version\"", "\"min_version\"",
+					"\"sha256\"", "\"url\"", "\"size\"", "\"allow_downgrade\""
+				};
+				for (const char *const k : keys)
+				{
+					const std::string needle = k;
+					std::size_t seen = 0, i = 0;
+					for (;;)
+					{
+						const std::size_t at = body.find(needle, i);
+						if (at == std::string::npos) break;
+						if (++seen > 1) return false;
+						i = at + needle.size();
+					}
+				}
+				return true;
+			}
 		}
 
 		// 서버 응답(평면 JSON)을 판정 가능한 형태로. 하나라도 규약을 어기면 ok=false.
 		// arch 는 컴파일 타임 결정값("x64" 또는 "x86")을 넘긴다.
+		// ⚠️ 거부는 전부 `return info()` — 부분적으로 채워진 객체를 절대 내보내지 않는다.
+		// ok 를 확인하지 않고 u.url / u.size 를 읽는 호출자가 생기면(Task 7·8) 검증에 실패한
+		// 공격자 URL 을 그대로 쓰게 되기 때문이다. 실패는 항상 '완전히 빈 info' 다.
 		inline info parse_manifest(const std::string &body, const char *arch)
 		{
 			info u;
-			if (body.empty() || arch == nullptr) return u;
+			if (body.empty() || arch == nullptr) return info();
+			// 키 유일성이 첫 관문 — 다른 값 안에 숨은 가짜 "url"/"sha256"/"size" 가 진짜를
+			// 가리는 것을 막는다. 아래 has_key 도 이 보장 위에서만 성립한다.
+			if (!detail::has_unique_keys(body)) return info();
 
 			std::string s;
 			// schema
-			if (!sherbet::auth::json_string(body, "schema", s) || s != "1") return u;
+			if (!sherbet::auth::json_string(body, "schema", s) || s != "1") return info();
 			// arch echo — 서버가 다른 아키텍처를 줬으면 절대 설치하지 않는다
-			if (!sherbet::auth::json_string(body, "arch", s) || s != arch) return u;
+			if (!sherbet::auth::json_string(body, "arch", s) || s != arch) return info();
 			// version
-			if (!sherbet::auth::json_string(body, "version", u.version)) return u;
-			version3 probe;
-			if (!parse_version(u.version, probe)) return u;
-			// min_version 은 선택. 없거나 파싱 불가면 빈 문자열로 두고 is_mandatory 가 false 를 낸다.
-			if (sherbet::auth::json_string(body, "min_version", s) && parse_version(s, probe))
+			if (!sherbet::auth::json_string(body, "version", u.version)) return info();
+			version3 vp;
+			if (!parse_version(u.version, vp)) return info();
+			// min_version 은 선택 — 키가 없으면 빈 문자열로 두고 is_mandatory 가 false 를 낸다(스펙 §3.5).
+			// 다만 "키가 있는데 형식이 틀렸다"(문자열이 아니거나 파싱 불가)는 version 과 똑같이
+			// 매니페스트 전체를 거부한다. 스펙 §3.3 이 size 와 min_version 을 같은 이유로 문자열
+			// 타입으로 못 박았으므로 강제도 대칭이어야 한다 — 여기서 조용히 넘기면 str() 을
+			// 빠뜨린 라우트가 강제 업데이트를 소리 없이 무력화하고, Task 7 은 그 사실을 복구할
+			// 방법이 없다(정보가 여기서 파괴된다).
+			// '형식은 맞지만 값이 과한' 9.9.9 는 계속 통과한다 — 그건 §3.5 의 판단 영역이다.
+			if (detail::has_key(body, "min_version"))
+			{
+				version3 mvp;
+				if (!sherbet::auth::json_string(body, "min_version", s)) return info();
+				if (!parse_version(s, mvp)) return info();
 				u.min_version = s;
+			}
 			// sha256
-			if (!sherbet::auth::json_string(body, "sha256", u.sha256)) return u;
-			if (!is_sha256_hex(u.sha256)) return u;
+			if (!sherbet::auth::json_string(body, "sha256", u.sha256)) return info();
+			if (!is_sha256_hex(u.sha256)) return info();
 			// url
-			if (!sherbet::auth::json_string(body, "url", u.url)) return u;
-			if (!url_allowed(u.url)) return u;
+			if (!sherbet::auth::json_string(body, "url", u.url)) return info();
+			if (!url_allowed(u.url)) return info();
 			// size — 서버가 문자열로 직렬화한다(숫자로 내면 json_string 이 못 읽는다)
-			if (!sherbet::auth::json_string(body, "size", s)) return u;
-			if (!detail::parse_u64(s, u.size)) return u;
-			if (u.size < (1ULL << 20) || u.size > (32ULL << 20)) return u; // 1MiB ~ 32MiB
-			// 선택 필드
+			if (!sherbet::auth::json_string(body, "size", s)) return info();
+			if (!detail::parse_u64(s, u.size)) return info();
+			if (u.size < (1ULL << 20) || u.size > (32ULL << 20)) return info(); // 1MiB ~ 32MiB
+			// 선택 필드 — 표시 전용이다.
+			// ⚠️ json_string 의 언이스케이프는 모르는 \X 를 X 로 흘린다(가 → uAC00, \t → t).
+			// notes/notice 는 이스케이프가 원문대로 복원되지 않으므로 화면에 보여주는 데만 쓰고
+			// 파싱·비교·경로 조합에는 절대 쓰지 않는다.
 			sherbet::auth::json_string(body, "notes", u.notes);
 			sherbet::auth::json_string(body, "notice", u.notice);
 			u.allow_downgrade = (sherbet::auth::json_bool_or_null(body, "allow_downgrade") == 1);
