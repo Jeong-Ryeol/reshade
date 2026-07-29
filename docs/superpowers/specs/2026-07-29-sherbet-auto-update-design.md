@@ -272,12 +272,13 @@ tries=1
 | | 내용 |
 |---|---|
 | **R3** | `state==swapping` = 교체 중단. self 존재+크기>0이면 성공으로 보고 `pending`으로 승격. self 없고 `.bak` 있으면 복원 후 `rolledback` |
-| **R4** | `rolledback`/`rollback_failed`면 `bad_ver`/`bad_sha`를 프로세스 전역 static에 담고 리턴. **마커를 지우지 않는다** |
+| **R4** | `bad_ver`/`bad_sha`는 **state와 무관하게** 읽어 프로세스 전역 static에 담는다(블랙리스트는 상태가 아니라 사실이다 — 복구가 `.sherbet-new`로 self를 되살리면서 마커를 `pending`으로 확정하는 경로가 있어, `rolledback`일 때만 읽으면 그 세션 동안 블랙리스트가 통째로 적용되지 않는다). `rolledback`/`rollback_failed`면 거기에 더해 안전모드로 들어가고 리턴. **마커를 지우지 않는다**. ⚠️ **단, self 존재 확인보다 먼저 리턴하면 안 된다** — R9/R10 재배치(아래)로 `rolledback`이 적혀 있는데 self는 아직 없는 창이 생기므로, 문면대로 먼저 리턴하면 DLL이 없는 디렉터리를 그대로 두게 된다. self 부재는 마커 상태와 무관하게 최우선으로 복구한다(`classify`가 그렇게 되어 있다) |
 | **R5** | `pending`이면 3중 게이트 검사 |
 | **R6** | `tries+1`을 **먼저 디스크에 쓴다**(쓰기 전 크래시하면 카운트가 안 늘어 미탐) |
 | **R8** | `decide_boot`이 rollback이면 **먼저 재료 검증**: `.bak` 존재 + `pe_check` 통과. 실패면 `rollback_failed`만 기록하고 **아무 파일도 안 건드린다** — self를 먼저 밀어내고 `.bak`이 없는 걸 뒤늦게 알면 디렉터리에 DLL이 아예 없게 된다 |
-| **R9** | `self → .sherbet-failed`(증거 보관 1개) → `.bak → self`. 두 번째 실패 시 첫 번째 즉시 되돌림. 둘 다 실패면 `rollback_failed`만 남기고 조용히 계속 실행(**브릭 방지 원칙**) |
-| **R10** | 마커 `rolledback`/`bad_ver`/`bad_sha` + **같은 값을 프로세스 전역 static에도 즉시 채운다.** 이 한 줄이 없으면 마커를 막 쓴 그 세션에 배너가 다시 떠서 방금 롤백한 불량 DLL을 재설치하는 루프가 된다 |
+| **R9a** | `self → .sherbet-failed`(증거 보관 1개). 이 순간부터 self가 없다 |
+| **R10** | ★ **R9a와 R9b 사이에서** 마커 `rolledback`/`bad_ver`/`bad_sha`를 쓴다 + **같은 값을 프로세스 전역 static에도 즉시 채운다.** 전역 static이 없으면 마커를 막 쓴 그 세션에 배너가 다시 떠서 방금 롤백한 불량 DLL을 재설치하는 루프가 된다. R9b 뒤로 미루면 그 사이에 전원이 나갔을 때 `self 존재 + .bak 없음 + pending`이 남는데, 이건 '새 버전이 정상적으로 깔려 확정 대기 중'과 디스크상 구별이 불가능해서 `bad_ver`/`bad_sha`가 영영 안 써지고 **방금 되돌린 불량 빌드를 그대로 다시 제안**하게 된다. 일반화하면 **self가 없는 동안에는 마커를 먼저 쓰고 파일을 나중에 옮긴다**(`tools/sherbet_swap_sim.cpp`가 모든 중단 지점에서 전수로 강제한다) |
+| **R9b** | `.bak → self`. 실패하면 첫 번째를 즉시 되돌린다 — 되돌리기 **전에** `rollback_failed`를 먼저 기록한다(그 사이에 끊기면 `self=불량 바이너리 + 마커 rolledback`이 되어 거짓 안전모드가 켜진 채 고정점이 된다). 둘 다 실패면 `rollback_failed`만 남기고 조용히 계속 실행(**브릭 방지 원칙**) |
 | **R11** | 현재 세션은 매핑된 불량 DLL로 계속 실행. `return FALSE`로 로딩을 중단하면 **dxgi 프록시 export가 사라져 게임 자체가 안 켜진다.** 대신 `g_sherbet_safe_mode`로 `update_effects`를 조기 반환시키고 "이전 버전으로 되돌렸습니다" 패널만 그린다 |
 | **R13** | **롤백 배너에 `[그래도 다시 시도]`** — `sherbet.update`를 삭제해 블랙리스트를 해제한다. 오탐 비용이 클릭 1회로 떨어지므로 자동 판정을 더 정교하게 만들 이유가 사라진다. **구현 시 절대 빼지 말 것** |
 

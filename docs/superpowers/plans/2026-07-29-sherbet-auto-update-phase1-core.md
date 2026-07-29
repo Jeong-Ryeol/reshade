@@ -1454,41 +1454,49 @@ is_mandatory 는 값 없음·파싱 실패에 반드시 false — 오타 하나�
 
 ---
 
-## Task 8: 교체 상태머신 시뮬레이터  ✅ 완료
+## Task 8: 교체 상태머신 시뮬레이터  ✅ 완료 (리뷰 1회차 반영)
 
 **Files:**
-- Modify: `source/sherbet_update_core.hpp`
+- Modify: `source/sherbet_update_core.hpp`, `docs/superpowers/specs/2026-07-29-sherbet-auto-update-design.md`(§5.4)
 - Create: `tools/sherbet_swap_sim.cpp`
 
 **Interfaces:**
 - Consumes: Task 7의 헤더
-- Produces (**실제로 나온 것 — 브리프 초안에서 바뀐 부분은 아래 '해소된 구멍' 참고**):
+- Produces (**실제로 나온 것** — 브리프 초안에서 바뀐 부분은 아래 '해소된 구멍'):
   - `enum class disk_state { normal, staged, swapping_lost_self, resume_from_new, rollback_ready, broken_no_dll }`
   - `disk_state classify(bool has_self, bool has_new, bool has_bak, const boot_marker &m)` (시그니처 변경 없음)
   - `enum class repair_action { none, promote_pending, restore_from_bak, restore_from_new, give_up }` (브리프와 동일)
   - `repair_action decide_repair(disk_state s)` (**시그니처 변경 없음** — 브리프가 예고한 `bool has_self` 확장은 하지 않았다)
 
-**왜 이 태스크가 이 계획에서 가장 값어치 있는가:** 맥에서는 실제 파일 교체를 검증할 수 없다. 대신 상태머신을 순수 함수로 뽑아 **가짜 파일시스템 위에서 모든 중단 지점에 전원차단을 주입하고, 어느 지점에서 끊겨도 정상 상태로 수렴하는지**를 단언한다. 실제로 시뮬레이터가 설계 구멍 두 개를 잡아냈다(아래).
+**왜 이 태스크가 이 계획에서 가장 값어치 있는가:** 맥에서는 실제 파일 교체를 검증할 수 없다. 대신 상태머신을 순수 함수로 뽑아 **가짜 파일시스템 위에서 모든 중단 지점에 전원차단과 rename 거부를 주입하고, 어느 지점에서 끊겨도 정상 상태로 수렴하는지**를 단언한다. 실제로 시뮬레이터가 설계 결함 셋을 잡아냈다(①②③).
 
 ### 해소된 구멍 ①: self 부재 + `.bak` 부재 + `.new` 존재
 
-브리프 Step 3의 경고대로 `restore_from_bak`만으로는 이 상태에서 DLL 이 영영 안 돌아온다. 해법은 `decide_repair`에 `has_self`를 넘기는 것이 **아니라** `disk_state`에 `resume_from_new`를 추가하는 것이다. 그래야 `decide_repair(disk_state)`가 1인자로 남고, **모든 동작이 요구하는 소스 파일이 그 상태의 정의상 반드시 존재한다**(= 없는 파일을 옮기라고 시키는 판정이 원천적으로 불가능). 시뮬레이터가 파일 8조합 × 마커 6상태를 전수로 이 성질을 단언한다.
+브리프 Step 3의 경고대로 `restore_from_bak`만으로는 이 상태에서 DLL 이 영영 안 돌아온다. 해법은 `decide_repair`에 `has_self`를 넘기는 것이 **아니라** `disk_state`에 `resume_from_new`를 추가하는 것이다. 그래야 `decide_repair(disk_state)`가 1인자로 남고, **모든 동작이 요구하는 소스 파일이 그 상태의 정의상 반드시 존재한다**(= 없는 파일을 옮기라고 시키는 판정이 원천적으로 불가능). 시뮬레이터가 파일 8조합 × 마커 6상태를 전수로 단언한다.
 
-### 해소된 구멍 ②: `staged`의 두 가지 의미 (시뮬레이터가 잡은 진짜 결함)
+### 해소된 구멍 ②: `staged`의 두 가지 의미
 
-`self 있음 + state==swapping`은 (a) S11 까지 끝나고 확정만 못 함(= self 는 새 바이너리) 과 (b) S10 전에 끊김(= self 는 옛 바이너리) 을 **디스크만 봐서 구별할 수 없다**. `.bak` 존재로 갈라 (a)는 `promote_pending`, (b)는 `rolledback` 기록으로 보내는 안을 먼저 구현했으나, 시뮬레이터의 '외부 간섭' 스위트가 **AV가 S11 직후 `.sherbet-bak`을 격리해 가면 (a)가 (b)로 보인다**는 것을 잡아냈다. 그 경우 멀쩡히 깔린 새 버전에 대해 §5.4 R11 안전모드(효과 전면 중단)와 블랙리스트가 켜진다 — 고객이 산 기능이 사라진다.
+`self 있음 + state==swapping`은 (a) S11 까지 끝나고 확정만 못 함(self 는 새 바이너리) 과 (b) S10 전에 끊김(self 는 옛 바이너리) 을 **디스크만 봐서 구별할 수 없다**. `.bak` 존재로 갈라 (b)를 `rolledback`으로 보내는 안을 먼저 구현했으나, '외부 간섭' 스위트가 **AV 가 S11 직후 `.sherbet-bak`을 격리해 가면 (a)가 (b)로 보인다**는 것을 잡아냈다. 그러면 멀쩡히 깔린 새 버전에 §5.4 R11 안전모드(효과 전면 중단)와 블랙리스트가 켜진다.
 
-그래서 **두 경우를 합쳐 `staged` 하나로 두고 전부 `promote_pending`** 으로 보낸다. 틀렸을 때 남는 것은 '낡았지만 무해한 pending 마커' 뿐이고, §5.2 게이트1(`marker.version == 지금 매핑된 SHERBET_VERSION`)이 부팅 카운트·롤백을 통째로 막는다. 시뮬레이터는 그 마커로 5회 부팅해도 롤백이 안 일어나고, 다음 교체가 마커를 진실로 되돌려 놓는 것까지 단언한다. **게이트1 은 exe 오탐 방지용이 아니라 크래시 정합성의 마지막 방어선이다 — 구현 시 절대 빼지 말 것.**
+그래서 **두 경우를 합쳐 전부 `promote_pending`**. 틀렸을 때 남는 것은 '낡았지만 무해한 pending 마커' 뿐이고 §5.2 게이트1이 부팅 카운트·롤백을 통째로 막는다. **게이트1 은 exe 오탐 방지용이 아니라 크래시 정합성의 마지막 방어선이다 — 구현 시 절대 빼지 말 것.**
+
+### 해소된 구멍 ③: `restore_from_new`가 `rolledback` 마커를 만났을 때 (리뷰 1회차)
+
+`.new`를 앉히는 것은 선택이 아니라 '남은 유일한 DLL 소스' 라서다. 그런데 마커가 그 파일을 서술한다는 보장이 없다(S9 전이면 마커는 아직 `.new`를 모른다). **결론: 언제나 `pending`/`tries=0`으로 확정하고 `bad_ver`/`bad_sha`는 그대로 둔다.** 마커를 `rolledback`인 채로 두면 방금 되살린 바이너리로 안전모드가 켜져 효과가 통째로 꺼지고 '되돌렸습니다' 라는 거짓 배너가 뜬다 — ②와 같은 저울질이다. 그 대신 **블랙리스트는 state 와 무관하게 읽어야** 하므로 스펙 §5.4 R4 를 그렇게 고쳤다.
+
+이 선택 덕분에 P5(`rolledback` ⇒ self 는 옛 바이너리)가 **진짜 불변식**이 된다(반대로 두면 '새 바이너리를 앉혀 놓고 rolledback' 상태가 실제로 만들어진다).
 
 ### 확정된 쓰기 순서 규칙 (시뮬레이터가 강제)
 
-**self 가 없는 동안에는 마커를 먼저 쓰고 파일을 나중에 옮긴다.** 파일을 먼저 옮기고 마커 쓰기 직전에 끊기면 (self 있음 + `.bak` 없음 + `pending`) 이 되는데 이건 '새 버전이 정상적으로 깔려 확정 대기 중' 과 구별이 안 되어 **블랙리스트가 통째로 증발**한다(= 방금 되돌린 불량 빌드를 다시 제안). 이 때문에 §5.4 R9/R10 도 `self → .sherbet-failed` **다음에** 마커를 쓰고 **그 다음에** `.bak → self` 로 순서가 확정됐다(스펙 표의 R10 위치보다 이 규칙이 우선).
+**self 가 없는 동안에는 마커를 먼저 쓰고 파일을 나중에 옮긴다.** 파일을 먼저 옮기고 마커 쓰기 직전에 끊기면 (self 있음 + `.bak` 없음 + `pending`) 이 되는데 이건 '새 버전이 정상적으로 깔려 확정 대기 중' 과 구별이 안 되어 **블랙리스트가 통째로 증발**한다(= 방금 되돌린 불량 빌드를 다시 제안). 이 때문에 스펙 §5.4 를 **R9a → R10 → R9b** 로 고쳤고, R9b 실패 시의 되돌리기도 **`rollback_failed`를 먼저 기록한 뒤에** 한다.
 
-- [x] **Step 1: 실패하는 시뮬레이터 작성** — `tools/sherbet_swap_sim.cpp`
+### 보상 트랜잭션은 '다음 부팅' 이 대신해 주지 않는다 (리뷰 1회차)
 
-- [x] **Step 2: 컴파일 실패 확인** (`use of undeclared identifier 'classify'`)
+S11 실패 원복(§4.4)과 R9 되돌리기(§5.4)를 빼도 **복구가 대신 고쳐 주기 때문에** 다른 단언은 전부 통과한다. 하지만 self 가 없는 채로 세션이 끝나면 다음 실행에 **우리 DLL 이 로드조차 되지 않아**(게임은 System32 폴백으로 켜진다) `startup_repair`가 영영 안 돈다. 그래서 '절차가 스스로 끝났으면(전원차단·OS 거부가 아니면) self 가 반드시 남아 있어야 한다' 를 별도 단언으로 못 박았다 — 이 두 보상 트랜잭션을 지우는 돌연변이는 오직 이 단언에만 걸린다.
 
-- [x] **Step 3: 구현** — `sherbet_update_core.hpp`의 `is_mandatory` 뒤에 삽입(실제 반영된 최종 코드):
+- [x] **Step 1~2: 실패하는 시뮬레이터 작성 → 컴파일 실패 확인**
+
+- [x] **Step 3: 구현** — `sherbet_update_core.hpp`의 `is_mandatory` 뒤(최종 코드):
 
 ```cpp
 		// ── 교체 중단 복구 상태머신 (스펙 §4.4 S7~S13 / §5.4 R3~R10) ───────
@@ -1569,6 +1577,26 @@ is_mandatory 는 값 없음·파싱 실패에 반드시 false — 오타 하나�
 			give_up           // 재료 없음. rollback_failed 만 남기고 조용히 계속 실행(§5.4 R8)
 		};
 
+		// ⚠️ **state=pending 을 쓰는 쪽은 반드시 tries=0 을 함께 쓴다.**
+		// (S13 / promote_pending / restore_from_new — 셋 다 예외 없이)
+		// tries 는 '지금 pending 인 그 바이너리' 의 부팅 실패 횟수다. 롤백 직후의 마커는
+		// tries=2 로 남아 있고(§5.4 R9/R10 은 tries 를 되돌리지 않는다), S9 는 state/version
+		// 만 갈아끼우고 tries 를 그대로 물려받는다. 그래서 여기서 0 으로 되돌리지 않으면
+		// **새로 깐 멀쩡한 빌드가 첫 부팅에 곧바로 롤백된다**(decide_boot: 2+1 >= 2).
+		// tries 를 증가시키는 유일한 지점은 §5.4 R6 이다.
+		//
+		// ⚠️ restore_from_new 의 마커 규칙 — Phase 3 이 여기만 보고 구현할 수 있게 못 박는다:
+		//   **state=pending / tries=0 으로 확정하고, bad_ver/bad_sha 는 그대로 둔다.**
+		// .new 를 앉히는 것은 선택이 아니라 '남은 유일한 DLL 소스' 라서다. 그런데 마커가
+		// 그 파일을 서술하고 있다는 보장은 없다(S9 전이면 마커는 아직 .new 를 모른다).
+		// 그렇다고 rolledback/rollback_failed 를 남겨 두면 §5.4 R11 안전모드가 켜져 **방금
+		// 되살린 바이너리로 효과가 통째로 꺼지고** '되돌렸습니다' 라는 거짓 배너가 뜬다.
+		// pending 으로 두면 최악이 '게이트1 이 걸러 내는 낡은 마커' 다 — staged 와 같은 저울질.
+		// 블랙리스트(bad_ver/bad_sha)는 상태가 아니라 사실이므로 지우지 않는다.
+		// ⚠️ 따라서 글루는 bad_ver/bad_sha 를 **state 와 무관하게** 읽어 전역에 담아야 한다.
+		//    §5.4 R4 는 rolledback 일 때만 읽으라고 읽히지만, 그러면 이 경로에서 블랙리스트가
+		//    한 세션 동안 적용되지 않아 방금 문제를 일으킨 빌드를 다시 제안하게 된다.
+
 		// staged → promote_pending 인 이유(대안을 고르지 않은 근거를 남긴다):
 		// staged 는 '새 버전이 깔렸는데 확정만 못 했다' 와 'S10 전에 끊겨 아직 옛 버전이다'
 		// 두 가지를 다 포함한다. 디스크만 봐서는 구별할 수 없으므로 **틀렸을 때 덜 해로운
@@ -1595,24 +1623,22 @@ is_mandatory 는 값 없음·파싱 실패에 반드시 false — 오타 하나�
 			}
 			return repair_action::none;
 		}
-	}
-}
 ```
 
-- [x] **Step 4: 시뮬레이터 통과 확인**
+- [x] **Step 4: 시뮬레이터 통과 확인** — 단언 132,596개
 
-시뮬레이터가 증명하는 성질(모든 교체 중단 지점 × 복구 중 2차 중단 지점 × 롤백 중단 지점):
-
-| | 내용 |
+| | 증명하는 성질 |
 |---|---|
-| **P1 브릭 없음** | 어느 순간에도 DLL 소스(self/`.new`/`.bak`)가 하나는 남고, 수렴 후엔 self 가 존재하며 내용이 OLD/NEW 중 하나다 |
+| **P1 브릭 없음** | 어느 단계 직후에도 DLL 소스가 하나는 남고, 수렴 후엔 self 가 존재하며 내용이 OLD/NEW 중 하나다. **self 가 없는 동안에는 어떤 DLL 사본도 지우지 않는다**(`.sherbet-bak.old` 포함 — 잔재처럼 보이지만 한때 동작하던 진짜 바이너리다) |
 | **P2 수렴·멱등** | 복구를 반복하면 고정점에 도달하고 그 뒤로는 아무것도 바뀌지 않는다 |
-| **P3 잔재 없음** | 수렴 후 `.sherbet-new`/`.sherbet-bak.old`/복구안내가 남지 않는다. 단 `.sherbet-bak`(롤백 재료)과 `.sherbet-failed`(증거 1개)는 **지우지 않는다** |
-| **P4 마커 무결성** | 최종 마커는 다시 파싱되고, 모르는 키는 원문 그대로 살아남으며, **파싱 실패한 마커는 단 한 바이트도 덮어쓰지 않는다**(그래도 파일 복구는 한다) |
-| **P5 진실성** | `rolledback`이면 self 는 예외 없이 옛 바이너리다(이 상태가 안전모드·블랙리스트를 켜므로). `pending`이 낡을 수 있는 유일한 경우는 `staged`이고 그때도 게이트1 이 무해화한다 |
-| **P6 전순성** | 파일 8조합 × 마커 6상태가 빠짐없이, **없는 파일을 옮기지 않는** 동작으로 간다 |
-| **P7 임계값 2** | R6(`tries+1`을 먼저 디스크에) 를 모델링해도 롤백은 **2회째** 부팅 실패에서 일어난다. `decide_boot`에 증가시킨 구조체를 넘기면 1회가 된다는 사실도 실행 가능한 형태로 박아 두었다 |
-| **P8 블랙리스트** | 롤백이 어느 지점에서 끊겨도 `bad_ver`/`bad_sha`가 살아남는다 |
+| **P3 잔재 없음/보존** | 수렴 후 `.sherbet-new`/`.sherbet-bak.old`/복구안내가 남지 않는다. 반대로 `.sherbet-bak`(롤백 재료)과 `.sherbet-failed`(§5.4 R9 증거 1개)는 복구가 **절대 지우지 않는다** |
+| **P4 마커 무결성** | 최종 마커는 다시 파싱되고, 모르는 키는 원문 그대로 살아남으며, **파싱 실패한 마커는 단 한 바이트도 덮어쓰지 않는다**(그래도 파일 복구는 한다). 마커가 아예 없는 것도 정당한 최종 상태이며 그때는 부팅 판정이 아무것도 세지 않아야 한다 |
+| **P5 진실성** | `rolledback`이면 self 는 옛 바이너리다. **귀납적으로** 단언한다 — 시작 상태가 P5 를 만족하면 복구 후에도 만족한다 |
+| **P6 전순성** | 파일 8조합 × 마커 6상태가 빠짐없이, **없는 파일을 옮기지 않는** 동작으로 간다. 손으로 만든 상태 16×6×2 조합도 같은 성질을 만족한다 |
+| **P7 임계값 2** | R6(`tries+1`을 먼저 디스크에)를 모델링해도 롤백은 **2회째** 부팅 실패에서 일어난다. **직전 롤백 마커(`tries=2`)를 물려받은 교체도 첫 부팅에 롤백되지 않는다** — `pending`을 쓰는 모든 지점이 `tries=0`을 함께 쓰기 때문이고, 그게 빠지면 새로 깐 멀쩡한 빌드가 첫 부팅에 되돌아간다 |
+| **P8 블랙리스트** | 롤백이 어느 지점에서 끊기거나 rename 이 거부돼도 `bad_ver`/`bad_sha`가 살아남는다 |
+
+주입하는 고장: 전원차단(교체 10지점 / 복구 7지점 / 롤백 7지점), **rename 거부**(S8·S10·S11 + S11 원복, R9b + R9b 되돌리기), **S12 사후검증 불일치**(마커가 `swapping`인 채로 시작되는 유일한 롤백 경로), 외부 삭제(AV 격리·사용자), 마커 픽스처 4종(없음 / 모르는 키 / 파싱 불가 / **직전 롤백 `tries=2`**).
 
 복구 경로의 최종 형태(전문은 `tools/sherbet_swap_sim.cpp`):
 
@@ -1632,6 +1658,8 @@ static void startup_repair(machine &M)
 	case repair_action::promote_pending:
 		// self 는 유효한 DLL 이다. 어느 버전인지는 모르지만, 틀렸을 때 §5.2 게이트1 이
 		// 잡아 주는 쪽이 안전모드를 켜는 쪽보다 훨씬 덜 해롭다(헤더 주석 참고).
+		// ⚠️ tries=0 은 장식이 아니다 — 직전 롤백 마커의 tries=2 를 물려받은 채로 pending 을
+		// 쓰면 새로 깐 멀쩡한 빌드가 **첫 부팅에** 롤백된다.
 		if (can_write) { m.state = "pending"; m.tries = 0; write_marker(M.fs, m); }
 		if (M.done("R3 promote_pending")) return;
 		break;
@@ -1650,10 +1678,10 @@ static void startup_repair(machine &M)
 		break;
 	case repair_action::restore_from_new:
 		// ★ 마커 먼저, 파일 나중. 같은 규칙이다.
-		// 이미 rolledback/rollback_failed 인 마커는 건드리지 않는다 — 블랙리스트를
-		// pending 으로 덮으면 방금 되돌린 빌드를 다시 세기 시작한다. (그래도 파일은
-		// 앉힌다: 블랙리스트된 DLL 이라도 DLL 이 아예 없는 것보다는 낫다.)
-		if (can_write && m.state == "swapping")
+		// 마커는 pending/tries=0 으로 확정하고 bad_ver/bad_sha 는 그대로 둔다(헤더 규칙).
+		// rolledback 을 남겨 두면 방금 되살린 바이너리로 안전모드가 켜져 효과가 통째로
+		// 꺼진다 — 낡은 pending 은 게이트1 이 걸러 주지만 거짓 안전모드는 아무도 안 막는다.
+		if (can_write)
 		{
 			m.state = "pending"; m.tries = 0;
 			write_marker(M.fs, m);
@@ -1671,8 +1699,9 @@ static void startup_repair(machine &M)
 		break;
 	}
 
-	// 잔재 정리 — **self 가 있을 때만.** self 가 없으면 .sherbet-new 가 유일한 DLL
-	// 소스일 수 있다. '마지막 소스를 지우지 않는다' 가 이 청소의 유일한 규칙이다.
+	// 잔재 정리 — **self 가 있을 때만.** self 가 없으면 남은 파일이 유일한 DLL 사본일 수
+	// 있다(.sherbet-new 는 물론이고, 여기 안 지워지는 .sherbet-bak.old 도 진짜 바이너리다).
+	// '마지막 사본을 지우지 않는다' 가 이 청소의 유일한 규칙이다.
 	// (.sherbet-bak 은 지우지 않는다 — 롤백 재료이고 S8 이 다음 교체 때 정리한다.
 	//  .sherbet-failed 도 남긴다 — 증거 1개 보관이 §5.4 R9 의 요구다.)
 	if (has(M.fs, SELF))
@@ -1684,20 +1713,30 @@ static void startup_repair(machine &M)
 }
 ```
 
-- [x] **Step 5: 기존 테스트 회귀 확인** — `sherbet_update_core: ALL PASS` / `sherbet_auth_core parsing: ALL PASS`, 셋 다 `-g -fsanitize=address,undefined` 에서도 통과
+- [x] **Step 5: 회귀 확인** — `sherbet_update_core: ALL PASS` / `sherbet_auth_core parsing: ALL PASS`, 셋 다 `-g -fsanitize=address,undefined` 에서도 통과(`-DNDEBUG` 금지)
 
 - [x] **Step 6: 커밋**
 
-**돌연변이 검사(테스트가 진짜 실패하는지)** — 6개 중 5개가 잡히고 1개는 등가 돌연변이임을 확인:
+**돌연변이 검사(테스트가 진짜 실패하는지)** — 14개 전부 잡힘:
 
 | 돌연변이 | 잡은 단언 |
 |---|---|
-| `decide_repair(swapping_lost_self)`를 `none` 으로 | 전순성: `self 가 없는데 아무것도 하지 않는다` |
-| S10/S11 rename 순서 뒤바꿈 | `S11 .sherbet-new → self rename 실패`(대상이 이미 있어 `MoveFileExW(dwFlags=0)` 가 실패하는 모델) |
-| 복구가 `.bak` 대신 `.new` 에서 복원 | P5: `마커는 rolledback 인데 self 가 옛 바이너리가 아니다` |
+| `promote_pending`이 `tries=0`을 빠뜨림 | `새로 쓴 pending 마커의 tries 가 0 이 아니다(첫 부팅에 롤백된다)` (픽스처 3) |
+| 잔재 청소가 `.sherbet-failed`까지 삭제 | `복구가 §5.4 R9 증거(.sherbet-failed)를 지웠다` |
+| `restore_from_new`가 `rolledback` 마커를 그대로 둠 | `복구가 P5 를 깨뜨렸다(rolledback 인데 self 가 새 바이너리)` |
+| 잔재 청소의 `self 존재` 가드 제거 | `self 가 없는데 DLL 사본 .sherbet-bak.old 을 지웠다` |
+| S11 거부 시 원복 생략 | `절차가 스스로 끝났는데 self 가 없다` |
+| R9b 거부 시 되돌리기 생략 | 〃 |
+| R9b 거부 시 `rollback_failed`를 되돌리기 뒤에 기록 | `rolledback 인데 self 가 옛 바이너리가 아니다` |
+| `decide_repair(swapping_lost_self)` → `none` | 전순성: `self 가 없는데 아무것도 하지 않는다` |
+| 복구가 `.bak` 대신 `.new` 에서 복원 | `복구가 P5 를 깨뜨렸다` |
 | 부팅 모델에서 게이트1 제거 | `낡은 마커가 멀쩡한 설치를 되돌리려 든다` |
-| 잔재 청소가 `.sherbet-bak` 까지 삭제 | `복구가 롤백 재료(.sherbet-bak)를 지웠다` |
-| 잔재 청소의 `self 존재` 가드 제거 | **등가 돌연변이** — self 부재 상태는 전부 self 를 되살리는 동작으로 가거나(`restore_*`) 지울 것이 없어서(`give_up`) 청소에 도달하지 않는다. 가드는 심층 방어이고, 도달 가능해지는 순간 `recoverable` 불변식이 잡는다 |
+| 잔재 청소가 `.sherbet-bak`까지 삭제 | `복구가 롤백 재료(.sherbet-bak)를 지웠다` |
+| `restore_from_bak`을 파일 먼저/마커 나중으로 | `롤백 후 블랙리스트가 비었다` |
+| S10/S11 rename 순서 뒤바꿈 | `S11 .sherbet-new → self rename 실패`(대상이 이미 있어 `dwFlags=0` rename 이 실패하는 모델) |
+
+**남긴 것(다음 단계):** 게이트2(`exe`) 커버리지, 네임드 뮤텍스/동시성 모델링, 손으로 만든 픽스처 밖에서의 `broken_no_dll` 도달 경로.
+
 
 ---
 
