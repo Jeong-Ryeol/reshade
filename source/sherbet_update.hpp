@@ -52,8 +52,13 @@ namespace sherbet
 		// `.sherbet-new` 로 self 를 되살리며 마커를 `pending` 으로 확정하는 경로에서
 		// 블랙리스트가 한 세션 통째로 적용되지 않는다.
 		//
-		// ⚠️ 셋 다 `on_process_attach`(로더 락, 단일 스레드) 안에서만 쓰이고 그 뒤로는
-		//    읽기 전용이다. DllMain 은 렌더 스레드가 생기기 전에 끝나므로 별도 동기화가 없다.
+		// ⚠️ `on_process_attach`(로더 락, 단일 스레드)가 채우고, 그 뒤로는 렌더 스레드만
+		//    만진다(`controller::clear_blacklist`). 워커는 절대 읽지 않는다 — 컨트롤러가
+		//    `init()` 에서 자기 사본을 떠 간다.
+		//
+		// ★ **롤백 배너와 [그래도 다시 시도] 는 이 둘로 판단한다(`safe_mode()` 아님).**
+		//   `safe_mode()` 는 아래처럼 게이트1 이 걸려 롤백 성공 다음 부팅부터 false 가 되는데,
+		//   배너까지 같이 사라지면 고객이 블랙리스트를 풀 방법이 영영 없어진다.
 		const std::string &rolled_back_version();
 		const std::string &rolled_back_sha();
 
@@ -61,6 +66,12 @@ namespace sherbet
 		// Sherbet UI 대신 "이전 버전으로 되돌렸습니다" 패널만 그린다.
 		// **`return FALSE` 로 로딩을 중단하면 안 된다** — dxgi 프록시 export 가 사라져
 		// 게임 자체가 안 켜진다.
+		//
+		// ⚠️ `state==rolledback|rollback_failed` **그리고** `marker.version == SHERBET_VERSION`
+		//    일 때만 true 다(= 지금 매핑된 이미지가 마커가 비난하는 그 바이너리일 때).
+		//    버전 게이트가 없으면 롤백에 성공한 **다음 부팅부터 영구히** 켜진다 — 그 부팅의
+		//    self 는 되돌려진 멀쩡한 옛 바이너리인데 마커는 계속 `rolledback` 이고
+		//    §5.3 이 그 마커를 지우지 못하게 막기 때문이다(지우면 블랙리스트가 날아간다).
 		bool safe_mode();
 
 		// ── 컨트롤러(스펙 §6) ─────────────────────────────────────────────────
@@ -114,7 +125,11 @@ namespace sherbet
 			void release_mutex();
 			// 워커 스레드 본체. 블랙리스트는 렌더 스레드에서 복사해 넘긴다(전역 미접근).
 			void run_fetch(const std::string &bad_ver, const std::string &bad_sha);
-			void run_swap(const info &u);    // 스펙 §4.4 S1~S14 (워커 스레드)
+			void run_swap(const info &u);    // 스펙 §4.4 S1 + 뮤텍스 단일 해제점 (워커 스레드)
+			void do_swap(const info &u);     // 스펙 §4.4 S2~S14 (뮤텍스 보유 상태에서만)
+			bool wait_ms(unsigned int ms);   // _stop/_cancel 에 반응하는 대기. false = 중단해라
+			// get_to_file 의 진행률 콜백. ⚠️ 4MB 면 약 2000회 불린다 — 아토믹 저장만 한다.
+			static void progress_cb(void *ctx, unsigned long long received, unsigned long long total);
 
 			std::thread _worker;
 			std::atomic<bool> _worker_done{ false };

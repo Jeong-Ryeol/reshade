@@ -72,6 +72,20 @@ namespace
 	constexpr const char *kStatusPersonal = "\xEA\xB0\x9C\xEC\x9D\xB8 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEB\xA1\x9C \xEB\xAC\xB8\xEC\x9D\x98\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "개인 빌드는 디스코드로 문의해 주세요"
 	constexpr const char *kStatusBusyOther = "\xEB\x8B\xA4\xEB\xA5\xB8 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xB0\xBD\xEC\x97\x90\xEC\x84\x9C \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\xA4\x91\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94"; // "다른 게임 창에서 업데이트 중이에요"
 	constexpr const char *kStatusPrepare = "\xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\xA4\x80\xEB\xB9\x84 \xEC\xA4\x91\xE2\x80\xA6"; // "업데이트 준비 중…"
+	constexpr const char *kStatusRemote = "\xEB\x84\xA4\xED\x8A\xB8\xEC\x9B\x8C\xED\x81\xAC \xEB\x93\x9C\xEB\x9D\xBC\xEC\x9D\xB4\xEB\xB8\x8C\xEC\x97\x90\xEB\x8A\x94 \xEC\x84\xA4\xEC\xB9\x98\xED\x95\xA0 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"; // "네트워크 드라이브에는 설치할 수 없어요"
+	constexpr const char *kStatusNoWrite = "\xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEC\x93\xB8 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"; // "폴더에 쓸 수 없어요"
+	constexpr const char *kStatusNoSpace = "\xEB\x94\x94\xEC\x8A\xA4\xED\x81\xAC \xEA\xB3\xB5\xEA\xB0\x84\xEC\x9D\xB4 \xEB\xB6\x80\xEC\xA1\xB1\xED\x95\xB4\xEC\x9A\x94"; // "디스크 공간이 부족해요"
+	constexpr const char *kStatusDownloading = "\xEB\x8B\xA4\xEC\x9A\xB4\xEB\xA1\x9C\xEB\x93\x9C \xEC\xA4\x91\xE2\x80\xA6"; // "다운로드 중…"
+	constexpr const char *kStatusVerifying = "\xED\x99\x95\xEC\x9D\xB8 \xEC\xA4\x91\xE2\x80\xA6"; // "확인 중…"
+	constexpr const char *kStatusBadFile = "\xED\x8C\x8C\xEC\x9D\xBC\xEC\x9D\xB4 \xEC\x86\x90\xEC\x83\x81\xEB\x90\x90\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x8B\x9C\xEB\x8F\x84\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "파일이 손상됐어요 — 다시 시도해 주세요"
+	constexpr const char *kStatusFailed = "\xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\x8B\xA4\xED\x8C\xA8 \xE2\x80\x94 \xEC\x9D\xB4\xEC\xA0\x84 \xEB\xB2\x84\xEC\xA0\x84 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C\xEC\x98\x88\xEC\x9A\x94"; // "업데이트 실패 — 이전 버전 그대로예요"
+	constexpr const char *kStatusCancelled = "\xEC\xB7\xA8\xEC\x86\x8C\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94"; // "취소했어요"
+	constexpr const char *kStatusDone = "\xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xEC\x99\x84\xEB\xA3\x8C \xE2\x80\x94 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x84 \xEA\xBB\x90\xEB\x8B\xA4 \xEC\xBC\x9C\xEB\xA9\xB4 \xEC\xA0\x81\xEC\x9A\xA9\xEB\x8F\xBC\xEC\x9A\x94"; // "업데이트 완료 — 게임을 껐다 켜면 적용돼요"
+	constexpr const char *kStatusBadUrl = "\xEC\xA3\xBC\xEC\x86\x8C\xEA\xB0\x80 \xEC\x98\xAC\xEB\xB0\x94\xEB\xA5\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94"; // "주소가 올바르지 않아요"
+	constexpr const char *kStatusNetwork = "\xEC\x97\xB0\xEA\xB2\xB0 \xEC\x8B\xA4\xED\x8C\xA8 \xE2\x80\x94 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x92\xA4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x8B\x9C\xEB\x8F\x84\xED\x95\xB4\xEC\x9A\x94"; // "연결 실패 — 잠시 뒤 다시 시도해요"
+
+	// 매니페스트 size 상한과 같다(스펙 §3.4). 다운로드·해시 양쪽에서 같은 값을 쓴다.
+	constexpr unsigned long long kMaxDownloadBytes = 32ull * 1024 * 1024;
 
 	// ── 문자열 변환 ────────────────────────────────────────────────────────
 	// ⚠️ narrow→wide 는 **반드시 CP_UTF8** 이다.
@@ -132,6 +146,8 @@ namespace
 	struct paths
 	{
 		std::wstring self;        // DLL 전체 경로 (= g_reshade_dll_path)
+		std::wstring dir;         // 마지막 구분자 포함(프리플라이트용)
+		std::wstring newpart;     // <self>.sherbet-new.part — 검증 전 스트리밍 대상
 		std::wstring newf;        // <self>.sherbet-new
 		std::wstring bak;         // <self>.sherbet-bak
 		std::wstring bakold;      // <self>.sherbet-bak.old
@@ -199,6 +215,7 @@ namespace
 			return false;
 
 		const std::wstring dir = self_path.substr(0, at + 1); // 구분자 포함
+		const std::wstring w_part   = utf8_to_wide(suffix_new_part());
 		const std::wstring w_new    = utf8_to_wide(suffix_new());
 		const std::wstring w_bak    = utf8_to_wide(suffix_bak());
 		const std::wstring w_bakold = utf8_to_wide(suffix_bak_old());
@@ -207,10 +224,12 @@ namespace
 		const std::wstring w_note   = utf8_to_wide(recovery_note_name());
 		// 코어 헤더의 리터럴이 안 바뀌면 여기서 실패할 수 없다. 그래도 확인하는 이유:
 		// 빈 문자열이 섞이면 self 나 폴더 자체를 가리키는 경로가 만들어져 엉뚱한 것을 옮긴다.
-		if (w_new.empty() || w_bak.empty() || w_bakold.empty() || w_failed.empty() || w_marker.empty() || w_note.empty())
+		if (w_part.empty() || w_new.empty() || w_bak.empty() || w_bakold.empty() || w_failed.empty() || w_marker.empty() || w_note.empty())
 			return false;
 
 		p.self        = self_path;
+		p.dir         = dir;
+		p.newpart     = self_path + w_part;
 		p.newf        = self_path + w_new;
 		p.bak         = self_path + w_bak;
 		p.bakold      = self_path + w_bakold;
@@ -343,6 +362,124 @@ namespace
 		return false;
 	}
 
+	bool file_size(const std::wstring &path, unsigned long long &out)
+	{
+		out = 0;
+		const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (f == INVALID_HANDLE_VALUE)
+			return false;
+		LARGE_INTEGER size = {};
+		const bool ok = GetFileSizeEx(f, &size) != 0 && size.QuadPart >= 0;
+		CloseHandle(f);
+		if (ok)
+			out = static_cast<unsigned long long>(size.QuadPart);
+		return ok;
+	}
+
+	// ⚠️ **매 호출이 새 sha256_init 으로 시작한다.**
+	// `sha256_final_hex` 는 멱등하지 않다 — 패딩과 길이를 컨텍스트에 밀어 넣으므로
+	// 같은 컨텍스트에 두 번째로 부르면 결과가 쓰레기다. S6(다운로드 검증)과
+	// S12(교체 직후 재검증)가 컨텍스트를 공유하면 S12 가 **항상** 불일치를 내
+	// 멀쩡한 업데이트를 매번 롤백한다. 그래서 컨텍스트를 밖으로 내보내지 않는다.
+	bool hash_file(const std::wstring &path, std::string &out_hex)
+	{
+		out_hex.clear();
+		const HANDLE f = CreateFileW(path.c_str(), GENERIC_READ,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (f == INVALID_HANDLE_VALUE)
+			return false;
+
+		sha256_ctx ctx;
+		sha256_init(ctx); // ★ 항상 여기서 시작한다
+		bool ok = true;
+		unsigned long long total = 0;
+		std::vector<unsigned char> buf(64 * 1024);
+		for (;;)
+		{
+			DWORD read = 0;
+			if (!ReadFile(f, buf.data(), static_cast<DWORD>(buf.size()), &read, nullptr))
+			{
+				ok = false;
+				break;
+			}
+			if (read == 0)
+				break; // EOF
+			total += read;
+			if (total > kMaxDownloadBytes) // 32MiB 상한 — 매니페스트 size 상한과 같다
+			{
+				ok = false;
+				break;
+			}
+			sha256_update(ctx, buf.data(), read);
+		}
+		CloseHandle(f);
+		if (ok)
+			out_hex = sha256_final_hex(ctx);
+		return ok;
+	}
+
+	// 스펙 §4.4 S6 — 검증 순서: 수신 크기 == size → sha256 == sha256 → pe_check(앞 4KB).
+	// ⚠️ 이 셋은 **무조건** 돈다. WinInet 이 GitHub 리다이렉트를 자동 추종하므로
+	//    url_allowed 가 피닝하는 것은 최초 URL 뿐이고, 실제로 도착한 바이트를 검증하는
+	//    것은 sha256 과 pe_check 뿐이다.
+	bool verify_staged(const std::wstring &path, const info &u)
+	{
+		unsigned long long size = 0;
+		if (!file_size(path, size) || size != u.size)
+			return false;
+		std::string hex;
+		if (!hash_file(path, hex) || hex != u.sha256)
+			return false;
+		// sha256 은 '바이트가 온전한가' 만 보고 '무엇인가' 는 못 본다. x64 슬롯에 32비트
+		// DLL 을 넣는 운영 실수 한 번이면 다음 실행에 ERROR_BAD_EXE_FORMAT 으로
+		// 롤백 코드조차 안 돈다.
+		unsigned char head[kPeHeadBytes];
+		std::size_t len = 0;
+		if (!read_head(path, head, sizeof(head), len))
+			return false;
+		return pe_check(head, len, kWantX64);
+	}
+
+	// 스펙 §4.4 S3 프리플라이트. 실패 사유를 고객이 읽을 문구로 돌려준다(nullptr = 통과).
+	// ⚠️ **UAC 승격은 절대 하지 않는다** — 게임 오버레이발 UAC 프롬프트는 그 자체가 악성 신호다.
+	const char *preflight(const paths &p, unsigned long long size)
+	{
+		// 네트워크 경로면 중단. 크로스 볼륨 MoveFile 은 copy+delete 로 강등되어
+		// 사용 중인 파일에서 실패한다.
+		if (p.dir.size() >= 2 && p.dir[0] == L'\\' && p.dir[1] == L'\\')
+			return kStatusRemote; // UNC
+		std::wstring root = p.dir;
+		if (p.dir.size() >= 3 && p.dir[1] == L':')
+			root = p.dir.substr(0, 3); // "C:\" — GetDriveTypeW 는 루트를 원한다
+		if (GetDriveTypeW(root.c_str()) == DRIVE_REMOTE)
+			return kStatusRemote;
+
+		// 쓰기 실측. 속성만 보고 판단하지 않는다 — 실제로 만들어 봐야 안다.
+		// FILE_FLAG_DELETE_ON_CLOSE 라 핸들이 닫히는 순간(크래시 포함) 사라진다.
+		const std::wstring probe = p.self + L".sherbet-probe";
+		DeleteFileW(probe.c_str()); // 전원차단으로 남았을 수 있는 묵은 프로브를 치운다
+		const HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+			FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+		if (h == INVALID_HANDLE_VALUE)
+			return kStatusNoWrite;
+		CloseHandle(h);
+
+		// size*3 + 32MiB (.part + .sherbet-new + .sherbet-bak 이 동시에 존재할 수 있다).
+		// 조회 실패는 중단 사유가 아니다 — 가상 볼륨에서 실패할 수 있고, 공간이 정말
+		// 없으면 아래 다운로드가 어차피 실패한다.
+		ULARGE_INTEGER avail = {};
+		if (GetDiskFreeSpaceExW(p.dir.c_str(), &avail, nullptr, nullptr))
+		{
+			const unsigned long long need = size * 3 + kMaxDownloadBytes;
+			if (avail.QuadPart < need)
+				return kStatusNoSpace;
+		}
+		return nullptr;
+	}
+
 	bool write_marker(const paths &p, const boot_marker &m)
 	{
 		// 코어 헤더 serialize_marker 의 전제조건: state 가 비면 안 된다.
@@ -380,7 +517,21 @@ namespace
 		// 통째로 적용되지 않아 방금 문제를 일으킨 빌드를 그대로 다시 제안하게 된다.
 		g_bad_ver = m.bad_ver;
 		g_bad_sha = m.bad_sha;
-		g_safe_mode = (m.state == "rolledback" || m.state == "rollback_failed");
+
+		// ⚠️ **안전모드는 게이트1 로 한 번 더 거른다.** R11 의 안전모드는 "지금 매핑된
+		// 이미지가 마커가 비난하는 그 바이너리다" 일 때만 옳다.
+		// 게이트1 없이 state 만 보면 롤백에 **성공한** 다음 부팅부터 영구히 켜진다:
+		// 그 부팅의 self 는 되돌려진 멀쩡한 옛 바이너리인데 마커는 계속 rolledback 이고
+		// (§5.3 이 rolledback 마커를 지우지 못하게 막는다 — 지우면 블랙리스트가 날아간다),
+		// 그러면 고객이 돈 주고 산 효과가 통째로, 영원히 꺼진다.
+		// 코어 헤더의 restore_from_new 주석이 같은 위험을 "방금 되살린 바이너리로 효과가
+		// 통째로 꺼지고 '되돌렸습니다' 라는 거짓 배너가 뜬다" 로 못 박아 두었다.
+		// ⚠️ 블랙리스트(위 두 줄)는 **게이트를 걸지 않는다** — 그건 상태가 아니라 사실이고,
+		//    롤백 배너와 [그래도 다시 시도] 는 rolled_back_version() 이 비어 있지 않은지로
+		//    판단해야 한다(안전모드로 판단하면 다음 부팅부터 배너가 사라져 블랙리스트를
+		//    풀 방법이 없어진다).
+		g_safe_mode = (m.state == "rolledback" || m.state == "rollback_failed") &&
+			m.version == SHERBET_VERSION;
 	}
 
 	// ── 로그(고객 문의 때 유일한 단서다) ──────────────────────────────────
@@ -1122,9 +1273,321 @@ bool sherbet::update::controller::need_restart() const
 	return _need_restart.load();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  자기교체 — 스펙 §4.4 S1~S14
+//
+//  ⚠️ self 가 없는 유일한 구간은 S10~S11 사이(1ms 미만)다. 프록시 이름이면 그동안
+//     게임은 System32 의 진짜 dxgi.dll 로 폴백해 켜진다.
+//  ⚠️ AV·안티치트 표면 금지(§4.5): 자식 프로세스 ❌ / CreateRemoteThread ❌ /
+//     자기 이미지 VirtualProtect·WriteProcessMemory ❌ / 새 DLL 을 이 프로세스에
+//     LoadLibrary ❌ / MOVEFILE_DELAY_UNTIL_REBOOT ❌ / UAC 승격 ❌.
+// ══════════════════════════════════════════════════════════════════════════
+
+void sherbet::update::controller::progress_cb(void *ctx, unsigned long long received, unsigned long long total)
+{
+	// ⚠️ 4MB 다운로드면 약 2000회 불린다(읽기 버퍼 2048바이트). 아토믹 저장 둘 말고는
+	// 아무것도 하지 않는다 — 락도, 할당도, ImGui 도 금지다(워커 스레드다).
+	controller *const self = static_cast<controller *>(ctx);
+	if (self == nullptr)
+		return;
+	self->_recv.store(received, std::memory_order_relaxed);
+	if (total != 0)
+		self->_total.store(total, std::memory_order_relaxed);
+}
+
+// _stop / _cancel 에 빠르게 반응하는 대기. 워커 스레드 전용.
+bool sherbet::update::controller::wait_ms(unsigned int ms)
+{
+	for (unsigned int i = 0; i < ms / 100 + 1; ++i)
+	{
+		if (_stop.load() || _cancel.load())
+			return false;
+		Sleep(100);
+	}
+	return !_stop.load() && !_cancel.load();
+}
+
 void sherbet::update::controller::run_swap(const info &u)
 {
-	// TODO(Task 4): 스펙 §4.4 S1~S14 (프리플라이트 · 다운로드 · 검증 · rename 2회 교체).
-	// 지금은 아무 파일도 건드리지 않는다 — UI(Task 6)가 아직 begin_update 를 부르지 않는다.
-	(void)u;
+	if (!g_paths.ok)
+	{
+		set_status(kStatusFailed);
+		return;
+	}
+	// S1 — 네임드 뮤텍스 즉시 획득. 대기하지 않는다.
+	// 실패 = 다른 게임 창이 교체 중이다. 그 창은 S10~S11 사이에 self 를 잠깐 없앨 수
+	// 있으므로, 여기서 파일을 건드리면 서로의 교체를 망친다.
+	if (!take_mutex())
+	{
+		set_status(kStatusBusyOther);
+		return;
+	}
+	do_swap(u); // ★ 여기서 어떻게 빠져나가도 아래 한 줄이 반드시 돈다
+	release_mutex();
+}
+
+void sherbet::update::controller::do_swap(const info &u)
+{
+	const paths &p = g_paths;
+
+	// S2 — URL 전체 접두사 피닝. parse_manifest 가 이미 걸렀지만 여기서 다시 본다:
+	// info 를 조립하는 다른 경로가 생기는 날을 위한 심층 방어다(호스트 화이트리스트가
+	// 아니라 **전체 접두사** 피닝이 홈서버 단독 침해 방어의 유일한 근거다).
+	if (!u.ok || !url_allowed(u.url) || !is_sha256_hex(u.sha256) ||
+		u.size < (1ull << 20) || u.size > kMaxDownloadBytes)
+	{
+		set_status(kStatusBadUrl);
+		return;
+	}
+	std::string host, path;
+	if (!split_https_url(u.url, host, path))
+	{
+		set_status(kStatusBadUrl);
+		return;
+	}
+	const std::wstring whost = utf8_to_wide(host);
+	const std::wstring wpath = utf8_to_wide(path);
+	if (whost.empty() || wpath.empty())
+	{
+		set_status(kStatusBadUrl);
+		return;
+	}
+
+	// ⚠️ 파싱 안 되는 마커가 이미 있으면 **교체를 시작하지 않는다**(시뮬레이터 run_swap 과 동일).
+	// 여기서 state=swapping 을 덮어쓰면 다른 writer 의 모르는 키를 통째로 잃고, 안 쓰면
+	// 중단 복구가 불가능하다. 둘 중 안전한 쪽은 '시작하지 않는다'(디스크 무변화)다.
+	boot_marker m;
+	{
+		std::string text;
+		if (read_file(p.marker, text, kMaxMarkerBytes) && !parse_marker(text, m))
+		{
+			set_status(kStatusFailed);
+			return;
+		}
+	}
+
+	// ⚠️ exe 이름을 모르면 교체하지 않는다. 마커의 exe 가 비면 부팅 경로의 게이트2 가
+	// 영원히 어긋나 새 빌드가 깨져도 자동 롤백이 **한 번도 돌지 않는다.**
+	// 롤백 안전망 없이 설치하느니 업데이트를 미루는 쪽이 낫다.
+	if (p.exe_name.empty())
+	{
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S3 — 프리플라이트
+	if (const char *why = preflight(p, u.size))
+	{
+		set_status(why);
+		return;
+	}
+
+	// S4 — 잔재 정리와 재개. `.sherbet-new` 가 이미 있고 sha 가 맞으면 S5~S7 을 건너뛴다.
+	bool staged = false;
+	if (file_exists(p.newf))
+	{
+		std::string hex;
+		if (hash_file(p.newf, hex) && hex == u.sha256)
+			staged = true;
+		else
+			DeleteFileW(p.newf.c_str());
+	}
+	DeleteFileW(p.newpart.c_str()); // 묵은 .part 는 항상 버린다(재개 근거가 될 수 없다)
+
+	if (!staged)
+	{
+		// S5 — 스트리밍 다운로드. bearer 는 없다(릴리스 자산은 공개다).
+		_total.store(u.size);
+		_recv.store(0);
+		set_status(kStatusDownloading);
+
+		bool got = false;
+		for (int attempt = 0; attempt < 4 && !_stop.load(); ++attempt)
+		{
+			if (attempt > 0)
+			{
+				const unsigned int backoff[3] = { 200, 600, 1200 };
+				if (!wait_ms(backoff[attempt - 1]))
+					break;
+			}
+			const int st = sherbet::http::get_to_file(whost.c_str(), wpath.c_str(), p.newpart.c_str(),
+				u.size, this, &progress_cb, &_cancel);
+			if (_cancel.load() || _stop.load())
+				break;
+			if (st == 200)
+			{
+				got = true;
+				break;
+			}
+		}
+		if (_cancel.load())
+		{
+			DeleteFileW(p.newpart.c_str()); // get_to_file 이 이미 지웠지만 확실히 한다
+			set_status(kStatusCancelled);
+			return;
+		}
+		if (!got)
+		{
+			DeleteFileW(p.newpart.c_str());
+			set_status(kStatusNetwork);
+			return;
+		}
+
+		// S6 — 검증. 순서: 수신 크기 == size → sha256 → pe_check(앞 4KB).
+		// ⚠️ 해시 불일치는 **일시적 오류가 아니다.** 재시도하지 않는다 — 같은 URL 이
+		//    같은 잘못된 바이트를 줄 뿐이고, 재시도는 '언젠가 통과할' 확률만 만든다.
+		set_status(kStatusVerifying);
+		if (!verify_staged(p.newpart, u))
+		{
+			DeleteFileW(p.newpart.c_str());
+			set_status(kStatusBadFile);
+			return;
+		}
+
+		// S7 — 안전 정지 상태. 여기까지는 원본이 전혀 손상되지 않는다.
+		// (REPLACE_EXISTING 은 우리 스테이징 파일에만 쓴다 — S10 의 self→.bak 과 다르다.)
+		if (!MoveFileExW(p.newpart.c_str(), p.newf.c_str(), MOVEFILE_REPLACE_EXISTING))
+		{
+			DeleteFileW(p.newpart.c_str());
+			set_status(kStatusFailed);
+			return;
+		}
+	}
+
+	// 여기부터는 취소를 받지 않는다 — S8~S13 은 수 ms 이고, 중간에 멈추면 오히려 위험하다.
+	if (_cancel.load())
+	{
+		DeleteFileW(p.newf.c_str());
+		set_status(kStatusCancelled);
+		return;
+	}
+
+	// S8 — 묵은 `.sherbet-bak` 제거. READONLY 를 풀고 5회 재시도, 최종 실패면 `.bak.old` 로 밀어낸다.
+	// ⚠️ 이 정리가 없으면 S10 의 rename(dwFlags=0)이 실패하거나, REPLACE_EXISTING 을 붙이고 싶어진다.
+	//    묵은 `.bak` 을 살려 두면 '`.sherbet-bak` 은 마커가 비난하는 바이너리를 담지 않는다' 는
+	//    성질이 무너져 restore_from_bak 이 불량 바이너리를 self 에 앉히게 된다.
+	if (file_exists(p.bak))
+	{
+		SetFileAttributesW(p.bak.c_str(), FILE_ATTRIBUTE_NORMAL);
+		for (int i = 0; i < 5; ++i)
+		{
+			if (DeleteFileW(p.bak.c_str()) || !file_exists(p.bak))
+				break;
+			Sleep(50);
+		}
+		if (file_exists(p.bak))
+		{
+			// ⚠️ 여기서는 REPLACE_EXISTING 이 **맞다**(S10 과 다르다).
+			// 먼저 지우고 옮기면 밀어내기가 거부됐을 때 `.sherbet-bak.old` 를 이유 없이
+			// 없앤 셈이 된다 — 잔재처럼 보이지만 한때 동작하던 진짜 바이너리이고,
+			// self/.new/.bak 이 전부 사라진 디렉터리에 남은 마지막 사본일 수 있다.
+			// 원자 교체면 실패해도 잃는 것이 없다. (시뮬레이터의 rm+mv 와 같은 순효과)
+			MoveFileExW(p.bak.c_str(), p.bakold.c_str(), MOVEFILE_REPLACE_EXISTING); // 다음 시작의 정리 대상
+		}
+	}
+	// S8 이 끝나고도 `.bak` 이 남아 있으면 S10 이 어차피 실패한다. **self 를 밀어내기 전에**
+	// 멈춘다 — 디스크는 원본 그대로이고 `.sherbet-new` 만 남는다(다음 시작이 치운다).
+	if (file_exists(p.bak))
+	{
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S9 — 복구안내를 **먼저** 쓴다. 아래 S10 부터 self 가 사라지고, 그 구간에서 전원이
+	// 나가면 고객에게 남는 단서는 이 파일 하나다. 문구는 make_recovery_note 하나에서만
+	// 나오고 **실제 파일명**이 들어간다(고객이 프록시를 d3d11.dll 로 넣었을 수 있다).
+	write_recovery_note(p);
+
+	// ⚠️ tries 는 **물려받는다**(스펙 S9 는 tries 를 건드리지 않는다). 직전 롤백 마커면
+	// 여기서 tries=2 가 그대로 따라오므로 아래 S13 의 tries=0 리셋이 필수다.
+	// 모르는 키(unknown)도 위에서 읽은 마커 그대로 보존된다.
+	m.state   = "swapping";
+	m.version = u.version;
+	m.prev    = SHERBET_VERSION;
+	m.bak     = p.bak_name;
+	m.exe     = p.exe_name; // ★ 부팅 경로 게이트2 가 읽는 값 — 같은 함수로 만든다
+	m.sha     = u.sha256;
+	if (!write_marker(p, m))
+	{
+		// 마커를 못 쓰면 중단 복구가 불가능해진다. self 를 건드리기 전에 멈춘다.
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S10 ★ self 가 사라지는 유일한 구간의 시작.
+	// ⚠️ **dwFlags=0.** REPLACE_EXISTING 을 붙이면 묵은 `.bak`(= 롤백 재료)을 덮어쓴다.
+	// ⚠️ MOVEFILE_DELAY_UNTIL_REBOOT 절대 금지 — PendingFileRenameOperations 는
+	//    Defender 가 아는 악성 지표다.
+	if (!MoveFileExW(p.self.c_str(), p.bak.c_str(), 0))
+	{
+		// 아직 아무것도 안 옮겼으므로 되돌릴 것도 없다. 마커는 swapping 인 채로 남고
+		// 다음 시작의 startup_repair 가 staged → promote_pending 으로 닫는다(낡지만 무해).
+		reshade::log::message(reshade::log::level::error,
+			"[sherbet-update] S10 self -> .sherbet-bak \xEA\xB1\xB0\xEB\xB6\x80 (err=%lu)", GetLastError());
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S11 ★ 설치
+	if (!MoveFileExW(p.newf.c_str(), p.self.c_str(), 0))
+	{
+		// 스펙 S11: "실패면 즉시 .bak → self 원복 5회". 같은 세션에서 도는 보상
+		// 트랜잭션이다 — 이미지는 이미 매핑돼 있어 self 파일이 없어도 이 코드는 계속 돈다.
+		// 이 원복이 없으면 다음 실행에 우리 DLL 이 **로드조차 되지 않아** 복구가 영영 안 돈다.
+		bool undone = false;
+		for (int i = 0; i < 5; ++i)
+		{
+			if (MoveFileExW(p.bak.c_str(), p.self.c_str(), 0))
+			{
+				undone = true;
+				break;
+			}
+			Sleep(50);
+		}
+		reshade::log::message(reshade::log::level::error,
+			"[sherbet-update] S11 .sherbet-new -> self \xEA\xB1\xB0\xEB\xB6\x80 — \xEC\x9B\x90\xEB\xB3\xB5 %s",
+			undone ? "ok" : "FAILED");
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S12 — 사후검증. 이제 새 self 는 이 프로세스에 매핑돼 있지 않으므로 다시 읽어 해시할 수
+	// 있다. AV 격리·변조를 여기서 잡는다.
+	// ⚠️ hash_file 은 **매 호출 새 sha256_init** 으로 시작한다. S6 의 컨텍스트를 재사용하면
+	//    sha256_final_hex 가 멱등하지 않아 여기서 **항상** 불일치가 나고, 멀쩡한 업데이트가
+	//    매번 롤백된다.
+	std::string post_hex;
+	if (!hash_file(p.self, post_hex) || post_hex != u.sha256)
+	{
+		reshade::log::message(reshade::log::level::error,
+			"[sherbet-update] S12 \xEC\x82\xAC\xED\x9B\x84\xEA\xB2\x80\xEC\xA6\x9D \xEB\xB6\x88\xEC\x9D\xBC\xEC\xB9\x98 — \xEC\xA6\x89\xEC\x8B\x9C \xEB\xA1\xA4\xEB\xB0\xB1");
+		// S13 없이 곧바로 롤백한다. 이것이 **마커가 아직 swapping 인 채로 롤백이 시작되는
+		// 유일한 경로**이고, 절차는 부팅 경로의 R8~R10 과 완전히 같다(같은 함수를 부른다).
+		rollback_phase(p, m);
+		{
+			// 이번 세션의 재제안을 막는다. 전역(g_bad_*)은 렌더 스레드 소유라 건드리지 않고,
+			// 디스크의 마커가 다음 부팅에 그 역할을 한다.
+			const std::lock_guard<std::mutex> lk(_mtx);
+			_bad_ver = m.bad_ver;
+			_bad_sha = m.bad_sha;
+		}
+		_has_offer = false;
+		set_status(kStatusFailed);
+		return;
+	}
+
+	// S13 — 확정. ⚠️ **tries=0 을 반드시 함께 쓴다.**
+	// 직전 롤백 마커의 tries=2 를 S9 가 물려받았으므로, 여기서 0 으로 되돌리지 않으면
+	// 새로 깐 멀쩡한 빌드가 **첫 부팅에** 곧바로 롤백된다(decide_boot: 2+1 >= 2).
+	m.state = "pending";
+	m.tries = 0;
+	write_marker(p, m);
+	DeleteFileW(p.note.c_str()); // self 가 돌아왔으므로 복구안내는 더 필요 없다
+
+	// S14
+	_has_offer = false;
+	_need_restart = true;
+	set_status(kStatusDone);
+	reshade::log::message(reshade::log::level::info,
+		"[sherbet-update] \xEA\xB5\x90\xEC\xB2\xB4 \xEC\x99\x84\xEB\xA3\x8C: %s -> %s", SHERBET_VERSION, u.version.c_str());
 }
