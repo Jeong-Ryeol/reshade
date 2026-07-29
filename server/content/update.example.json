@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "min_version": "",
+  "allow_downgrade": false,
+  "notice": "",
+  "notes": "첫 릴리스",
+  "builds": {
+    "x64": {
+      "url": "https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.0.0/ReShade64.dll",
+      "size": 4312576,
+      "sha256": "여기에 소문자 64자 hex"
+    },
+    "x86": {
+      "url": "https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.0.0/ReShade32.dll",
+      "size": 3837952,
+      "sha256": "여기에 소문자 64자 hex"
+    }
+  }
+}

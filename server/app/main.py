@@ -14,6 +14,8 @@ from app.store import PendingStore
 from app.tokens import issue_token, verify_token
 
 app = FastAPI(title="Sherbet Auth")
+from app.update import router as update_router  # noqa: E402  (app 생성 뒤 등록)
+app.include_router(update_router)
 store = PendingStore()
 
 # 원격 콘텐츠 정의 파일 경로 + mtime 캐시(요청마다 파일 stat, 안 바뀌면 캐시)
