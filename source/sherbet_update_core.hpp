@@ -191,6 +191,14 @@ namespace sherbet
 			if (url.compare(0, prefix.size(), prefix) != 0) return false;
 			if (url.find("..") != std::string::npos) return false;  // 경로 조작
 			if (url.find('@') != std::string::npos) return false;   // userinfo 로 호스트 위장
+			// 퍼센트 인코딩된 경로 조작. WinInet 은 INTERNET_FLAG_NO_ESCAPE 없이 URL 을
+			// 정규화하므로 %2e%2e 는 디코딩 후 ../ 로 축약되어 접두사 피닝을 우회한다.
+			if (url.find("%2e") != std::string::npos || url.find("%2E") != std::string::npos ||
+				url.find("%2f") != std::string::npos || url.find("%2F") != std::string::npos)
+				return false;
+			// 제어문자. CR/LF 가 HttpOpenRequestW 의 오브젝트명에 실리면 헤더 주입이 된다.
+			for (unsigned char c : url)
+				if (c < 0x20 || c == 0x7f) return false;
 			return true;
 		}
 

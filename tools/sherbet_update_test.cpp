@@ -118,6 +118,18 @@ static void test_url_allowed() {
 	// 빈 문자열·접두사만
 	assert(!url_allowed(""));
 	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/"));
+	// 퍼센트 인코딩 경로 조작 — 접두사 4조각을 되감는 실제 페이로드
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/"
+		"%2e%2e/%2e%2e/%2e%2e/%2e%2e/attacker/evil-repo/releases/download/x/evil.dll"));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/%2E%2E/evil.dll"));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x%2fy/evil.dll"));
+	// 제어문자 — CRLF 헤더 주입
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a.dll\r\nHost: evil.kr"));
+	assert(!url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\ndll"));
+	assert(!url_allowed(std::string("https://github.com/Jeong-Ryeol/reshade/releases/download/x/a\0b.dll", 68)));
+	// 정상 URL 은 여전히 통과해야 한다(과잉 차단 회귀 방지)
+	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-1.4.0/ReShade64.dll"));
+	assert(url_allowed("https://github.com/Jeong-Ryeol/reshade/releases/download/sherbet-10.20.30/ReShade32.dll"));
 }
 
 static void test_split_https_url() {

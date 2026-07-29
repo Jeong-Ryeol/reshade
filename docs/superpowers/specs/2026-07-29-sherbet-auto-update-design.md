@@ -164,7 +164,7 @@ mtime 캐시라 **서버 재시작 불필요**(기존 콘텐츠 운영 방식과
 
 ### 3.4 클라 거부 조건 (전부 순수 함수, 맥 테스트)
 
-`schema != 1` / `arch` 불일치 / `version` 파싱 실패 / `sha256`이 소문자 64hex 아님 / `size`가 1MiB\~32MiB 밖 / `url`이 정확히 `https://github.com/Jeong-Ryeol/reshade/releases/download/` 로 시작하지 않음 / `url`에 `..` 또는 `@` 포함. **하나라도 어기면 거부.**
+`schema != 1` / `arch` 불일치 / `version` 파싱 실패 / `sha256`이 소문자 64hex 아님 / `size`가 1MiB\~32MiB 밖 / `url`이 정확히 `https://github.com/Jeong-Ryeol/reshade/releases/download/` 로 시작하지 않음 / `url`에 `..` 또는 `@` 포함 / `url`에 `%2e` / `%2E` / `%2f` / `%2F` 포함 / `url`에 제어문자 (0x00\~0x1F 또는 0x7F) 포함. **하나라도 어기면 거부.**
 
 > **호스트만 화이트리스트하면 방어가 아니다.** `github.com`은 누구나 5초 만에 리포를 만들고 릴리스를 올릴 수 있는 멀티테넌트 호스트다. 조건이 "우리 릴리스에 올려야 한다"가 아니라 "아무 GitHub 릴리스에나 올리면 된다"로 무너진다. **URL 전체 접두사 피닝이 홈서버 단독 침해 방어의 유일한 근거다.**
 
