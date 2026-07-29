@@ -248,7 +248,29 @@ tries=1
 
 ### 5.2 3중 게이트 — 설계의 급소
 
-`DLL_PROCESS_ATTACH`에서 "다른 ReShade 인스턴스 이미 로드됨" 검사(`dll_main.cpp:199` 부근 `return FALSE`) **다음**, hooks 설치 **앞**에서 `on_process_attach(self)`를 호출한다. 이 경로는 **원시 Win32만** 쓴다 — CRT 스트림·`std::filesystem`·`new`·crypto 금지.
+`DLL_PROCESS_ATTACH`에서 "다른 ReShade 인스턴스 이미 로드됨" 검사(`dll_main.cpp:199` 부근 `return FALSE`) **다음**, hooks 설치 **앞**에서 `on_process_attach(self)`를 호출한다.
+
+#### 이 경로의 제약 — 무엇이 진짜 금지인가
+
+> ⚠️ 이 절은 원래 "**원시 Win32만** 쓴다 — CRT 스트림·`std::filesystem`·`new`·crypto 금지" 였다. **그 문장은 틀렸고, 위험했다.** 지키려면 `on_process_attach`가 마커 파서와 `classify`/`decide_repair`/`decide_boot`을 **손으로 다시 구현**해야 하는데, 그 자리는 고객의 DLL이 이름을 바꿔 달고 되돌아가는 지점이라 이 기능에서 가장 틀리면 안 되는 판정이다. 그리고 그 재구현본에는 `tools/sherbet_update_test.cpp` + `tools/sherbet_swap_sim.cpp`의 **단언 23만 개가 단 하나도 적용되지 않는다.**
+>
+> 게다가 이 리포에서 그 규칙은 **이미 사실이 아니다.** `dll_main.cpp:117~201`(= `on_process_attach` 호출 지점 **바로 위**, 같은 `DLL_PROCESS_ATTACH` 안)이 `std::filesystem::path`·`std::filesystem::exists`·`reshade::ini_file`(파일 읽기 + `std::map` 할당)·`std::to_wstring`·`reshade::log::open_log_file`(로그 파일 열기)을 이미 쓴다. C++ 표준 라이브러리와 힙 할당은 이 로더 콜백에서 **이 제품의 기존 관행**이다. 진짜 위험은 그게 아니라 **로더 재진입**이다.
+
+**금지**(로더 락 안에서 데드락·크래시를 만드는 것들):
+
+- 새 이미지의 `LoadLibrary`/`LoadLibraryEx`(자기 자신이든 새 DLL이든) — 로더 락 재귀
+- 스레드 생성(`CreateThread`/`std::thread`)과 다른 스레드 대기(`WaitForSingleObject`로 스레드 join, `std::async`, future) — 새 스레드의 `DLL_THREAD_ATTACH`가 우리가 쥔 로더 락을 기다린다
+- CNG/crypto(`BCrypt*`) — 공급자 테이블·레지스트리·지연 로드 DLL을 건드린다(SHA-256이 필요하면 이 헤더의 벤더링 구현을 쓴다. 다만 **부팅 경로에서는 애초에 해시를 계산하지 않는다** — §4.4 각주 참고)
+- 지연 로드(`__declspec(dllimport)` delay-load), COM 초기화, 셸 API(`SHGetKnownFolderPath` 등), `WinInet`/윈속 — 전부 내부적으로 DLL을 더 로드한다
+- **경로 정규화 API 중 DLL을 끌어들이는 것**: `PathCch*`(`api-ms-win-core-path`), `SHLWAPI`의 `PathCanonicalize*`. 경로 조작은 `CreateFileW`에 넘길 문자열을 우리가 조립하는 것으로 끝낸다(§4.3의 접미사 규약)
+- UI(`MessageBox` 포함), 소켓, 프로세스 spawn
+
+**요구**(빼면 안 되는 것):
+
+- `on_process_attach`는 **반드시** `sherbet_update_core.hpp`의 `parse_marker` / `classify` / `decide_repair` / `decide_boot` / `marker_tries_cap` / `serialize_marker`를 **호출한다.** 셋 중 어느 것도 **다시 구현하지 않는다.** 이 함수들은 `std::string`/`std::vector` 기반이고 힙을 쓴다 — 위에서 봤듯 그건 이 콜백에서 허용된다.
+- 파일 이름 접미사와 복구안내 문구도 같은 헤더의 `suffix_*()` / `recovery_note_name()` / `make_recovery_note()`를 쓴다. 재타이핑하면 `sherbet_swap_sim.cpp`가 자기 사본을 검증하는 꼴이 되어 아무것도 못 막는다.
+- 파일 IO는 원시 Win32(`CreateFileW`/`ReadFile`/`WriteFile`/`MoveFileExW`)로 한다 — CRT 스트림(`std::ifstream`)이나 `std::filesystem`을 **새로** 끌어들일 이유가 없고, 이 경로는 `g_reshade_dll_path`(이미 계산돼 있다)만 있으면 충분하다. 이건 재진입 문제라기보다 "필요 없는 의존을 늘리지 않는다"는 규칙이다.
+- 이 경로는 **논블로킹**이어야 한다. 마커 한 줄 읽고 rename 몇 번이 전부이고, 네트워크는 절대 없다.
 
 세 게이트를 모두 통과할 때만 `tries+1`:
 
