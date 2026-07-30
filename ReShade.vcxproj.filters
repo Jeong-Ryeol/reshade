@@ -788,6 +788,9 @@
     <ClInclude Include="source\sherbet_owner.h">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_spray.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_theme.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
