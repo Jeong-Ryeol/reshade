@@ -7,6 +7,7 @@
 #pragma once
 
 #include "sherbet_theme.hpp"
+#include "sherbet_json.hpp" // detail::json_str / json_bool / split_top_level_objects (imgui 비의존)
 #include <string>
 #include <vector>
 #include <cstddef>
@@ -53,79 +54,14 @@ namespace sherbet
 
 	namespace detail
 	{
-		// obj 안에서 "key":"value" 문자열 값 추출(단순, \" \\ 언이스케이프). 없으면 false.
-		inline bool json_str(const std::string &obj, const char *key, std::string &out)
-		{
-			const std::string needle = std::string("\"") + key + "\"";
-			std::size_t k = obj.find(needle);
-			if (k == std::string::npos) return false;
-			std::size_t colon = obj.find(':', k + needle.size());
-			if (colon == std::string::npos) return false;
-			std::size_t i = colon + 1;
-			while (i < obj.size() && (obj[i] == ' ' || obj[i] == '\t')) ++i;
-			if (i >= obj.size() || obj[i] != '"') return false;
-			++i;
-			std::string val;
-			for (; i < obj.size(); ++i)
-			{
-				const char c = obj[i];
-				if (c == '\\' && i + 1 < obj.size()) { val += obj[++i]; continue; }
-				if (c == '"') { out = val; return true; }
-				val += c;
-			}
-			return false;
-		}
-
-		// obj 안에서 "key":true/false. 없거나 불리언 아니면 def.
-		inline bool json_bool(const std::string &obj, const char *key, bool def)
-		{
-			const std::string needle = std::string("\"") + key + "\"";
-			std::size_t k = obj.find(needle);
-			if (k == std::string::npos) return def;
-			std::size_t colon = obj.find(':', k + needle.size());
-			if (colon == std::string::npos) return def;
-			std::size_t i = colon + 1;
-			while (i < obj.size() && (obj[i] == ' ' || obj[i] == '\t')) ++i;
-			if (obj.compare(i, 4, "true") == 0) return true;
-			if (obj.compare(i, 5, "false") == 0) return false;
-			return def;
-		}
+		// json_str / json_bool / split_top_level_objects 는 sherbet_json.hpp 로 옮겼다
+		// (조준점 마켓 파서가 imgui 없이 같은 헬퍼를 쓰기 위해서다 — 동작은 그대로).
 
 		// obj 안 "key":"#rrggbbaa" → dst. 실패 시 false.
 		inline bool color_field(const std::string &obj, const char *key, ImU32 &dst)
 		{
 			std::string hex;
 			return json_str(obj, key, hex) && parse_hex_color(hex, dst);
-		}
-
-		// body 의 "key":[ {..}, {..} ] 배열에서 최상위 객체 문자열들을 brace 매칭으로 잘라 반환.
-		inline std::vector<std::string> split_top_level_objects(const std::string &body, const char *key)
-		{
-			std::vector<std::string> out;
-			std::string needle = std::string("\"") + key + "\"";
-			std::size_t tk = body.find(needle);
-			if (tk == std::string::npos) return out;
-			std::size_t lb = body.find('[', tk);
-			if (lb == std::string::npos) return out;
-			std::size_t i = lb + 1;
-			while (i < body.size())
-			{
-				while (i < body.size() && body[i] != '{' && body[i] != ']') ++i;
-				if (i >= body.size() || body[i] == ']') break;
-				const std::size_t start = i;
-				int depth = 0;
-				bool in_str = false;
-				for (; i < body.size(); ++i)
-				{
-					const char c = body[i];
-					if (in_str) { if (c == '\\') { ++i; continue; } if (c == '"') in_str = false; continue; }
-					if (c == '"') in_str = true;
-					else if (c == '{') ++depth;
-					else if (c == '}') { if (--depth == 0) { ++i; break; } }
-				}
-				out.push_back(body.substr(start, i - start));
-			}
-			return out;
 		}
 	}
 
