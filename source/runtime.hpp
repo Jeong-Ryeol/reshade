@@ -22,6 +22,10 @@
 #include <set>
 #include <shared_mutex>
 
+// SHERBET: 유료 기능 카탈로그. 헤더를 통째로 끌어오지 않고 앞선언만 한다
+// (sherbet_paid.hpp 는 runtime_gui.cpp 만 필요로 한다).
+namespace sherbet { namespace paid { struct feature; } }
+
 namespace reshade
 {
 	struct effect;
@@ -448,6 +452,13 @@ namespace reshade
 		int _sherbet_spray_gap_ms = 400;    // 구간 나누기 임계값
 		float _sherbet_spray_fade = 0.0f;   // 마지막 발사 후 남은 표시 시간(초). 2초에서 0 으로
 
+		// SHERBET: 잠금 화면 미리보기(판매자 확인용). 켜면 유료 기능이 **권한과 무관하게**
+		// 잠긴 것으로 취급된다 — 판매 카드도 뜨고, 잠긴 기능의 일도 실제로 멈춘다.
+		// 이 스위치가 필요한 이유: sherbet::has_feature() 는 auth 가 꺼진 빌드에서 무조건
+		// true 라, 판매자가 정작 제일 중요한 화면(잠긴 상태)을 한 번도 볼 수 없다.
+		// 구매 내역과는 무관하며 끄면 즉시 원래대로 돌아온다.
+		bool _sherbet_lock_preview = false;
+
 		// SHERBET(실험): 화면 이동 추정 스파이크. 백버퍼 가운데를 잘라 CPU 로 리드백하고
 		// 프레임 간 이동을 1D 투영 매칭으로 재서, 마우스 이동을 빼 **게임의 실제 반동**을
 		// 추정한다(화면 = 반동 + 마우스 → 반동 = 화면 − 마우스).
@@ -564,7 +575,25 @@ namespace reshade
 		void draw_gui_settings();
 		// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
 		void draw_gui_aim();
+		// SHERBET: 「에임」 탭 안의 스프레이 트레이너 구획(유료 기능 'spray').
+		// 잠겨 있으면 호출되지 않고 sherbet_draw_spray_lock_card() 가 대신 그린다.
+		// 설정이 바뀌었으면 true 를 돌려준다.
+		bool draw_gui_spray_trainer();
+		void sherbet_draw_spray_lock_card(const sherbet::paid::feature &f);
 		void draw_gui_optimize();
+		// SHERBET: 「최적화」 탭이 통째로 잠겼을 때의 판매 카드. 런타임 실측 필드를 한 개도
+		// 읽지 않는다 — 실측 코드와 다른 함수로 갈라 둔 것이 그 규칙의 구조적 보장이다.
+		void sherbet_draw_optimize_lock_card(const sherbet::paid::feature &f);
+
+		// SHERBET: 유료 기능 잠금 판정의 **호출부 단일 입구**.
+		// sherbet::paid::unlocked() 에 서버 엔타이틀(has_feature)과 판매자 미리보기 스위치를
+		// 함께 먹인다. UI 도 기록기도 전부 이 함수만 부른다 — 두 곳이 각자 다른 식으로
+		// 판정하면 "화면은 열렸는데 일은 안 도는" 상태가 조용히 생긴다.
+		bool sherbet_feature_unlocked(const char *id) const;
+		// SHERBET: 잠긴 유료 기능의 판매 카드. 머리(이름·소개)와 발(사면 생기는 것·구매 동선)
+		// 사이에 호출부가 자기 미리보기를 그린다 — 보여줄 그림은 기능마다 다르기 때문.
+		void sherbet_draw_lock_header(const sherbet::paid::feature &f);
+		void sherbet_draw_lock_footer(const sherbet::paid::feature &f);
 		void draw_gui_statistics();
 		void draw_gui_log();
 		void draw_gui_about();

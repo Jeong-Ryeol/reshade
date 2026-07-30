@@ -23,6 +23,7 @@
 #include "sherbet_nodelock.hpp"
 #include "sherbet_update.hpp"
 #include "sherbet_license.hpp"
+#include "sherbet_paid.hpp"
 #include <stb_image.h> // 커스텀 조준점 PNG 로딩
 #include <fstream>
 #include <iterator> // std::istreambuf_iterator (조준점 파일 읽기)
@@ -368,6 +369,8 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	// 구간이 끊겨 기록이 무의미해진다(기록기 쪽에서도 한 번 더 클램프한다).
 	_sherbet_spray_scale = ImClamp(_sherbet_spray_scale, 0.05f, 10.0f);
 	_sherbet_spray_gap_ms = ImClamp(_sherbet_spray_gap_ms, 50, 2000);
+	// SHERBET: 잠금 화면 미리보기(판매자 확인용). 기본 꺼짐.
+	config.get("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
 	// SHERBET(실험): 화면 이동 추정. **기본 꺼짐** — 유일하게 화면 픽셀을 읽는 기능이라
 	// 켜지 않은 구매자는 리드백 비용을 한 푼도 내지 않아야 한다.
 	config.get("OVERLAY", "SherbetMotionSpike", _sherbet_motion_on);
@@ -543,6 +546,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
+	config.set("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
 	config.set("OVERLAY", "SherbetMotionSpike", _sherbet_motion_on);
 	config.set("OVERLAY", "SherbetMotionHud", _sherbet_motion_hud);
 	config.set("OVERLAY", "SherbetMotionLag", _sherbet_motion_lag);
@@ -1014,6 +1018,14 @@ void reshade::runtime::draw_gui()
 	_gather_gpu_statistics = false;
 	_effects_expanded_state &= 2;
 
+	// SHERBET: 「스프레이 트레이너가 지금 살아 있는가」 — 이 프레임 단 한 번의 판정.
+	// 아래 early-out 조건과, 한참 밑의 기록기 게이트가 **둘 다** 이 값에서 나온다.
+	// ⚠️ 여기를 다시 손으로 풀어 쓰지 말 것. early-out 조건과 기록기 게이트를 각각 적으면
+	//    둘이 어긋나도 컴파일도 CI 도 전부 초록불인 채 기록만 조용히 0 이 된다(실제로 겪었다).
+	//    잠금 판정이 여기 들어 있는 것도 같은 이유다 — 잠긴 기능은 화면뿐 아니라 **일도 멈춘다**.
+	const bool sherbet_spray_unlocked = sherbet_feature_unlocked("spray");
+	const bool sherbet_spray_on = sherbet::paid::spray_enabled(sherbet_spray_unlocked, _sherbet_spray_live, _sherbet_spray_chart);
+
 	if (!show_splash_window && !show_message_window && !show_statistics_window && !_show_overlay && _preview_texture == std::numeric_limits<size_t>::max()
 		// SHERBET: 커스텀 조준점/반반 비교는 오버레이가 닫혀도 항상 그려야 하므로 early-out 하지 않는다.
 		// (안 그러면 다른 GUI 요소가 없는 유저는 오버레이 닫을 때 조준점이 같이 사라진다)
@@ -1021,9 +1033,9 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 스프레이 기록도 오버레이가 닫힌 채로 돌아야 한다 — 실제로 총을 쏘는
 		// 순간이 바로 그때다. 여기서 early-out 하면 기록 자체가 한 프레임도 돌지 않아
 		// 「에임」 탭이 영영 0 을 보여준다.
-		// 두 토글이 모두 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되므로,
-		// 기능을 켜지 않은 구매자는 프레임 비용을 한 푼도 내지 않는다.
-		&& !_sherbet_spray_live && !_sherbet_spray_chart
+		// 두 토글이 모두 꺼져 있으면(기본) 또는 기능이 잠겨 있으면 이 조건은 예전과 똑같이
+		// 참이 되므로, 안 켠 구매자도 안 산 사람도 프레임 비용을 한 푼도 내지 않는다.
+		&& !sherbet_spray_on
 		// SHERBET(실험): 화면 이동 추정도 마찬가지다. 여기서 early-out 하면 프레임별 마우스
 		// 이동 링이 한 번도 채워지지 않아, 리드백은 도는데 짝지을 마우스 값이 영영 0 이 된다
 		// (= "화면은 움직이는데 마우스는 0" 이라는 완전히 틀린 그래프가 나온다).
@@ -1288,10 +1300,13 @@ void reshade::runtime::draw_gui()
 			_sherbet_motion_frame++;
 		}
 
-		// 두 토글이 모두 꺼져 있으면(기본) 아무것도 기록하지 않는다.
+		// 두 토글이 모두 꺼져 있으면(기본) 아무것도 기록하지 않는다. 기능이 잠겨 있어도 마찬가지다 —
+		// 안 산 사람의 기록을 몰래 쌓아두지 않는다(잠긴 기능은 화면뿐 아니라 **일도 멈춘다**).
 		// 오버레이가 열려 있는 동안도 기록하지 않는다(스펙 §5.3) — UI 를 조작하는 클릭·이동은
 		// 사격이 아니다. 위에서 이미 읽어 리셋했으므로 그 이동이 다음 구간으로 새지도 않는다.
-		if ((_sherbet_spray_live || _sherbet_spray_chart) && !_show_overlay)
+		// ⚠️ 위 early-out 조건(sherbet_spray_on)과 **같은 술어 집합**에서 나온다. 여기를
+		//    손으로 풀어 쓰면 둘이 어긋나 "그릴 게 없어 return 했는데 기록은 돌아야 한다"가 된다.
+		if (sherbet::paid::spray_recording(sherbet_spray_unlocked, _sherbet_spray_live, _sherbet_spray_chart, _show_overlay))
 		{
 			if (fire)
 			{
@@ -1427,7 +1442,9 @@ void reshade::runtime::draw_gui()
 	// 않아도 그려지고, 렌더 파이프라인은 건드리지 않는다.
 	// ⚠️ 이동을 읽을 수 없는 게임에서는 그리지 않는다 — 점이 전부 원점에 겹쳐 한 덩어리로
 	//    보일 뿐이라 "고장난 것"처럼 읽힌다. 이유는 「에임」 탭 진단이 글로 설명한다.
-	if (_sherbet_spray_live && _sherbet_spray_fade > 0.0f && _input != nullptr && _input->raw_mouse_available())
+	// ⚠️ sherbet_spray_on 도 함께 본다 — 잠긴 상태에서 예전 기록이 화면에 남아 그려지면
+	//    잠금이 UI 만 가린 게 된다(기록기가 멈춰도 history 는 세션에 남아 있을 수 있다).
+	if (sherbet_spray_on && _sherbet_spray_live && _sherbet_spray_fade > 0.0f && _input != nullptr && _input->raw_mouse_available())
 	{
 		// 구간이 끝나도(마지막 발 후 gap 경과) 페이드아웃이 남아 있는 동안은 계속 보여준다.
 		// 종료된 구간은 current() 가 아니라 history 의 맨 뒤에 있다.
@@ -3103,15 +3120,285 @@ void reshade::runtime::sherbet_load_background()
 
 	stbi_image_free(pixels);
 }
-// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
-// 이 탭은 게임 메모리도 화면 픽셀도 읽지 않는다. 리쉐이드가 이미 후킹 중인 입력을 볼 뿐이다.
-void reshade::runtime::draw_gui_aim()
-{
-	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
-	ImGui::TextUnformatted(ICON_FK_CROSSHAIRS "  \xEC\x97\x90\xEC\x9E\x84"); // "에임"
-	ImGui::PopFont();
-	ImGui::Spacing();
 
+// ── SHERBET: 유료 기능 잠금 ──────────────────────────────────────────────────
+// 잠긴 기능은 **숨기지 않는다.** 지금까지 잠금 기능(custompicture)은 그냥 안 보이게
+// 처리했는데, 안 보이는 기능은 한 개도 안 팔린다 — 있는 줄도 모르는 걸 살 수는 없다.
+// 그래서 잠긴 상태는 "빈 자리"가 아니라 **진열대**다. 구매자가 실제로 제일 많이 보게 될
+// 화면이 이쪽이므로, 여기 들이는 공을 아끼면 안 된다.
+//
+// 잠금 카드 한 장의 구성:
+//   머리(sherbet_draw_lock_header)  자물쇠 배너 + 이름 + 한 줄 소개  → "이게 뭐냐"
+//   가운데(호출부)                  진짜 렌더러 + 예시 데이터        → "말고 보여줘"
+//   발(sherbet_draw_lock_footer)    사면 생기는 것 + 구매/불러오기   → "그래서 뭘 하면 되냐"
+
+// 잠금 판정의 호출부 단일 입구. 서버 엔타이틀 + 판매자 미리보기 스위치.
+bool reshade::runtime::sherbet_feature_unlocked(const char *id) const
+{
+	return sherbet::paid::unlocked(id, sherbet::has_feature(id), _sherbet_lock_preview);
+}
+
+// 라운드 알약 안에 글자 하나. 배지/칩용(클릭 없음).
+static void sherbet_lock_chip(const char *text, ImU32 bg, ImU32 fg)
+{
+	ImDrawList *const dl = ImGui::GetWindowDrawList();
+	const ImVec2 ts = ImGui::CalcTextSize(text);
+	const ImVec2 pad(9.0f, 3.0f);
+	const ImVec2 p0 = ImGui::GetCursorScreenPos();
+	const ImVec2 p1(p0.x + ts.x + pad.x * 2.0f, p0.y + ts.y + pad.y * 2.0f);
+	dl->AddRectFilled(p0, p1, bg, (p1.y - p0.y) * 0.5f);
+	dl->AddText(ImVec2(p0.x + pad.x, p0.y + pad.y), fg, text);
+	ImGui::Dummy(ImVec2(p1.x - p0.x, p1.y - p0.y));
+}
+
+void reshade::runtime::sherbet_draw_lock_header(const sherbet::paid::feature &f)
+{
+	const sherbet::theme &t = sherbet::active_theme();
+	ImDrawList *const dl = ImGui::GetWindowDrawList();
+
+	// 상단 그라디언트 띠 — 테마 마켓 카드와 **같은** 시각 언어를 쓴다(새 언어를 만들지 않는다).
+	const ImVec2 p = ImGui::GetCursorScreenPos();
+	const float bw = ImGui::GetContentRegionAvail().x;
+	constexpr float kBandH = 46.0f;
+	dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + kBandH), t.bg1, t.accent, t.accent, t.bg1);
+	// 자물쇠는 띠 위에 크게 — 첫 시선이 "잠겨 있다"에 닿아야 다음 줄을 읽는다.
+	const ImVec2 lk = ImGui::CalcTextSize(ICON_FK_LOCK);
+	dl->AddText(ImVec2(p.x + 14.0f, p.y + (kBandH - lk.y) * 0.5f), sherbet::with_alpha(t.text, 235), ICON_FK_LOCK);
+	// 칩 한 줄이 들어갈 자리를 남기고 띠 높이만큼 커서를 내린다. 글꼴이 커지면 이 값이
+	// 음수가 될 수 있으므로 클램프한다(음수 Dummy 는 레이아웃을 거꾸로 밀어 카드가 깨진다).
+	ImGui::Dummy(ImVec2(bw, ImMax(1.0f, kBandH - ImGui::GetTextLineHeight() - 6.0f)));
+
+	// "유료 기능" 칩 — 오른쪽 끝에 붙여 띠와 겹치게 둔다.
+	static const char *const kLockPaid = "\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5"; // "유료 기능"
+	const float chip_w = ImGui::CalcTextSize(kLockPaid).x + 18.0f;
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, bw - chip_w));
+	sherbet_lock_chip(kLockPaid, sherbet::with_alpha(t.bg0, 220), sherbet::with_alpha(t.accent2, 255));
+
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.3f);
+	ImGui::TextUnformatted(f.name);
+	ImGui::PopFont();
+
+	// 한 줄 소개. 이름만 보여주는 건 "여기 뭔가 있다"까지만 말하는 것이라 아무것도 못 판다.
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(t.text));
+	ImGui::TextWrapped("%s", f.pitch);
+	ImGui::PopStyleColor();
+	ImGui::Spacing();
+}
+
+void reshade::runtime::sherbet_draw_lock_footer(const sherbet::paid::feature &f)
+{
+	const sherbet::theme &t = sherbet::active_theme();
+
+	static const char *const kLockGet = "\xEC\x9D\xB4\xEA\xB1\xB8 \xEC\x82\xAC\xEB\xA9\xB4 \xEC\x83\x9D\xEA\xB8\xB0\xEB\x8A\x94 \xEA\xB2\x83"; // "이걸 사면 생기는 것"
+	static const char *const kLockBuy = ICON_FK_SHOPPING_CART "  " "\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEA\xB8\xB0"; // "디스코드에서 구매하기"
+	static const char *const kLockFetch = ICON_FK_DOWNLOAD "  " "\xEC\x9D\xB4\xEB\xAF\xB8 \xEA\xB5\xAC\xEB\xA7\xA4\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\xA7\x80\xEA\xB8\x88 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0"; // "이미 구매했어요 — 지금 불러오기"
+	static const char *const kLockFetchHint = "\xEA\xB5\xAC\xEB\xA7\xA4 \xED\x9B\x84 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEC\x97\xAD\xED\x95\xA0\xEC\x9D\x84 \xEB\xB0\x9B\xEC\x95\x98\xEB\x8B\xA4\xEB\xA9\xB4 \xEC\x9D\xB4 \xEB\xB2\x84\xED\x8A\xBC \xED\x95\x9C \xEB\xB2\x88\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB0\x94\xEB\xA1\x9C \xEC\x97\xB4\xEB\xA0\xA4\xEC\x9A\x94. \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x84 \xEA\xBB\x90\xEB\x8B\xA4 \xEC\xBC\xA4 \xED\x95\x84\xEC\x9A\x94 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94."; // "구매 후 디스코드 역할을 받았다면 이 버튼 한 번으로 바로 열려요. 게임을 껐다 켤 필요 없어요."
+	static const char *const kLockLoginHint = "\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xE3\x80\x8C\xEB\xA7\x88\xEC\xBC\x93\xE3\x80\x8D \xED\x83\xAD\xEC\x97\x90\xEC\x84\x9C \xE3\x80\x8C\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0\xE3\x80\x8D\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x97\xB4\xEB\xA0\xA4\xEC\x9A\x94."; // "디스코드 로그인 후 「마켓」 탭에서 「내 전용 불러오기」를 누르면 열려요."
+	static const char *const kLockGoMarket = ICON_FK_SHOPPING_CART "  " "\xEB\xA7\x88\xEC\xBC\x93 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEA\xB0\x80\xEA\xB8\xB0"; // "마켓 탭으로 가기"
+	static const char *const kLockLoading = "\xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91"; // "불러오는 중"
+	static const char *const kLockDone = "\xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"; // "불러오기 완료!"
+
+	ImGui::Spacing();
+	ImGui::TextDisabled("%s", kLockGet);
+	for (const char *b : f.bullets)
+	{
+		if (b == nullptr)
+			break;
+		ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(t.accent), "%s", ICON_FK_OK);
+		ImGui::SameLine(0.0f, 8.0f);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(b);
+		ImGui::PopTextWrapPos();
+	}
+
+	ImGui::Spacing();
+	// 다음 한 걸음을 눌러 준다. "디스코드로 오세요" 한 줄만 두면 "그래서 뭘 하라는 거지"에서 끝난다.
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(t.accent2));
+	ImGui::TextLinkOpenURL(kLockBuy, SHERBET_DISCORD_URL);
+	ImGui::PopStyleColor();
+
+	// 방금 역할을 받은 사람에게 필요한 건 **재시작이 아니라 재페치**다. 그걸 여기서 바로 눌러 준다
+	// (마켓 탭의 「내 전용 불러오기」와 완전히 같은 /content/me 페치다).
+	// 이 안내가 없으면 산 사람이 "결제했는데 안 열려요" 로 문의를 넣게 된다.
+	if (sherbet::auth::enabled() && _sherbet_auth.is_authed())
+	{
+		ImGui::SameLine(0.0f, 16.0f);
+		if (_sherbet_auth.content_active())
+		{
+			const int dots = 1 + static_cast<int>(ImGui::GetTime() * 2.0) % 3; // 1~3, 애니메이션용
+			char buf[96];
+			snprintf(buf, sizeof(buf), ICON_FK_DOWNLOAD "  %s%.*s", kLockLoading, dots, "...");
+			ImGui::BeginDisabled();
+			sherbet::pill_button(buf, true);
+			ImGui::EndDisabled();
+		}
+		else if (sherbet::pill_button(kLockFetch, true))
+		{
+			_sherbet_auth.begin_fetch_content();
+		}
+		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
+			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, ImMin(1.0f, _sherbet_content_done_timer)), ICON_FK_OK "  %s", kLockDone);
+		ImGui::TextDisabled("%s", kLockFetchHint);
+	}
+	else
+	{
+		// 아직 로그인 전(또는 오프라인 빌드) — 로그인 동선이 있는 마켓 탭으로 보낸다.
+		ImGui::SameLine(0.0f, 16.0f);
+		if (sherbet::pill_button(kLockGoMarket, false))
+		{
+			_sherbet_tab = 1;          // 「마켓」 탭
+			_sherbet_market_seg = 0;   // 테마 세그먼트에 로그인/불러오기 동선이 있다
+		}
+		ImGui::TextDisabled("%s", kLockLoginHint);
+	}
+}
+
+// SHERBET: 스프레이 차트 캔버스 한 장(배경·격자·중앙 십자·구간 궤적).
+// ⚠️ 잠금 미리보기와 실제 화면이 **같은 함수**를 쓴다. 미리보기를 따로 그리면 (1) 렌더러가
+//    바뀔 때 한쪽만 낡고 (2) 실물과 다른 그림을 파는 셈이 된다. 다른 것은 먹이는 데이터뿐이다.
+// 반환값은 원점(= 각 구간의 첫 발 자리)이라 호출부가 그 위에 글자를 얹을 수 있다.
+static ImVec2 sherbet_draw_spray_canvas(ImDrawList *dl, const ImVec2 &c0, const ImVec2 &c1,
+	const sherbet::theme &ct, const std::vector<sherbet::spray::segment> &segs,
+	const sherbet::spray::segment *focus, bool overlay5, float scale)
+{
+	const ImVec2 org((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f); // 원점 = 첫 발
+	const float cw = c1.x - c0.x, ch = c1.y - c0.y;
+
+	dl->AddRectFilled(c0, c1, sherbet::with_alpha(ct.bg1, 220), 12.0f);
+	dl->PushClipRect(c0, c1, true);
+	{
+		// 격자 + 중앙 십자
+		const ImU32 grid_col = sherbet::with_alpha(ct.border, 90);
+		for (float gx = 0.0f; gx <= cw * 0.5f; gx += 32.0f)
+		{
+			dl->AddLine(ImVec2(org.x + gx, c0.y), ImVec2(org.x + gx, c1.y), grid_col);
+			dl->AddLine(ImVec2(org.x - gx, c0.y), ImVec2(org.x - gx, c1.y), grid_col);
+		}
+		for (float gy = 0.0f; gy <= ch * 0.5f; gy += 32.0f)
+		{
+			dl->AddLine(ImVec2(c0.x, org.y + gy), ImVec2(c1.x, org.y + gy), grid_col);
+			dl->AddLine(ImVec2(c0.x, org.y - gy), ImVec2(c1.x, org.y - gy), grid_col);
+		}
+		const ImU32 cross_col = sherbet::with_alpha(ct.text_dim, 160);
+		dl->AddLine(ImVec2(org.x - 8.0f, org.y), ImVec2(org.x + 8.0f, org.y), cross_col, 1.5f);
+		dl->AddLine(ImVec2(org.x, org.y - 8.0f), ImVec2(org.x, org.y + 8.0f), cross_col, 1.5f);
+
+		// 한 구간을 그린다. 과거 구간은 흐리게, 강조 구간은 진하게.
+		auto draw_segment = [&](const sherbet::spray::segment &s, bool strong) {
+			if (s.shots.empty())
+				return;
+			const ImU32 lc = sherbet::with_alpha(strong ? ct.accent : ct.text_dim, strong ? 230u : 70u);
+			const ImU32 pc = sherbet::with_alpha(strong ? ct.accent2 : ct.text_dim, strong ? 255u : 90u);
+			ImVec2 prev(0.0f, 0.0f);
+			for (std::size_t i = 0; i < s.shots.size(); ++i)
+			{
+				const ImVec2 p(org.x + s.shots[i].x * scale, org.y + s.shots[i].y * scale);
+				if (i != 0)
+					dl->AddLine(prev, p, lc, strong ? 2.0f : 1.0f);
+				dl->AddCircleFilled(p, strong ? 3.5f : 2.0f, pc);
+				prev = p;
+			}
+			// 마지막 점(= 스프레이가 끝난 자리)에 링 하나 — 일관성은 여기가 얼마나
+			// 겹치는지로 보인다(종료 지점 편차와 같은 이야기).
+			if (strong)
+				dl->AddCircle(prev, 7.0f, sherbet::with_alpha(ct.accent, 200), 0, 1.5f);
+		};
+
+		if (overlay5)
+		{
+			std::size_t drawn = 0;
+			for (std::size_t i = segs.size(); i > 0 && drawn < 5; --i, ++drawn)
+				if (&segs[i - 1] != focus)
+					draw_segment(segs[i - 1], false);
+		}
+		if (focus != nullptr)
+			draw_segment(*focus, true);
+	}
+	dl->PopClipRect();
+	return org;
+}
+
+// SHERBET: 스프레이 트레이너 잠금 카드 — 「에임」 탭 안의 판매 진열대.
+//
+// 정지 화면 한 장으로는 이 기능을 설명할 수가 없다("궤적을 보여줍니다"라는 글자는
+// 아무것도 보여주지 않는다). 그래서 **진짜 차트 렌더러**에 만들어 둔 예시 스프레이를
+// 먹여 실물 그대로 그린다. 강조 구간은 몇 초마다 바뀌어 겹쳐보기가 무슨 뜻인지도 보인다.
+// ⚠️ 그리는 데이터는 sherbet::paid::spray_chart() 가 정한다. 잠긴 동안 사용자의 실제
+//    기록은 이 함수에 들어올 수 없고, 예시라는 사실을 캔버스 안팎에 두 번 적는다 —
+//    미리보기를 자기 기록으로 오해하면 그건 광고가 아니라 거짓말이 된다.
+void reshade::runtime::sherbet_draw_spray_lock_card(const sherbet::paid::feature &f)
+{
+	static const char *const kLockExample = "\xEC\x98\x88\xEC\x8B\x9C"; // "예시"
+	static const char *const kLockSprayCaption = "\xE2\x86\x91 \xEC\x98\x88\xEC\x8B\x9C \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEB\xA9\xB4 \xEC\x97\xAC\xEA\xB8\xB0\xEC\x97\x90 \xEB\x82\xB4\xEA\xB0\x80 \xEC\x8F\x9C \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEA\xB7\xB8\xEB\xA0\xA4\xEC\xA0\xB8\xEC\x9A\x94"; // "↑ 예시 화면이에요 — 구매하면 여기에 내가 쏜 기록이 그대로 그려져요"
+
+	sherbet::begin_card("##spray_lock");
+	{
+		sherbet_draw_lock_header(f);
+
+		const sherbet::theme &t = sherbet::active_theme();
+
+		// ── 예시 차트 ──
+		// spray_chart(false, ...) 는 반드시 예시를 돌려준다. 실제 기록을 넘길 방법 자체가 없도록
+		// **호출부에서도** 사용자 기록을 참조하지 않는다(빈 벡터를 넘긴다).
+		static const std::vector<sherbet::spray::segment> kNoUserData;
+		const sherbet::paid::chart_source src = sherbet::paid::spray_chart(false, kNoUserData);
+		const std::vector<sherbet::spray::segment> &segs = *src.segments;
+
+		const ImVec2 c0 = ImGui::GetCursorScreenPos();
+		const float cw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
+		const float ch = 200.0f;
+		const ImVec2 c1(c0.x + cw, c0.y + ch);
+		ImGui::Dummy(ImVec2(cw, ch));
+		ImDrawList *const dl = ImGui::GetWindowDrawList();
+
+		// 강조 구간을 2.5초마다 돌린다 — 정지 화면이 아니라 "쓰고 있는 화면"으로 보이게.
+		const sherbet::spray::segment *focus = nullptr;
+		if (!segs.empty())
+			focus = &segs[static_cast<std::size_t>(ImGui::GetTime() / 2.5) % segs.size()];
+
+		sherbet_draw_spray_canvas(dl, c0, c1, t, segs, focus, true, 1.6f);
+
+		// 캔버스 안 '예시' 배지 — 스크린샷만 잘라 봐도 예시라는 걸 알 수 있어야 한다.
+		if (src.is_example)
+		{
+			const ImVec2 ts = ImGui::CalcTextSize(kLockExample);
+			const ImVec2 b0(c0.x + 10.0f, c0.y + 10.0f);
+			const ImVec2 b1(b0.x + ts.x + 16.0f, b0.y + ts.y + 6.0f);
+			dl->AddRectFilled(b0, b1, sherbet::with_alpha(t.bg0, 225), (b1.y - b0.y) * 0.5f);
+			dl->AddText(ImVec2(b0.x + 8.0f, b0.y + 3.0f), sherbet::with_alpha(t.accent2, 255), kLockExample);
+		}
+
+		// 예시 데이터의 통계도 **실제 통계 함수**로 낸다(숫자를 지어내지 않는다).
+		if (focus != nullptr)
+		{
+			float iv = 0.0f, spread = 0.0f;
+			ImGui::TextDisabled("\xEB\xB0\x9C\xEC\x88\x98 %d", static_cast<int>(focus->shots.size())); // "발수 %d"
+			if (sherbet::spray::avg_interval(*focus, iv) && iv > 0.0f)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("\xED\x8F\x89\xEA\xB7\xA0 %.0f RPM", 60.0f / iv); // "평균 %.0f RPM"
+			}
+			if (sherbet::spray::end_spread(segs, 5, spread))
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("\xEC\xA2\x85\xEB\xA3\x8C \xEC\xA7\x80\xEC\xA0\x90 \xED\x8E\xB8\xEC\xB0\xA8 %.1fpx", spread * 1.6f); // "종료 지점 편차 %.1fpx"
+			}
+		}
+		if (src.is_example)
+			ImGui::TextDisabled("%s", kLockSprayCaption);
+
+		sherbet_draw_lock_footer(f);
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+}
+
+// SHERBET: 「에임」 탭의 스프레이 트레이너 구획(입력 진단 + 궤적 차트). **유료 기능 'spray'.**
+// 잠겨 있으면 아예 호출되지 않는다 — 잠금 판정은 draw_gui_aim() 이 한 번만 하고, 기록기 쪽
+// 판정은 draw_gui() 가 같은 술어(sherbet::paid::spray_*)로 한다. 두 곳이 갈라질 수 없다.
+// 설정이 바뀌었으면 true (호출부가 save_config() 를 부른다).
+bool reshade::runtime::draw_gui_spray_trainer()
+{
 	bool modified = false;
 
 	// ── 입력 진단 ────────────────────────────────────────────────────────────
@@ -3203,70 +3490,21 @@ void reshade::runtime::draw_gui_aim()
 			ImGui::InvisibleButton("##spray_canvas", ImVec2(cw, ch));
 			ImDrawList *const dl = ImGui::GetWindowDrawList();
 			const sherbet::theme &ct = sherbet::active_theme();
-			const ImVec2 org((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f); // 원점 = 첫 발
 
-			dl->AddRectFilled(c0, c1, sherbet::with_alpha(ct.bg1, 220), 12.0f);
-			dl->PushClipRect(c0, c1, true);
+			// 캔버스 그리기는 sherbet_draw_spray_canvas() 하나로 모았다 — 잠금 미리보기가
+			// **같은 함수**를 쓰기 때문이다(미리보기와 실물이 갈라지면 그건 광고가 아니다).
+			// 이동을 못 읽는 게임이면 점이 전부 원점에 겹친다 — 구간을 아예 넘기지 않고
+			// (배경·격자·십자만 그리게) 그 자리에 안내만 낸다.
+			const ImVec2 org = sherbet_draw_spray_canvas(dl, c0, c1, ct, hist,
+				raw_ok2 ? focus : nullptr, raw_ok2 && spray_overlay5, _sherbet_spray_scale);
+			if (!raw_ok2)
 			{
-				// 격자 + 중앙 십자
-				const ImU32 grid_col = sherbet::with_alpha(ct.border, 90);
-				for (float gx = 0.0f; gx <= cw * 0.5f; gx += 32.0f)
-				{
-					dl->AddLine(ImVec2(org.x + gx, c0.y), ImVec2(org.x + gx, c1.y), grid_col);
-					dl->AddLine(ImVec2(org.x - gx, c0.y), ImVec2(org.x - gx, c1.y), grid_col);
-				}
-				for (float gy = 0.0f; gy <= ch * 0.5f; gy += 32.0f)
-				{
-					dl->AddLine(ImVec2(c0.x, org.y + gy), ImVec2(c1.x, org.y + gy), grid_col);
-					dl->AddLine(ImVec2(c0.x, org.y - gy), ImVec2(c1.x, org.y - gy), grid_col);
-				}
-				const ImU32 cross_col = sherbet::with_alpha(ct.text_dim, 160);
-				dl->AddLine(ImVec2(org.x - 8.0f, org.y), ImVec2(org.x + 8.0f, org.y), cross_col, 1.5f);
-				dl->AddLine(ImVec2(org.x, org.y - 8.0f), ImVec2(org.x, org.y + 8.0f), cross_col, 1.5f);
-
-				// 이동을 못 읽는 게임이면 점이 전부 원점에 겹친다 — 궤적 대신 안내만 낸다.
-				if (!raw_ok2)
-				{
-					const ImVec2 tsz = ImGui::CalcTextSize("\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"); // "발사 기록만 표시 중 — 이 게임에서는 이동을 읽을 수 없어요"
-					dl->AddText(ImVec2(org.x - tsz.x * 0.5f, org.y + 14.0f), sherbet::with_alpha(ct.text_dim, 220),
-						"\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94");
-				}
-				else
-				{
-					// 한 구간을 그린다. 과거 구간은 흐리게, 강조 구간은 진하게.
-					auto draw_segment = [&](const sherbet::spray::segment &s, bool strong) {
-						if (s.shots.empty())
-							return;
-						const ImU32 lc = sherbet::with_alpha(strong ? ct.accent : ct.text_dim, strong ? 230u : 70u);
-						const ImU32 pc = sherbet::with_alpha(strong ? ct.accent2 : ct.text_dim, strong ? 255u : 90u);
-						ImVec2 prev(0.0f, 0.0f);
-						for (std::size_t i = 0; i < s.shots.size(); ++i)
-						{
-							const ImVec2 p(org.x + s.shots[i].x * _sherbet_spray_scale,
-							               org.y + s.shots[i].y * _sherbet_spray_scale);
-							if (i != 0)
-								dl->AddLine(prev, p, lc, strong ? 2.0f : 1.0f);
-							dl->AddCircleFilled(p, strong ? 3.5f : 2.0f, pc);
-							prev = p;
-						}
-						// 마지막 점(= 스프레이가 끝난 자리)에 링 하나 — 일관성은 여기가 얼마나
-						// 겹치는지로 보인다(종료 지점 편차와 같은 이야기).
-						if (strong)
-							dl->AddCircle(prev, 7.0f, sherbet::with_alpha(ct.accent, 200), 0, 1.5f);
-					};
-
-					if (spray_overlay5)
-					{
-						std::size_t drawn = 0;
-						for (std::size_t i = hist.size(); i > 0 && drawn < 5; --i, ++drawn)
-							if (&hist[i - 1] != focus)
-								draw_segment(hist[i - 1], false);
-					}
-					if (focus != nullptr)
-						draw_segment(*focus, true);
-				}
+				const ImVec2 tsz = ImGui::CalcTextSize("\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"); // "발사 기록만 표시 중 — 이 게임에서는 이동을 읽을 수 없어요"
+				dl->PushClipRect(c0, c1, true);
+				dl->AddText(ImVec2(org.x - tsz.x * 0.5f, org.y + 14.0f), sherbet::with_alpha(ct.text_dim, 220),
+					"\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94");
+				dl->PopClipRect();
 			}
-			dl->PopClipRect();
 
 			// ── 통계 ──
 			if (focus != nullptr && !focus->shots.empty())
@@ -3321,6 +3559,33 @@ void reshade::runtime::draw_gui_aim()
 			}
 		}
 		ImGui::Spacing();
+	}
+
+	return modified;
+}
+
+// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
+// 이 탭은 게임 메모리도 화면 픽셀도 읽지 않는다. 리쉐이드가 이미 후킹 중인 입력을 볼 뿐이다.
+void reshade::runtime::draw_gui_aim()
+{
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_CROSSHAIRS "  \xEC\x97\x90\xEC\x9E\x84"); // "에임"
+	ImGui::PopFont();
+	ImGui::Spacing();
+
+	bool modified = false;
+
+	// ── 스프레이 트레이너 (유료 기능 'spray') ────────────────────────────────
+	// ⚠️ 이 탭의 나머지 — 커스텀 조준점 편집기와 「마켓에서 조준점 고르기」 — 는 **무료**다.
+	//    잠그는 것은 스프레이 트레이너 구획(입력 진단 + 궤적 차트) 하나뿐이다.
+	// 잠겨 있으면 감추는 대신 판매 카드를 그린다 — 안 보이는 기능은 한 개도 안 팔린다.
+	if (sherbet_feature_unlocked("spray"))
+	{
+		modified |= draw_gui_spray_trainer();
+	}
+	else if (const sherbet::paid::feature *const spray_f = sherbet::paid::find("spray"))
+	{
+		sherbet_draw_spray_lock_card(*spray_f);
 	}
 
 	// ── 화면 이동 추정 (실험) ────────────────────────────────────────────────
@@ -3983,6 +4248,56 @@ static void sherbet_stat_row(const char *label, float value_x, const ImVec4 &col
 	ImGui::TextColored(color, "%s", value);
 }
 
+// SHERBET: 「최적화」 탭 잠금 카드 — 탭 하나가 통째로 상품일 때의 진열대.
+//
+// 여기서도 말 대신 화면을 보여준다: 실제 탭과 **같은 sherbet_stat_row 줄 모양**으로
+// 예시 수치를 늘어놓는다. 다만 그 값은 전부 sherbet::paid::demo_optimize_rows() 의
+// 고정 문자열이다.
+// ⚠️ 잠긴 사람에게 자기 PC 의 진짜 프레임·후처리 비용을 보여주면 그건 미리보기가 아니라
+//    기능을 그냥 준 것이다. 이 함수는 런타임 필드를 **한 개도 읽지 않는다** — 그래서
+//    실측 코드가 있는 draw_gui_optimize() 본문과 아예 다른 함수로 갈라 두었다.
+void reshade::runtime::sherbet_draw_optimize_lock_card(const sherbet::paid::feature &f)
+{
+	static const char *const kLockExample = "\xEC\x98\x88\xEC\x8B\x9C"; // "예시"
+	static const char *const kLockOptCaption = "\xE2\x86\x91 \xEC\x98\x88\xEC\x8B\x9C \xEC\x88\x98\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x9E\x90\xEB\xA6\xAC\xEC\x97\x90 \xEB\x82\xB4 PC \xEC\x9D\x98 \xEC\x8B\xA4\xEC\xA0\x9C \xEA\xB0\x92\xEC\x9D\xB4 \xEB\x93\xA4\xEC\x96\xB4\xEC\x99\x80\xEC\x9A\x94"; // "↑ 예시 수치예요 — 구매하면 이 자리에 내 PC 의 실제 값이 들어와요"
+
+	sherbet::begin_card("##optimize_lock");
+	{
+		sherbet_draw_lock_header(f);
+
+		const sherbet::theme &t = sherbet::active_theme();
+		ImDrawList *const dl = ImGui::GetWindowDrawList();
+		const float value_x = 11.0f * ImGui::GetFontSize(); // 실제 탭과 같은 정렬 위치
+
+		// 예시 패널 — 실제 카드보다 한 톤 죽여 "지금 내 값"으로 오해할 여지를 줄인다.
+		const ImVec2 p0 = ImGui::GetCursorScreenPos();
+		const float pw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
+		const std::vector<sherbet::paid::stat_row> &rows = sherbet::paid::demo_optimize_rows();
+		const float ph = ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(rows.size()) + 20.0f;
+		dl->AddRectFilled(p0, ImVec2(p0.x + pw, p0.y + ph), sherbet::with_alpha(t.bg1, 200), 12.0f);
+
+		ImGui::Dummy(ImVec2(pw, 8.0f));
+		ImGui::Indent(10.0f);
+		for (const sherbet::paid::stat_row &r : rows)
+			sherbet_stat_row(r.label, value_x, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(t.text, 190)), r.value);
+		ImGui::Unindent(10.0f);
+		ImGui::Dummy(ImVec2(pw, 4.0f));
+
+		// 패널 우상단 '예시' 배지 — 잘라낸 스크린샷만 봐도 예시라는 게 보여야 한다.
+		{
+			const ImVec2 ts = ImGui::CalcTextSize(kLockExample);
+			const ImVec2 b1(p0.x + pw - 10.0f, p0.y + 10.0f + ts.y + 6.0f);
+			const ImVec2 b0(b1.x - (ts.x + 16.0f), p0.y + 10.0f);
+			dl->AddRectFilled(b0, b1, sherbet::with_alpha(t.bg0, 225), (b1.y - b0.y) * 0.5f);
+			dl->AddText(ImVec2(b0.x + 8.0f, b0.y + 3.0f), sherbet::with_alpha(t.accent2, 255), kLockExample);
+		}
+		ImGui::TextDisabled("%s", kLockOptCaption);
+
+		sherbet_draw_lock_footer(f);
+	}
+	sherbet::end_card();
+}
+
 // SHERBET: 「최적화」 탭 — **읽기 전용 상태판**이다. 토글도 슬라이더도 없다.
 // 최적화는 이미 출하된 프리셋·효과로 걸려 있고, 이 탭은 그게 지금 실제로 적용돼 있다는
 // 것을 구매자에게 보여 줄 뿐이다.
@@ -3999,6 +4314,22 @@ void reshade::runtime::draw_gui_optimize()
 	ImGui::TextUnformatted(ICON_FK_DASHBOARD "  " "\xEC\xB5\x9C\xEC\xA0\x81\xED\x99\x94" /* 최적화 */);
 	ImGui::PopFont();
 	ImGui::Spacing();
+
+	// ── 유료 기능 'optimize' ──────────────────────────────────────────────
+	// 이 탭 전체가 상품이다. 잠겨 있으면 **레일 아이콘은 그대로 두고**(안 보이면 안 팔린다)
+	// 탭 내용만 판매 카드로 바꾼다.
+	// ⚠️ 잠긴 경로는 여기서 return 하므로 아래 실측 코드는 한 줄도 실행되지 않는다 —
+	//    _gather_gpu_statistics 를 켜지도 않고(= GPU 타임스탬프 쿼리 비용도 안 낸다),
+	//    프레임/후처리 비용을 계산하지도 않는다. "UI 만 가리고 일은 그대로"가 아니다.
+	if (!sherbet::paid::show_real_stats(sherbet_feature_unlocked("optimize")))
+	{
+		if (const sherbet::paid::feature *const opt_f = sherbet::paid::find("optimize"))
+		{
+			sherbet_draw_optimize_lock_card(*opt_f);
+			return;
+		}
+	}
+
 	ImGui::TextWrapped("%s", "Sherbet \xEC\x9D\xB4 \xEC\xA7\x80\xEA\xB8\x88 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\xAC\xB4\xEC\x97\x87\xEC\x9D\x84 \xEC\xA0\x81\xEC\x9A\xA9\xED\x95\x98\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94\xEC\xA7\x80 \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA3\xBC\xEB\x8A\x94 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94. \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEB\xB0\x94\xEA\xBE\xB8\xEB\x8A\x94 \xEA\xB1\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEC\x95\x84\xEB\x9E\x98 \xEC\x88\xAB\xEC\x9E\x90\xEB\x8A\x94 \xEC\xA0\x84\xEB\xB6\x80 \xEC\xA7\x80\xEA\xB8\x88 \xEB\x8F\x8C\xEC\x95\x84\xEA\xB0\x80\xEB\x8A\x94 \xEC\x83\x81\xED\x83\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEC\x9D\xBD\xEC\x96\xB4\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4." /* Sherbet 이 지금 실제로 무엇을 적용하고 있는지 보여주는 화면이에요. 여기서 바꾸는 건 없고, 아래 숫자는 전부 지금 돌아가는 상태에서 그대로 읽어옵니다. */);
 	ImGui::Spacing();
 
@@ -4221,6 +4552,22 @@ void reshade::runtime::draw_gui_settings()
 	// 기존 사용자가 "설정이 사라졌다"고 느끼지 않도록 원래 자리에 안내 한 줄을 남긴다.
 	ImGui::TextDisabled("%s", ICON_FK_CROSSHAIRS " \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEC\x99\xBC\xEC\xAA\xBD \xEC\x97\x90\xEC\x9E\x84 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xBC\xEC\x96\xB4\xEC\x9A\x94"); // "조준점 설정은 왼쪽 에임 탭으로 옮겼어요"
 	ImGui::Spacing();
+
+	// SHERBET: 잠금 화면 미리보기 — 유료 기능이 잠겼을 때의 판매 화면을 눈으로 확인하는 스위치.
+	// ⚠️ 이게 없으면 판매자는 **제일 중요한 화면을 한 번도 볼 수 없다.** sherbet::has_feature()
+	//    는 auth 가 꺼진 개발/데모 빌드에서 무조건 true 이고, 온라인 인증 빌드라도 판매자
+	//    본인은 역할을 전부 갖고 있어 언제나 열린 화면만 보게 된다.
+	// 켜면 유료 기능은 권한과 무관하게 잠긴 것으로 취급되고(판매 카드 표시 + 기록/측정 정지),
+	// 끄면 즉시 원래대로 돌아온다. 구매 내역과는 아무 관계가 없다.
+	if (ImGui::CollapsingHeader(ICON_FK_LOCK "  " "\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0")) // "잠금 화면 미리보기"
+	{
+		if (ImGui::Checkbox("\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0##lockpreview", &_sherbet_lock_preview)) // "잠금 화면 미리보기"
+			modified = true;
+		ImGui::TextDisabled("%s", "\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x96\xB4\xEB\x96\xBB\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94\xEC\xA7\x80 \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEC\x8A\xA4\xEC\x9C\x84\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94. \xEC\xBC\x9C\xEB\x8F\x84 \xEA\xB5\xAC\xEB\xA7\xA4 \xEB\x82\xB4\xEC\x97\xAD\xEC\x97\x90\xEB\x8A\x94 \xEC\x98\x81\xED\x96\xA5\xEC\x9D\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "유료 기능이 잠겨 있을 때 어떻게 보이는지 확인하는 스위치예요. 켜도 구매 내역에는 영향이 없고, 끄면 바로 원래대로 돌아옵니다."
+		if (_sherbet_lock_preview)
+			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB8\xB4 \xEA\xB2\x83\xEC\xB2\x98\xEB\x9F\xBC \xEB\xB3\xB4\xEC\x9D\xB4\xEA\xB3\xA0 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\x8F\x99\xEC\x9E\x91\xED\x95\x98\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "지금 잠금 화면 미리보기가 켜져 있어요 — 유료 기능이 잠긴 것처럼 보이고 실제로 동작하지 않습니다."
+		ImGui::Spacing();
+	}
 
 	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로. 'custompicture' 기능 구매자에게만 노출.
 	if (sherbet::has_feature("custompicture") &&
