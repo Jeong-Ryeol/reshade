@@ -1,0 +1,42 @@
+[
+  {
+    "id": "xh-default",
+    "display_name": "발로란트 기본",
+    "author": "Riot",
+    "tag": "기본",
+    "code": "0",
+    "role": null
+  },
+  {
+    "id": "xh-dot",
+    "display_name": "점 하나",
+    "author": "Sherbet",
+    "tag": "점",
+    "code": "0;P;c;5;o;1;d;1;z;3;0b;0;1b;0",
+    "role": null
+  },
+  {
+    "id": "xh-tiny-dot",
+    "display_name": "정밀 도트",
+    "author": "Sherbet",
+    "tag": "점",
+    "code": "0;P;c;4;d;1;z;1;0b;0;1b;0",
+    "role": null
+  },
+  {
+    "id": "xh-thin-cross",
+    "display_name": "얇은 십자",
+    "author": "Sherbet",
+    "tag": "십자",
+    "code": "0;P;c;1;h;0;0t;1;0l;4;0o;2;0a;1;0f;0;1b;0",
+    "role": null
+  },
+  {
+    "id": "xh-cross-dot",
+    "display_name": "십자 + 중앙점",
+    "author": "Sherbet",
+    "tag": "십자",
+    "code": "0;P;c;7;d;1;0l;7;0o;4;0a;1;0f;0;1b;0",
+    "role": null
+  }
+]

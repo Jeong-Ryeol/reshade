@@ -7,7 +7,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
-from app.content import entitled_items, find_item, is_entitled, items_with_lock, load_manifest
+from app.content import (
+    crosshair_items,
+    entitled_items,
+    find_item,
+    is_entitled,
+    items_with_lock,
+    load_manifest,
+)
 from app.discord_roles import get_member_role_ids, roles_snapshot
 from app.oauth import build_authorize_url, exchange_code, get_user_identity
 from app.store import PendingStore
@@ -24,11 +31,15 @@ THEMES_PATH = os.path.join(_CONTENT_DIR, "themes.json")
 PRESETS_PATH = os.path.join(_CONTENT_DIR, "presets.json")
 EFFECTS_PATH = os.path.join(_CONTENT_DIR, "effects.json")
 FEATURES_PATH = os.path.join(_CONTENT_DIR, "features.json")  # 역할로 잠그는 '기능' 목록(예: custompicture)
+# 조준점 마켓 — 항목 하나가 공유 코드 한 줄이다. 파일 배포가 없으므로 /content/file 과 무관하고,
+# 판매는 역할 부여(/grant @user <key>) 만으로 끝난다.
+CROSSHAIRS_PATH = os.path.join(_CONTENT_DIR, "crosshairs.json")
 FILES_DIR = os.path.join(_CONTENT_DIR, "files")
 THEMES_CACHE: dict = {}
 PRESETS_CACHE: dict = {}
 EFFECTS_CACHE: dict = {}
 FEATURES_CACHE: dict = {}
+CROSSHAIRS_CACHE: dict = {}
 
 
 class StartBody(BaseModel):
@@ -123,7 +134,10 @@ async def content_me(
     # 기능 잠금: 권한 있는 기능의 id 만 문자열 배열로 내려준다(예: ["custompicture"]).
     features = [it["id"] for it in load_manifest(FEATURES_PATH, FEATURES_CACHE)
                 if is_entitled(it, roles) and it.get("id")]
-    return {"themes": themes, "presets": presets, "effects": effects, "features": features}
+    # 조준점: 테마처럼 잠긴 것도 진열하되(unlocked=false) **코드는 빼고** 내려보낸다.
+    crosshairs = crosshair_items(load_manifest(CROSSHAIRS_PATH, CROSSHAIRS_CACHE), roles)
+    return {"themes": themes, "presets": presets, "effects": effects,
+            "features": features, "crosshairs": crosshairs}
 
 
 @app.get("/content/file/{item_id}")

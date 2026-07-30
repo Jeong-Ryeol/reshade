@@ -59,6 +59,51 @@ def client_parser(tmp_path_factory):
     return parse
 
 
+@pytest.fixture(scope="session")
+def crosshair_parser(tmp_path_factory):
+    """/content/me 응답을 **진짜 클라이언트 조준점 마켓 파서**에 먹이는 함수.
+
+    조준점 항목은 값 자체가 상품(공유 코드 한 줄)이라 파이썬 단언만으로는 두 가지가
+    새어 나간다: 코드를 따옴표 없이 내보내 전 항목이 '사용 불가' 가 되는 것과,
+    잠긴 항목에 코드를 실어 보내 판매가 무의미해지는 것. 둘 다 서버 쪽에서는
+    아무 오류도 나지 않는다. 그래서 라우터의 실제 응답 바디를 클라 파서로 판정한다.
+
+    반환: parse(body: str) -> list[dict]
+          [{"id":…, "state":"ready|locked|broken", "name":…, "code":…, "applicable":bool}, …]
+    """
+    cxx = _find_cxx()
+    if cxx is None:
+        if os.environ.get("SHERBET_REQUIRE_CXX"):
+            pytest.fail("C++ 컴파일러가 없어 조준점 마켓 왕복 테스트를 돌리지 못했습니다")
+        pytest.skip("C++ 컴파일러 없음 — 조준점 마켓 왕복 테스트를 건너뜁니다")
+
+    src = os.path.join(REPO_ROOT, "tools", "sherbet_xhmarket_check.cpp")
+    exe = str(tmp_path_factory.mktemp("cxx_xh") / "sherbet_xhmarket_check")
+    subprocess.run(
+        [cxx, "-std=c++17", "-Wall", "-I", os.path.join(REPO_ROOT, "source"), src, "-o", exe],
+        check=True, capture_output=True)
+
+    def parse(body: str) -> list[dict]:
+        r = subprocess.run([exe], input=body.encode("utf-8"),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert r.returncode == 0, f"하네스 실패: rc={r.returncode} {r.stderr.decode()}"
+        fields: dict = {}
+        count = 0
+        for line in r.stdout.decode("utf-8").splitlines():
+            k, _, v = line.partition("=")
+            if k == "count":
+                count = int(v)
+                continue
+            idx, _, name = k.partition(".")
+            fields.setdefault(int(idx), {})[name] = v
+        out = [fields.get(i, {}) for i in range(count)]
+        for e in out:
+            e["applicable"] = e.get("applicable") == "1"
+        return out
+
+    return parse
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(

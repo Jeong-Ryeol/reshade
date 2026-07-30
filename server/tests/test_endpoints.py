@@ -515,3 +515,141 @@ def test_content_file_free_item_no_role(settings, tmp_path, monkeypatch):
         assert r.status_code == 200 and r.content == b"free-bytes"
     finally:
         _reset()
+
+
+def _xh_paths(tmp_path, monkeypatch, crosshairs):
+    """조준점만 보려는 테스트용 — 나머지 매니페스트는 전부 비우고 캐시를 지운다."""
+    monkeypatch.setattr(main_module, "THEMES_PATH", _write_json(tmp_path, "themes.json", []))
+    monkeypatch.setattr(main_module, "PRESETS_PATH", _write_json(tmp_path, "presets.json", []))
+    monkeypatch.setattr(main_module, "EFFECTS_PATH", _write_json(tmp_path, "effects.json", []))
+    monkeypatch.setattr(main_module, "FEATURES_PATH", _write_json(tmp_path, "features.json", []))
+    monkeypatch.setattr(main_module, "CROSSHAIRS_PATH", _write_json(tmp_path, "crosshairs.json", crosshairs))
+    main_module.THEMES_CACHE.clear(); main_module.PRESETS_CACHE.clear()
+    main_module.EFFECTS_CACHE.clear(); main_module.FEATURES_CACHE.clear()
+    main_module.CROSSHAIRS_CACHE.clear()
+
+
+@respx.mock
+def test_content_me_crosshairs_role_gated(settings, tmp_path, monkeypatch):
+    """조준점 판매 = 역할 부여. 잠긴 항목은 진열되지만 코드는 응답에 없다."""
+    _reset(); _override(settings)
+    try:
+        _xh_paths(tmp_path, monkeypatch, [
+            {"id": "free-x", "role": None, "display_name": "무료 점", "code": "0;P;d;1;0b;0;1b;0"},
+            {"id": "pro-x", "role": "role-pro", "display_name": "프로 조준점",
+             "author": "TenZ", "tag": "프로", "code": "0;P;c;5;0l;4;0o;2"},
+        ])
+        tok = issue_token(settings, "user-x", "HWX", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-x").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))  # role-pro 없음
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+        xh = r.json()["crosshairs"]
+        assert [c["id"] for c in xh] == ["free-x", "pro-x"]
+        assert xh[0]["unlocked"] is True and xh[0]["code"] == "0;P;d;1;0b;0;1b;0"
+        assert xh[1]["unlocked"] is False
+        assert "code" not in xh[1]
+        # 응답 본문 어디에도 잠긴 코드가 없어야 한다(캐시 파일에 남는 것이 곧 유출이다)
+        assert "0;P;c;5;0l;4;0o;2" not in r.text
+        assert all("role" not in c for c in xh)
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_crosshairs_unlocked_with_role(settings, tmp_path, monkeypatch):
+    _reset(); _override(settings)
+    try:
+        _xh_paths(tmp_path, monkeypatch, [
+            {"id": "pro-x", "role": "role-pro", "display_name": "프로 조준점", "code": "0;P;c;5;0l;4;0o;2"},
+        ])
+        tok = issue_token(settings, "user-y", "HWY", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-y").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer", "role-pro"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        xh = r.json()["crosshairs"]
+        assert xh[0]["unlocked"] is True and xh[0]["code"] == "0;P;c;5;0l;4;0o;2"
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_crosshairs_absent_manifest_is_empty_list(settings, tmp_path, monkeypatch):
+    """crosshairs.json 이 아직 없는 서버 — 키는 있고 빈 배열이어야 한다(클라가 조용히 빈 마켓)."""
+    _reset(); _override(settings)
+    try:
+        _xh_paths(tmp_path, monkeypatch, [])
+        monkeypatch.setattr(main_module, "CROSSHAIRS_PATH", str(tmp_path / "does-not-exist.json"))
+        main_module.CROSSHAIRS_CACHE.clear()
+        tok = issue_token(settings, "user-z", "HWZ", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-z").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        assert r.json()["crosshairs"] == []
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_crosshairs_parse_in_real_client(settings, tmp_path, monkeypatch, crosshair_parser):
+    """라우터의 **실제 응답 바디**를 진짜 클라 파서에 먹인다.
+
+    파이썬 단언은 "문자열인가" 까지만 본다. 클라가 그 코드를 실제로 적용할 수 있는지는
+    여기서만 확인된다 — 코드 한 글자가 틀리면 카드가 '사용 불가' 로 뜨는데
+    서버 쪽에서는 아무 오류도 나지 않는다.
+    """
+    _reset(); _override(settings)
+    try:
+        _xh_paths(tmp_path, monkeypatch, [
+            {"id": "free-x", "role": None, "display_name": "무료 점", "author": "Sherbet",
+             "tag": "점", "code": "0;P;c;5;o;1;d;1;z;3;0b;0;1b;0"},
+            {"id": "pro-x", "role": "role-pro", "display_name": "프로 조준점", "code": "0;P;c;5;0l;4;0o;2"},
+            {"id": "bad-x", "role": None, "display_name": "깨진 코드", "code": "1;나쁜코드"},
+        ])
+        tok = issue_token(settings, "user-p", "HWP", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-p").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+
+        entries = crosshair_parser(r.text)
+        assert [e["id"] for e in entries] == ["free-x", "pro-x", "bad-x"]
+        # 1) 무료 항목은 클라에서 바로 적용 가능해야 한다
+        assert entries[0]["state"] == "ready" and entries[0]["applicable"]
+        assert entries[0]["name"] == "무료 점" and entries[0]["author"] == "Sherbet"
+        assert entries[0]["code"] == "0;P;c;5;o;1;d;1;z;3;0b;0;1b;0"
+        # 2) 잠긴 항목은 진열되지만 코드가 없고 적용도 불가
+        assert entries[1]["state"] == "locked" and not entries[1]["applicable"]
+        assert entries[1]["code"] == ""
+        assert entries[1]["name"] == "프로 조준점"  # 이름은 보여야 "사고 싶다" 가 된다
+        # 3) 매니페스트에 잘못 적힌 코드는 카드로 남되 적용 불가(조용히 사라지지 않는다)
+        assert entries[2]["state"] == "broken" and not entries[2]["applicable"]
+    finally:
+        _reset()
+
+
+@respx.mock
+def test_content_me_shipped_crosshair_manifest_is_valid(settings, monkeypatch, crosshair_parser):
+    """리포에 커밋된 server/content/crosshairs.json 이 실제로 적용 가능한지.
+
+    운영자가 여기에 코드를 붙여넣다 한 글자를 틀리면 전 고객의 카드가 '사용 불가' 가
+    되는데, 그 사실을 알 방법이 이 테스트 말고는 없다.
+    """
+    _reset(); _override(settings)
+    try:
+        for cache in (main_module.THEMES_CACHE, main_module.PRESETS_CACHE,
+                      main_module.EFFECTS_CACHE, main_module.FEATURES_CACHE,
+                      main_module.CROSSHAIRS_CACHE):
+            cache.clear()
+        tok = issue_token(settings, "user-s", "HWS", ["sherbet-buyer"])
+        respx.get(f"{API}/guilds/guild-1/members/user-s").mock(
+            return_value=httpx.Response(200, json={"roles": ["role-buyer"]}))
+        r = TestClient(app).get("/content/me", headers={"Authorization": f"Bearer {tok}"})
+        entries = crosshair_parser(r.text)
+        assert entries, "출하 매니페스트에 조준점이 하나도 없다"
+        for e in entries:
+            # 커밋된 항목은 전부 무료(role:null)이므로 전부 적용 가능해야 한다
+            assert e["state"] == "ready", f"{e['id']} 의 코드가 클라 파서를 통과하지 못한다"
+            assert e["applicable"]
+            assert e["name"]
+    finally:
+        _reset()

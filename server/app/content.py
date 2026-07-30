@@ -72,6 +72,48 @@ def items_with_lock(items: list[dict], role_ids: list[str]) -> list[dict]:
     return out
 
 
+# 조준점 항목에서 클라에 실어 보내는 키. 이 목록 밖의 키(role, 메모 등)는 나가지 않는다.
+CROSSHAIR_TEXT_KEYS = ("id", "display_name", "author", "tag", "code")
+
+
+def crosshair_items(items: list[dict], role_ids: list[str]) -> list[dict]:
+    """조준점 매니페스트 → /content/me 에 실을 평면 항목 목록.
+
+    계약(docs/superpowers/specs/2026-07-29-sherbet-auto-update-design.md §3.3 과 동일):
+
+    * **중첩 객체 금지.** 클라 파서(source/sherbet_json.hpp)는 중첩을 모르는 평면
+      substring 파서다.
+    * **unlocked 를 뺀 모든 값은 따옴표로 감싼 문자열.** 따옴표 없는 숫자를 내면
+      json_str 이 false 를 반환하고 클라는 오류 없이 그 키를 '없음' 으로 넘긴다 —
+      code 가 그렇게 되면 전 항목이 조용히 '사용 불가' 카드가 된다. 그래서 str() 로
+      직렬화한다(운영자가 매니페스트에 숫자를 적어도 문자열로 나간다).
+    * **잠긴 항목에는 code 를 싣지 않는다.** 조준점 상품의 실체가 코드 한 줄이라
+      잠긴 채로 내려보내면 캐시 파일(sherbet.themes)만 열어도 가져갈 수 있다.
+      이름·제작자·태그만 남겨 '잠김' 카드로 진열한다.
+    """
+    out: list[dict] = []
+    for it in items:
+        entry: dict = {}
+        for k in CROSSHAIR_TEXT_KEYS:
+            v = it.get(k)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                entry[k] = s
+        if not entry.get("id"):
+            continue  # 카드 키가 없으면 클라가 진열할 수 없다
+        unlocked = is_entitled(it, role_ids)
+        if unlocked:
+            if not entry.get("code"):
+                continue  # 열려 있는데 코드가 없으면 진열할 이유가 없다(우리 쪽 실수)
+        else:
+            entry.pop("code", None)
+        entry["unlocked"] = unlocked  # ⚠️ 진짜 JSON 불리언(클라는 json_bool 로 읽는다)
+        out.append(entry)
+    return out
+
+
 def find_item(items: list[dict], item_id: str) -> dict | None:
     """id 가 item_id 인 첫 아이템, 없으면 None."""
     for it in items:
