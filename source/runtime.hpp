@@ -546,6 +546,7 @@ namespace reshade
 		void draw_gui_settings();
 		// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
 		void draw_gui_aim();
+		void draw_gui_optimize();
 		void draw_gui_statistics();
 		void draw_gui_log();
 		void draw_gui_about();

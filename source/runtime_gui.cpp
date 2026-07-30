@@ -2118,19 +2118,21 @@ void reshade::runtime::draw_gui()
 				{ "##tab_home", ICON_FK_HOME, 0 },
 				{ "##tab_market", ICON_FK_SHOPPING_CART, 1 },
 				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5 },
+				{ "##tab_optimize", ICON_FK_DASHBOARD, 6 },
 				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
 				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
 				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
 			};
-			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다(에임 탭이 중간에 들어가
-			// 앞쪽 개수가 하나 늘었다 — 4→5).
-			int item_count = 5;
+			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다.
+			// ⚠️ 배열에 항목을 추가하면 **반드시 여기도 같이 늘린다** — 안 그러면 마지막
+			//    탭이 조용히 사라진다(에임 탭 때 실제로 겪었다). 에임 4→5, 최적화 5→6.
+			int item_count = 6;
 #if RESHADE_ADDON
 			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
 			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
 			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external || !info.file.empty()) { item_count = 6; break; }
+				if (info.external || !info.file.empty()) { item_count = 7; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
@@ -2156,6 +2158,7 @@ void reshade::runtime::draw_gui()
 		case 4: draw_gui_addons(); break;
 #endif
 		case 5: draw_gui_aim(); break;
+		case 6: draw_gui_optimize(); break;
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
@@ -3939,6 +3942,238 @@ void reshade::runtime::draw_gui_aim()
 
 	if (modified)
 		save_config();
+}
+
+// SHERBET: 「최적화」 탭의 한 줄 — 왼쪽에 라벨, 정렬된 자리에 값. 값 색으로만 상태를 말한다.
+static void sherbet_stat_row(const char *label, float value_x, const ImVec4 &color, const char *value)
+{
+	ImGui::TextDisabled("%s", label);
+	ImGui::SameLine(value_x);
+	ImGui::TextColored(color, "%s", value);
+}
+
+// SHERBET: 「최적화」 탭 — **읽기 전용 상태판**이다. 토글도 슬라이더도 없다.
+// 최적화는 이미 출하된 프리셋·효과로 걸려 있고, 이 탭은 그게 지금 실제로 적용돼 있다는
+// 것을 구매자에게 보여 줄 뿐이다.
+//
+// ⚠️ **여기 나오는 값은 한 줄도 빠짐없이 런타임의 실제 상태에서 읽는다.** 하드코딩된
+//    "적용됨" 문구도, 지어낸 숫자도 없다. 얻을 수 없는 값은 그럴듯하게 채우지 않고 그 줄을
+//    통째로 뺀다 — 무슨 일이 있어도 초록불인 표시는 아무것도 알려주지 않는 표시다.
+//
+// 비용: 이 함수는 탭이 열려 있을 때만 호출된다. 프레임 통계도 ImGui 가 이미 매 프레임
+// 유지하는 링버퍼를 읽을 뿐이라 우리가 따로 프레임마다 하는 일은 없다.
+void reshade::runtime::draw_gui_optimize()
+{
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_DASHBOARD "  " "\xEC\xB5\x9C\xEC\xA0\x81\xED\x99\x94" /* 최적화 */);
+	ImGui::PopFont();
+	ImGui::Spacing();
+	ImGui::TextWrapped("%s", "Sherbet \xEC\x9D\xB4 \xEC\xA7\x80\xEA\xB8\x88 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\xAC\xB4\xEC\x97\x87\xEC\x9D\x84 \xEC\xA0\x81\xEC\x9A\xA9\xED\x95\x98\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94\xEC\xA7\x80 \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA3\xBC\xEB\x8A\x94 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94. \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEB\xB0\x94\xEA\xBE\xB8\xEB\x8A\x94 \xEA\xB1\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEC\x95\x84\xEB\x9E\x98 \xEC\x88\xAB\xEC\x9E\x90\xEB\x8A\x94 \xEC\xA0\x84\xEB\xB6\x80 \xEC\xA7\x80\xEA\xB8\x88 \xEB\x8F\x8C\xEC\x95\x84\xEA\xB0\x80\xEB\x8A\x94 \xEC\x83\x81\xED\x83\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEC\x9D\xBD\xEC\x96\xB4\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4." /* Sherbet 이 지금 실제로 무엇을 적용하고 있는지 보여주는 화면이에요. 여기서 바꾸는 건 없고, 아래 숫자는 전부 지금 돌아가는 상태에서 그대로 읽어옵니다. */);
+	ImGui::Spacing();
+
+	// 기존 탭들이 쓰는 상태색 그대로
+	const ImVec4 col_ok(0.36f, 0.86f, 0.45f, 1.0f);
+	const ImVec4 col_bad(0.95f, 0.42f, 0.42f, 1.0f);
+	const ImVec4 col_warn(0.95f, 0.75f, 0.35f, 1.0f);
+	const ImVec4 col_val = ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text);
+
+	// 라벨 폭에 맞춘 고정 정렬 위치(카드 폭이 달라져도 흔들리지 않는다)
+	const float value_x = 11.0f * ImGui::GetFontSize();
+	char buf[256];
+
+	// ── 지금 적용된 것 ────────────────────────────────────────────────────
+	sherbet::begin_card("##opt_applied");
+	{
+		ImGui::TextUnformatted(ICON_FK_OK "  " "\xEC\xA7\x80\xEA\xB8\x88 \xEC\xA0\x81\xEC\x9A\xA9\xEB\x90\x9C \xEA\xB2\x83" /* 지금 적용된 것 */);
+		ImGui::Spacing();
+
+		// 프리셋 — _current_preset_path 그대로. 저장 안 된 변경이 있으면 그것도 표시한다.
+		const std::string preset_name = _current_preset_path.stem().u8string();
+		if (preset_name.empty())
+		{
+			sherbet_stat_row("\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B" /* 프리셋 */, value_x, col_warn, "\xEC\x84\xA0\xED\x83\x9D \xEC\x95\x88 \xEB\x90\xA8" /* 선택 안 됨 */);
+		}
+		else
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), _preset_is_modified ? "%s  " "(\xEC\xA0\x80\xEC\x9E\xA5 \xEC\x95\x88 \xEB\x90\x9C \xEB\xB3\x80\xEA\xB2\xBD \xEC\x9E\x88\xEC\x9D\x8C)" /* (저장 안 된 변경 있음) */ : "%s", preset_name.c_str());
+			sherbet_stat_row("\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B" /* 프리셋 */, value_x, _preset_is_modified ? col_warn : col_ok, buf);
+		}
+
+		// 효과 전체 on/off — 이게 꺼져 있으면 아래 숫자가 다 무의미하므로 맨 위에 둔다.
+		sherbet_stat_row("\xED\x9A\xA8\xEA\xB3\xBC" /* 효과 */, value_x, _effects_enabled ? col_ok : col_bad,
+			_effects_enabled ? ICON_FK_OK "  " "\xEC\xBC\x9C\xEC\xA7\x90" /* 켜짐 */ : ICON_FK_CANCEL "  " "\xEA\xBA\xBC\xEC\xA7\x90" /* 꺼짐 */);
+
+		// 활성 기법 수 — 목록에 실제로 보이는 것(숨김 아님 + 컴파일 성공)만 센다.
+		size_t tech_total = 0, tech_on = 0;
+		for (const technique &tech : _techniques)
+		{
+			if (tech.effect_index >= _effects.size())
+				continue;
+			if (tech.hidden || !_effects[tech.effect_index].compiled)
+				continue;
+			++tech_total;
+			if (tech.enabled)
+				++tech_on;
+		}
+		ImFormatString(buf, IM_ARRAYSIZE(buf), "%zu / %zu", tech_on, tech_total);
+		sherbet_stat_row("\xED\x99\x9C\xEC\x84\xB1 \xED\x9A\xA8\xEA\xB3\xBC" /* 활성 효과 */, value_x, tech_on > 0 ? col_ok : col_warn, buf);
+
+		// 효과 파일 — 로드된 개수, 건너뛴 개수(성능을 위해 미리 로드를 건너뛰는 옵션이 켜졌을 때)
+		size_t fx_failed = 0, fx_skipped = 0;
+		for (const effect &fx : _effects)
+		{
+			if (fx.skipped)
+				++fx_skipped;
+			else if (!fx.compiled)
+				++fx_failed;
+		}
+		if (fx_skipped > 0)
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%zu\xEA\xB0\x9C \xEB\xA1\x9C\xEB\x93\x9C \xC2\xB7 %zu\xEA\xB0\x9C \xEA\xB1\xB4\xEB\x84\x88\xEB\x9C\x80" /* %zu개 로드 · %zu개 건너뜀 */, _effects.size() - fx_skipped, fx_skipped);
+		else
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%zu\xEA\xB0\x9C \xEB\xA1\x9C\xEB\x93\x9C" /* %zu개 로드 */, _effects.size());
+		sherbet_stat_row("\xED\x9A\xA8\xEA\xB3\xBC \xED\x8C\x8C\xEC\x9D\xBC" /* 효과 파일 */, value_x, col_val, buf);
+
+		// 컴파일 상태 — 실패가 있으면 그걸 숨기지 않는다. 조용한 실패가 제일 나쁘다.
+		if (is_loading())
+		{
+			sherbet_stat_row("\xEC\xBB\xB4\xED\x8C\x8C\xEC\x9D\xBC" /* 컴파일 */, value_x, col_warn, "\xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91" /* 불러오는 중 */);
+		}
+		else if (!_last_reload_successful || fx_failed > 0)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), ICON_FK_CANCEL "  " "%zu\xEA\xB0\x9C \xEC\x8B\xA4\xED\x8C\xA8 \xE2\x80\x94 \xED\x99\x88 \xED\x83\xAD\xEC\x9D\x98 \xED\x9A\xA8\xEA\xB3\xBC \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94" /* %zu개 실패 — 홈 탭의 효과 목록에서 확인하세요 */, fx_failed);
+			sherbet_stat_row("\xEC\xBB\xB4\xED\x8C\x8C\xEC\x9D\xBC" /* 컴파일 */, value_x, col_bad, buf);
+		}
+		else
+		{
+			sherbet_stat_row("\xEC\xBB\xB4\xED\x8C\x8C\xEC\x9D\xBC" /* 컴파일 */, value_x, col_ok, ICON_FK_OK "  " "\xEC\xA0\x95\xEC\x83\x81" /* 정상 */);
+		}
+
+		// 성능 모드 — ReShade 자체 옵션이고 최적화 관점에서 의미가 있으므로 노출한다.
+		sherbet_stat_row("\xEC\x84\xB1\xEB\x8A\xA5 \xEB\xAA\xA8\xEB\x93\x9C" /* 성능 모드 */, value_x, _performance_mode ? col_ok : col_val,
+			_performance_mode ? "\xEC\xBC\x9C\xEC\xA7\x90" /* 켜짐 */ : "\xEA\xBA\xBC\xEC\xA7\x90" /* 꺼짐 */);
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// ── 성능 ──────────────────────────────────────────────────────────────
+	sherbet::begin_card("##opt_perf");
+	{
+		ImGui::TextUnformatted(ICON_FK_CHART_LINE "  " "\xEC\x84\xB1\xEB\x8A\xA5" /* 성능 */);
+		ImGui::Spacing();
+
+		// 숫자가 매 프레임 바뀌면 읽을 수가 없다. 4Hz 로만 갱신한다.
+		// (표시용 캐시일 뿐이라 함수 지역 static 으로 둔다 — 이 파일의 다른 탭들과 같은 방식)
+		static float shown_fps = 0.0f, shown_ms = 0.0f, shown_worst_ms = 0.0f;
+		static double last_sample = -1.0;
+		const double now = ImGui::GetTime();
+		if (last_sample < 0.0 || now - last_sample >= 0.25)
+		{
+			last_sample = now;
+			shown_fps = _imgui_context->IO.Framerate;
+			shown_ms = shown_fps > 0.0f ? 1000.0f / shown_fps : 0.0f;
+			// 최악 프레임은 ImGui 가 **이미 매 프레임 유지하는** 60프레임 링을 그대로 읽는다.
+			// 평균만 보면 끊김이 안 보이므로, 구매자에게는 이쪽이 더 정직한 숫자다.
+			float worst = 0.0f;
+			for (int i = 0; i < _imgui_context->FramerateSecPerFrameCount; ++i)
+				if (_imgui_context->FramerateSecPerFrame[i] > worst)
+					worst = _imgui_context->FramerateSecPerFrame[i];
+			shown_worst_ms = worst * 1000.0f;
+		}
+
+		ImFormatString(buf, IM_ARRAYSIZE(buf), "%.0f fps  ·  %.2f ms", static_cast<double>(shown_fps), static_cast<double>(shown_ms));
+		sherbet_stat_row("\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84" /* 프레임 */, value_x, col_val, buf);
+
+		if (shown_worst_ms > 0.0f)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.2f ms", static_cast<double>(shown_worst_ms));
+			sherbet_stat_row("\xEC\xB5\x9C\xEA\xB7\xBC 60\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xB5\x9C\xEC\x95\x85" /* 최근 60프레임 최악 */, value_x, shown_worst_ms > shown_ms * 2.0f ? col_warn : col_val, buf);
+		}
+
+		// 후처리 비용 — 켜져 있는 기법들의 이동평균 합. 기법을 끄면 그 값은 clear() 되므로
+		// 꺼진 기법이 합계를 부풀리지 않는다.
+		uint64_t cpu_ns = 0, gpu_ns = 0;
+		if (!is_loading() && _effects_enabled)
+		{
+			for (const technique &tech : _techniques)
+			{
+				cpu_ns += tech.average_cpu_duration;
+				gpu_ns += tech.average_gpu_duration;
+			}
+		}
+		ImFormatString(buf, IM_ARRAYSIZE(buf), "%.3f ms", cpu_ns * 1e-6);
+		sherbet_stat_row("\xED\x9B\x84\xEC\xB2\x98\xEB\xA6\xAC \xEB\xB9\x84\xEC\x9A\xA9 (CPU)" /* 후처리 비용 (CPU) */, value_x, col_val, buf);
+
+		// GPU 시간은 타임스탬프 쿼리를 켜야 나온다. 아래 한 줄이 그걸 켜는데, 이 탭이
+		// 열려 있는 동안에만 켜진다(_gather_gpu_statistics 는 매 프레임 false 로 리셋된다).
+		// 쿼리 결과가 도착하기 전에는 0 이므로, 그때는 **줄 자체를 내보내지 않는다** —
+		// 0.000 ms 라고 적으면 "공짜"라는 거짓말이 된다.
+		_gather_gpu_statistics = true;
+		if (gpu_ns != 0)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.3f ms", gpu_ns * 1e-6);
+			sherbet_stat_row("\xED\x9B\x84\xEC\xB2\x98\xEB\xA6\xAC \xEB\xB9\x84\xEC\x9A\xA9 (GPU)" /* 후처리 비용 (GPU) */, value_x, col_val, buf);
+		}
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// ── 출력 ──────────────────────────────────────────────────────────────
+	sherbet::begin_card("##opt_output");
+	{
+		ImGui::TextUnformatted(ICON_FK_ADJUST "  " "\xEC\xB6\x9C\xEB\xA0\xA5" /* 출력 */);
+		ImGui::Spacing();
+
+		if (_width != 0 && _height != 0)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%u x %u", _width, _height);
+			sherbet_stat_row("\xEC\xB6\x9C\xEB\xA0\xA5 \xED\x95\xB4\xEC\x83\x81\xEB\x8F\x84" /* 출력 해상도 */, value_x, col_val, buf);
+		}
+
+		// 효과가 실제로 처리되는 해상도가 출력과 다를 때만(해상도 스케일 등) 따로 보여준다.
+		if (!_effect_permutations.empty() &&
+			_effect_permutations[0].width != 0 &&
+			(_effect_permutations[0].width != _width || _effect_permutations[0].height != _height))
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%u x %u", _effect_permutations[0].width, _effect_permutations[0].height);
+			sherbet_stat_row("\xED\x9A\xA8\xEA\xB3\xBC \xEC\xB2\x98\xEB\xA6\xAC \xED\x95\xB4\xEC\x83\x81\xEB\x8F\x84" /* 효과 처리 해상도 */, value_x, col_val, buf);
+		}
+
+		if (_back_buffer_format != api::format::unknown)
+		{
+			const char *fmt_name = nullptr;
+			switch (_back_buffer_format)
+			{
+			case api::format::r8g8b8a8_unorm: fmt_name = "R8G8B8A8"; break;
+			case api::format::r8g8b8a8_unorm_srgb: fmt_name = "R8G8B8A8 sRGB"; break;
+			case api::format::b8g8r8a8_unorm: fmt_name = "B8G8R8A8"; break;
+			case api::format::b8g8r8a8_unorm_srgb: fmt_name = "B8G8R8A8 sRGB"; break;
+			case api::format::r10g10b10a2_unorm: fmt_name = "R10G10B10A2"; break;
+			case api::format::r16g16b16a16_float: fmt_name = "R16G16B16A16F"; break;
+			default: break;
+			}
+			const bool hdr = _back_buffer_color_space == api::color_space::hdr10_pq || _back_buffer_format == api::format::r16g16b16a16_float;
+			if (fmt_name != nullptr)
+				ImFormatString(buf, IM_ARRAYSIZE(buf), hdr ? "%s (%u bpc) · HDR" : "%s (%u bpc)", fmt_name, api::format_bit_depth(_back_buffer_format));
+			else
+				ImFormatString(buf, IM_ARRAYSIZE(buf), hdr ? "Format %u (%u bpc) · HDR" : "Format %u (%u bpc)",
+					static_cast<unsigned int>(_back_buffer_format), api::format_bit_depth(_back_buffer_format));
+			sherbet_stat_row("\xEB\xB0\xB1\xEB\xB2\x84\xED\x8D\xBC \xED\x98\x95\xEC\x8B\x9D" /* 백버퍼 형식 */, value_x, col_val, buf);
+		}
+
+		const char *api_name = nullptr;
+		switch (_device->get_api())
+		{
+		case api::device_api::d3d9: api_name = "Direct3D 9"; break;
+		case api::device_api::d3d10: api_name = "Direct3D 10"; break;
+		case api::device_api::d3d11: api_name = "Direct3D 11"; break;
+		case api::device_api::d3d12: api_name = "Direct3D 12"; break;
+		case api::device_api::opengl: api_name = "OpenGL"; break;
+		case api::device_api::vulkan: api_name = "Vulkan"; break;
+		}
+		if (api_name != nullptr)
+			sherbet_stat_row("\xEA\xB7\xB8\xEB\x9E\x98\xED\x94\xBD API" /* 그래픽 API */, value_x, col_val, api_name);
+	}
+	sherbet::end_card();
 }
 
 void reshade::runtime::draw_gui_settings()
