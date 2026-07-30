@@ -376,6 +376,13 @@ namespace reshade
 		float _sherbet_bg_dim = 0.5f;            // 가독성용 어두운 스크림 강도 0..1
 		bool _sherbet_bg_dirty = false;          // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
 
+		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고
+		// 이미 후킹 중인 입력만 관찰한다. 오버레이가 열려 있는 동안은 세지 않는다 —
+		// UI 를 조작하는 클릭·이동은 사격이 아니다.
+		unsigned int _sherbet_spray_clicks = 0;        // 좌클릭 상승 엣지 세션 누적
+		bool _sherbet_spray_lmb_prev = false;          // 직전 프레임 좌클릭 상태(상승 엣지 계산용)
+		unsigned long long _sherbet_spray_move_total = 0; // raw 이동량 절대값 세션 누적(단조 증가)
+
 		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.
 		sherbet::auth::controller _sherbet_auth;
@@ -454,6 +461,8 @@ namespace reshade
 		void draw_sherbet_update_card(bool compact);
 		void draw_gui_home();
 		void draw_gui_settings();
+		// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
+		void draw_gui_aim();
 		void draw_gui_statistics();
 		void draw_gui_log();
 		void draw_gui_about();

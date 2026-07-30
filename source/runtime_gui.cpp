@@ -1168,6 +1168,34 @@ void reshade::runtime::draw_gui()
 		}
 	}
 
+	// SHERBET: 스프레이 트레이너 입력 샘플링. **오버레이 게이트 바깥**이라 오버레이를 열지
+	// 않아도 매 프레임 돈다 — 실제로 총을 쏘는 순간은 오버레이가 닫혀 있을 때다.
+	// ⚠️ raw_mouse_delta_x/y() 는 **읽으면 리셋**이다. 프레임당 정확히 한 번, 여기서만 읽는다.
+	//    진단 표시도 기록도 이 한 번의 값을 나눠 쓴다(두 곳에서 읽으면 각자 절반만 본다).
+	if (_input != nullptr)
+	{
+		const int raw_dx = _input->raw_mouse_delta_x();
+		const int raw_dy = _input->raw_mouse_delta_y();
+		const bool lmb = _input->is_mouse_button_down(0);
+		const bool fire = lmb && !_sherbet_spray_lmb_prev; // 상승 엣지
+		// 직전 상태는 오버레이 상태와 무관하게 갱신한다 — 오버레이에서 누른 채로 닫으면
+		// 다음 프레임에 가짜 엣지가 잡힌다.
+		_sherbet_spray_lmb_prev = lmb;
+
+		// 오버레이가 열려 있으면 세지 않는다(스펙 §5.3) — UI 를 조작하는 클릭·이동은 사격이
+		// 아니다. 위에서 이미 읽어 리셋했으므로 그 이동은 다음 프레임으로 새지도 않는다.
+		if (!_show_overlay)
+		{
+			if (fire)
+				_sherbet_spray_clicks++;
+			// 부호 있는 합은 좌우로 흔들면 상쇄돼 0 근처에 머문다 — 진단용으로는
+			// "흔들면 확실히 올라가는" 절대값 합이 맞다. INT32_MIN 방어로 long long 경유.
+			const long long adx = raw_dx < 0 ? -static_cast<long long>(raw_dx) : raw_dx;
+			const long long ady = raw_dy < 0 ? -static_cast<long long>(raw_dy) : raw_dy;
+			_sherbet_spray_move_total += static_cast<unsigned long long>(adx + ady);
+		}
+	}
+
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
 	// ForegroundDrawList 라 항상 최상단에 보이며, 렌더 파이프라인은 건드리지 않는다.
 	if (_sherbet_crosshair_on)
@@ -1817,20 +1845,25 @@ void reshade::runtime::draw_gui()
 			ImGui::Dummy(ImVec2(0, 10));
 
 			struct RailItem { const char *id; const char *icon; int tab; };
+			// ⚠️ tab 번호는 config 에 저장되므로 기존 번호(0~4)를 재사용/재배치하지 않는다.
+			//    새 「에임」 탭은 남는 번호 5 를 쓰고, 화면 순서만 마켓 다음으로 둔다.
 			const RailItem items[] = {
 				{ "##tab_home", ICON_FK_HOME, 0 },
 				{ "##tab_market", ICON_FK_SHOPPING_CART, 1 },
+				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5 },
 				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
 				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
 				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
 			};
-			int item_count = 4;
+			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다(에임 탭이 중간에 들어가
+			// 앞쪽 개수가 하나 늘었다 — 4→5).
+			int item_count = 5;
 #if RESHADE_ADDON
 			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
 			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
 			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external || !info.file.empty()) { item_count = 5; break; }
+				if (info.external || !info.file.empty()) { item_count = 6; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
@@ -1855,6 +1888,7 @@ void reshade::runtime::draw_gui()
 #if RESHADE_ADDON
 		case 4: draw_gui_addons(); break;
 #endif
+		case 5: draw_gui_aim(); break;
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
@@ -2785,17 +2819,54 @@ void reshade::runtime::sherbet_load_background()
 
 	stbi_image_free(pixels);
 }
-void reshade::runtime::draw_gui_settings()
+// SHERBET: 「에임」 탭 — 입력 진단 + 커스텀 조준점(설정 탭에서 이전).
+// 이 탭은 게임 메모리도 화면 픽셀도 읽지 않는다. 리쉐이드가 이미 후킹 중인 입력을 볼 뿐이다.
+void reshade::runtime::draw_gui_aim()
 {
-	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
-		utils::open_explorer(_config_path);
-
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_CROSSHAIRS "  \xEC\x97\x90\xEC\x9E\x84"); // "에임"
+	ImGui::PopFont();
 	ImGui::Spacing();
 
 	bool modified = false;
-	bool modified_custom_style = false;
 
-	// SHERBET: 커스텀 조준점 — 사용자가 Sherbet-Crosshairs 폴더에 넣은 PNG 를 골라 화면 중앙에 표시
+	// ── 입력 진단 ────────────────────────────────────────────────────────────
+	// ⚠️ 테스트용 임시 UI 가 아니라 영구 기능이다. 나중에 구매자가 "궤적이 안 그려져요"
+	//    할 때 이 화면 하나로 진단이 끝난다 — 게임이 raw input 을 등록하지 않으면
+	//    이동량을 얻을 방법이 아예 없고(스펙 §3), 그 사실을 조용히 숨기면 안 된다.
+	sherbet::begin_card("##aim_diag");
+	{
+		const sherbet::theme &t = sherbet::active_theme();
+		ImGui::TextUnformatted(ICON_FK_INFO_CIRCLE "  \xEC\x9E\x85\xEB\xA0\xA5 \xEC\xA7\x84\xEB\x8B\xA8"); // "입력 진단"
+		ImGui::Spacing();
+
+		// (1) 좌클릭 — 발사 기록의 재료. 이건 버튼만 있으면 되므로 거의 항상 동작한다.
+		ImGui::TextUnformatted(ICON_FK_MOUSE_POINTER "  \xEC\xA2\x8C\xED\x81\xB4\xEB\xA6\xAD \xEA\xB0\x90\xEC\xA7\x80"); // "좌클릭 감지"
+		ImGui::SameLine();
+		ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(t.accent), "%u\xED\x9A\x8C", _sherbet_spray_clicks); // "%u회"
+
+		// (2) 마우스 이동 — 궤적의 재료. 여기가 ❌ 면 기능의 절반이 성립하지 않는다.
+		const bool raw_ok = _input != nullptr && _input->raw_mouse_available();
+		if (raw_ok)
+		{
+			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, 1.0f), "%s", ICON_FK_OK "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99 \xEC\x9D\xBD\xEA\xB8\xB0 \xEA\xB0\x80\xEB\x8A\xA5"); // "마우스 이동 읽기 가능"
+			ImGui::SameLine();
+			ImGui::TextDisabled("\xEB\x88\x84\xEC\xA0\x81 %llu", _sherbet_spray_move_total); // "누적 %llu"
+		}
+		else
+		{
+			ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99"); // "마우스 이동"
+			ImGui::TextWrapped("%s", "\xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB6\xA4\xEC\xA0\x81 \xEB\x8C\x80\xEC\x8B\xA0 \xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "이 게임에서는 마우스 이동을 읽을 수 없어요 — 궤적 대신 발사 기록만 표시됩니다"
+		}
+
+		ImGui::Spacing();
+		ImGui::TextDisabled("%s", "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C \xEC\x8F\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEB\xA9\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9D\x84 \xEC\xA0\x9C\xEB\x8C\x80\xEB\xA1\x9C \xEB\xB3\xB4\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94 \xEA\xB1\xB0\xEC\x98\x88\xEC\x9A\x94"); // 안내
+		ImGui::TextDisabled("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\xA9\x94\xEB\xAA\xA8\xEB\xA6\xAC\xEB\x82\x98 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x84 \xEC\x9D\xBD\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94. \xEC\x9D\xB4\xEB\xAF\xB8 \xED\x9B\x84\xED\x82\xB9 \xEC\xA4\x91\xEC\x9D\xB8 \xEC\x9E\x85\xEB\xA0\xA5\xEB\xA7\x8C \xEA\xB4\x80\xEC\xB0\xB0\xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안전 안내
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// ── 커스텀 조준점 (설정 탭에서 이동) ─────────────────────────────────────
 	if (ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90")) // "커스텀 조준점"
 	{
 		bool xh_changed = false;
@@ -2877,6 +2948,25 @@ void reshade::runtime::draw_gui_settings()
 			modified = true;
 		ImGui::Spacing();
 	}
+
+	if (modified)
+		save_config();
+}
+
+void reshade::runtime::draw_gui_settings()
+{
+	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+		utils::open_explorer(_config_path);
+
+	ImGui::Spacing();
+
+	bool modified = false;
+	bool modified_custom_style = false;
+
+	// SHERBET: 커스텀 조준점 설정은 「에임」 탭으로 옮겼다(에임 관련 설정을 한 곳에 모으기 위해).
+	// 기존 사용자가 "설정이 사라졌다"고 느끼지 않도록 원래 자리에 안내 한 줄을 남긴다.
+	ImGui::TextDisabled("%s", ICON_FK_CROSSHAIRS " \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEC\x99\xBC\xEC\xAA\xBD \xEC\x97\x90\xEC\x9E\x84 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xBC\xEC\x96\xB4\xEC\x9A\x94"); // "조준점 설정은 왼쪽 에임 탭으로 옮겼어요"
+	ImGui::Spacing();
 
 	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로. 'custompicture' 기능 구매자에게만 노출.
 	if (sherbet::has_feature("custompicture") &&
