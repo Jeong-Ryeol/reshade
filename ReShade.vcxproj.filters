@@ -420,6 +420,9 @@
     <ClCompile Include="source\sherbet_themes.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\sherbet_theme_state.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\sherbet_ui.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>

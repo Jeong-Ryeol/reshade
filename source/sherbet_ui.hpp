@@ -23,6 +23,11 @@ namespace sherbet
 	// 현재 런타임에서 활성화된 테마 (초기값 = SHERBET_DEFAULT_THEME)
 	const theme &active_theme();
 	const char *active_theme_id();
+	// 사용자가 고른 테마 id. 아직 레지스트리에 없는 서버 테마(=/content/me 미도착)면
+	// active_theme_id() 와 다를 수 있다. **설정에 저장할 값은 반드시 이쪽**이다.
+	// active 를 저장하면 콘텐츠 도착 전 save_config() 한 번에 구매자 선택이 영구 파괴된다.
+	const char *desired_theme_id();
+	// 사용자 선택(설정 로드 / 테마 카드 클릭). 희망 id 를 기록하고, 지금 적용 가능하면 적용한다.
 	void set_active_theme(const char *id);
 
 	bool is_unlocked(const char *id);

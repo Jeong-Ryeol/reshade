@@ -664,6 +664,7 @@
     <ClCompile Include="source\sherbet_auth.cpp" />
     <ClCompile Include="source\sherbet_content.cpp" />
     <ClCompile Include="source\sherbet_themes.cpp" />
+    <ClCompile Include="source\sherbet_theme_state.cpp" />
     <ClCompile Include="source\sherbet_ui.cpp" />
     <ClCompile Include="source\sherbet_update.cpp" />
     <ClCompile Include="source\state_block.cpp" />

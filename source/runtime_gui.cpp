@@ -551,7 +551,10 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "AutoSavePreset", _auto_save_preset);
 	config.set("OVERLAY", "ShowPresetTransitionMessage", _show_preset_transition_message);
 
-	config.set("SHERBET", "ActiveTheme", std::string(sherbet::active_theme_id()));
+	// ⚠️ active 가 아니라 desired 를 저장한다. 서버 테마(deepdark 등)는 /content/me 도착 전엔
+	// 적용될 수 없어 active 가 mint 인데, 그걸 저장하면 구매자가 고른 값이 영구 파괴된다.
+	// (tools/sherbet_theme_state_test.cpp 가 이 계약을 못 박는다)
+	config.set("SHERBET", "ActiveTheme", std::string(sherbet::desired_theme_id()));
 	config.set("SHERBET", "EffectFilter", _sherbet_effect_filter);
 	{ std::string fav; for (const std::string &s : _sherbet_fav) { if (!fav.empty()) fav += ','; fav += s; } config.set("SHERBET", "Favorites", fav); }
 	config.set("SHERBET", "CrosshairOn", _sherbet_crosshair_on);

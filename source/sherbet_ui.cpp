@@ -3,85 +3,17 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "sherbet_ui.hpp"
-#include "sherbet_owner.h"
-#include "sherbet_license.hpp"
-#include "sherbet_auth.hpp"
-#include "sherbet_theme_json.hpp"
-#include "sherbet_content_json.hpp"
 
 #include <cmath>
 #include <cstring>
-#include <set>
-#include <string>
 
 namespace sherbet
 {
+	// 테마 선택 상태(active/desired, 엔타이틀, apply_content)는 sherbet_theme_state.cpp 로 분리했다.
+	// 여기 남은 것은 전부 ImGui 드로잉이라 host 테스트로 돌릴 수 없기 때문.
 	static ImVec4 to_vec4(ImU32 c)
 	{
 		return ImGui::ColorConvertU32ToFloat4(c);
-	}
-
-	// 빌드 인자로 잘못된 테마 id 가 들어와도(오타 등) mint 로 안전 폴백 — 유료 테마가 잠긴 채 배송되는 사고 방지
-	static const char *safe_default_id() { return find_theme(SHERBET_DEFAULT_THEME) != nullptr ? SHERBET_DEFAULT_THEME : "mint"; }
-	static std::string s_active_id = safe_default_id();
-	// 서버(/content/me)가 내려준 엔타이틀 테마 id 집합. 기본(구매) 테마는 별도 처리(항상 열림).
-	static std::set<std::string> s_entitled;
-	// 서버 프리셋 목록(마켓 UI용)
-	static std::vector<content_item> s_content_presets;
-	// 서버가 내려준 잠금 기능 집합(예: "custompicture")
-	static std::set<std::string> s_features;
-
-	const theme &active_theme()
-	{
-		const theme *t = find_theme(s_active_id.c_str());
-		return t != nullptr ? *t : default_theme();
-	}
-	const char *active_theme_id() { return s_active_id.c_str(); }
-	void set_active_theme(const char *id) { if (find_theme(id)) s_active_id = id; }
-	bool is_unlocked(const char *id)
-	{
-		if (!id) return false;
-		if (!auth::enabled()) return true; // 개발 빌드: 전부 열림
-		if (license::iequals(id, safe_default_id())) return true; // 기본(구매) 테마 항상 열림
-		return s_entitled.count(id) > 0;
-	}
-	void mark_entitled(const char *id)
-	{
-		if (id && id[0] != '\0') s_entitled.insert(id);
-	}
-	bool has_feature(const char *name)
-	{
-		if (!name) return false;
-		if (!auth::enabled()) return true; // 개발 빌드: 기능 전부 열림
-		return s_features.count(name) > 0;
-	}
-	void clear_entitlements()
-	{
-		s_entitled.clear();
-	}
-	const std::vector<content_item> &content_presets() { return s_content_presets; }
-	// /content/me 응답(JSON)을 반영: 동적 테마 재구성 + 엔타이틀 집합 재구성.
-	// 렌더 스레드에서만 호출(레지스트리/엔타이틀은 렌더 루프가 읽음).
-	void apply_content(const std::string &body)
-	{
-		const std::vector<parsed_theme> themes = parse_themes_manifest(body);
-		clear_dynamic_themes();
-		clear_entitlements();
-		for (const parsed_theme &pt : themes)
-		{
-			if (pt.id.empty()) continue;
-			if (pt.unlocked) mark_entitled(pt.id.c_str()); // 해제된 것만 잠금해제. 잠긴 건 진열만
-			if (find_theme(pt.id.c_str()) == nullptr) // 내장에 없는 신규 → 동적 등록(잠겨도 마켓에 뜨게)
-				add_dynamic_theme(pt);
-		}
-		// 활성 테마가 사라진 동적 테마였다면 기본으로 폴백
-		if (find_theme(active_theme_id()) == nullptr)
-			set_active_theme(safe_default_id());
-		s_content_presets = parse_content_items(body, "presets");
-		// 잠금 기능 집합 재구성(예: "custompicture")
-		s_features.clear();
-		for (const std::string &f : auth::json_string_array(body, "features"))
-			if (!f.empty()) s_features.insert(f);
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
