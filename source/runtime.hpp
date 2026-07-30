@@ -9,6 +9,7 @@
 #include "state_block.hpp"
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
+#include "sherbet_spray.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -382,6 +383,16 @@ namespace reshade
 		unsigned int _sherbet_spray_clicks = 0;        // 좌클릭 상승 엣지 세션 누적
 		bool _sherbet_spray_lmb_prev = false;          // 직전 프레임 좌클릭 상태(상승 엣지 계산용)
 		unsigned long long _sherbet_spray_move_total = 0; // raw 이동량 절대값 세션 누적(단조 증가)
+
+		// SHERBET: 스프레이 기록기와 설정. **두 토글은 독립이고 기본은 둘 다 꺼짐**이다 —
+		// PVP 유저에게 프레임은 실력이라, 켜지 않은 구매자는 비용을 한 푼도 내지 않아야 한다.
+		// 기록은 세션 한정(파일을 만들지 않는다).
+		sherbet::spray::recorder _sherbet_spray;
+		bool _sherbet_spray_live = false;   // 화면에 실시간 궤적
+		bool _sherbet_spray_chart = false;  // 오버레이 에임 탭에 차트
+		float _sherbet_spray_scale = 1.0f;  // raw → 픽셀 배율(감도가 사람마다 달라 필수)
+		int _sherbet_spray_gap_ms = 400;    // 구간 나누기 임계값
+		float _sherbet_spray_fade = 0.0f;   // 마지막 발사 후 남은 표시 시간(초). 2초에서 0 으로
 
 		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.

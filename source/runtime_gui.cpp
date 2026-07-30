@@ -359,6 +359,15 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.get("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.get("OVERLAY", "SherbetOsdHorizontal", _sherbet_osd_horizontal);
+	// SHERBET: 스프레이 트레이너. 두 토글은 독립이고 기본은 둘 다 꺼짐.
+	config.get("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
+	config.get("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
+	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
+	config.get("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
+	// 손으로 고친 ini 방어 — 배율 0 이면 궤적이 한 점으로 뭉치고, 간격이 0 이면 매 프레임
+	// 구간이 끊겨 기록이 무의미해진다(기록기 쪽에서도 한 번 더 클램프한다).
+	_sherbet_spray_scale = ImClamp(_sherbet_spray_scale, 0.05f, 10.0f);
+	_sherbet_spray_gap_ms = ImClamp(_sherbet_spray_gap_ms, 50, 2000);
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
 	config.get("OVERLAY", "ShowClock", _show_clock);
 	config.get("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
@@ -491,6 +500,10 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetOsdX", _sherbet_osd_x);
 	config.set("OVERLAY", "SherbetOsdY", _sherbet_osd_y);
 	config.set("OVERLAY", "SherbetOsdHorizontal", _sherbet_osd_horizontal);
+	config.set("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
+	config.set("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
+	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
+	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	config.set("OVERLAY", "ShowClock", _show_clock);
 	config.set("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
 	config.set("OVERLAY", "ShowFPS", _show_fps);
@@ -936,6 +949,12 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 커스텀 조준점/반반 비교는 오버레이가 닫혀도 항상 그려야 하므로 early-out 하지 않는다.
 		// (안 그러면 다른 GUI 요소가 없는 유저는 오버레이 닫을 때 조준점이 같이 사라진다)
 		&& !_sherbet_crosshair_on && !_sherbet_compare_active
+		// SHERBET: 스프레이 기록도 오버레이가 닫힌 채로 돌아야 한다 — 실제로 총을 쏘는
+		// 순간이 바로 그때다. 여기서 early-out 하면 기록 자체가 한 프레임도 돌지 않아
+		// 「에임」 탭이 영영 0 을 보여준다.
+		// 두 토글이 모두 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되므로,
+		// 기능을 켜지 않은 구매자는 프레임 비용을 한 푼도 내지 않는다.
+		&& !_sherbet_spray_live && !_sherbet_spray_chart
 #if RESHADE_ADDON
 		&& !has_addon_event<addon_event::reshade_overlay>()
 #endif
@@ -1182,18 +1201,29 @@ void reshade::runtime::draw_gui()
 		// 다음 프레임에 가짜 엣지가 잡힌다.
 		_sherbet_spray_lmb_prev = lmb;
 
-		// 오버레이가 열려 있으면 세지 않는다(스펙 §5.3) — UI 를 조작하는 클릭·이동은 사격이
-		// 아니다. 위에서 이미 읽어 리셋했으므로 그 이동은 다음 프레임으로 새지도 않는다.
-		if (!_show_overlay)
+		// 두 토글이 모두 꺼져 있으면(기본) 아무것도 기록하지 않는다.
+		// 오버레이가 열려 있는 동안도 기록하지 않는다(스펙 §5.3) — UI 를 조작하는 클릭·이동은
+		// 사격이 아니다. 위에서 이미 읽어 리셋했으므로 그 이동이 다음 구간으로 새지도 않는다.
+		if ((_sherbet_spray_live || _sherbet_spray_chart) && !_show_overlay)
 		{
 			if (fire)
+			{
 				_sherbet_spray_clicks++;
+				_sherbet_spray_fade = 2.0f; // 마지막 발사 기준 2초 페이드아웃 재장전
+			}
 			// 부호 있는 합은 좌우로 흔들면 상쇄돼 0 근처에 머문다 — 진단용으로는
 			// "흔들면 확실히 올라가는" 절대값 합이 맞다. INT32_MIN 방어로 long long 경유.
 			const long long adx = raw_dx < 0 ? -static_cast<long long>(raw_dx) : raw_dx;
 			const long long ady = raw_dy < 0 ? -static_cast<long long>(raw_dy) : raw_dy;
 			_sherbet_spray_move_total += static_cast<unsigned long long>(adx + ady);
+
+			// 슬라이더 값이 바뀌었을 수 있으므로 매 프레임 반영한다(정수 비교 두 번).
+			_sherbet_spray.set_gap_ms(_sherbet_spray_gap_ms);
+			_sherbet_spray.on_frame(imgui_io.DeltaTime, raw_dx, raw_dy, fire);
 		}
+
+		if (_sherbet_spray_fade > 0.0f)
+			_sherbet_spray_fade = ImMax(0.0f, _sherbet_spray_fade - imgui_io.DeltaTime);
 	}
 
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
@@ -1238,6 +1268,45 @@ void reshade::runtime::draw_gui()
 				xh->AddCircle(c, s, col, 0, th);
 			if (draw_dot)
 				xh->AddCircleFilled(c, ImMax(1.5f, th), col);
+		}
+	}
+
+	// SHERBET: 실시간 궤적(토글 ①). 조준점과 같은 ForegroundDrawList 라 오버레이를 열지
+	// 않아도 그려지고, 렌더 파이프라인은 건드리지 않는다.
+	// ⚠️ 이동을 읽을 수 없는 게임에서는 그리지 않는다 — 점이 전부 원점에 겹쳐 한 덩어리로
+	//    보일 뿐이라 "고장난 것"처럼 읽힌다. 이유는 「에임」 탭 진단이 글로 설명한다.
+	if (_sherbet_spray_live && _sherbet_spray_fade > 0.0f && _input != nullptr && _input->raw_mouse_available())
+	{
+		// 구간이 끝나도(마지막 발 후 gap 경과) 페이드아웃이 남아 있는 동안은 계속 보여준다.
+		// 종료된 구간은 current() 가 아니라 history 의 맨 뒤에 있다.
+		const sherbet::spray::segment *seg = _sherbet_spray.current();
+		if (seg == nullptr && !_sherbet_spray.history().empty())
+			seg = &_sherbet_spray.history().back();
+
+		if (seg != nullptr && !seg->shots.empty())
+		{
+			const ImGuiViewport *const sp_vp = ImGui::GetMainViewport();
+			const ImVec2 sc(sp_vp->Pos.x + sp_vp->Size.x * 0.5f, sp_vp->Pos.y + sp_vp->Size.y * 0.5f);
+			ImDrawList *const sp = ImGui::GetForegroundDrawList();
+			const sherbet::theme &sp_theme = sherbet::active_theme();
+			// 페이드: 마지막 발사 직후 1.0 에서 2초에 걸쳐 0 으로.
+			const float sp_a = ImClamp(_sherbet_spray_fade * 0.5f, 0.0f, 1.0f);
+			const ImU32 sp_line = sherbet::with_alpha(sp_theme.accent, static_cast<ImU32>(sp_a * 210.0f));
+			const ImU32 sp_dot = sherbet::with_alpha(sp_theme.accent2, static_cast<ImU32>(sp_a * 255.0f));
+			// 마지막 발만 흰색 — 테마색이 배경과 비슷해도 '지금 여기'는 보여야 한다.
+			const ImU32 sp_last = IM_COL32(255, 255, 255, static_cast<int>(sp_a * 255.0f));
+
+			ImVec2 prev(0.0f, 0.0f);
+			for (std::size_t i = 0; i < seg->shots.size(); ++i)
+			{
+				// raw 단위 → 픽셀. y 는 아래가 양수라 화면 좌표와 방향이 같다(총구를 내리면 아래로).
+				const ImVec2 p(sc.x + seg->shots[i].x * _sherbet_spray_scale,
+				               sc.y + seg->shots[i].y * _sherbet_spray_scale);
+				if (i != 0)
+					sp->AddLine(prev, p, sp_line, 2.0f);
+				sp->AddCircleFilled(p, 3.0f, (i + 1 == seg->shots.size()) ? sp_last : sp_dot);
+				prev = p;
+			}
 		}
 	}
 
@@ -2860,6 +2929,10 @@ void reshade::runtime::draw_gui_aim()
 		}
 
 		ImGui::Spacing();
+		// 두 토글이 모두 꺼져 있으면 기록 자체가 돌지 않는다. 숫자가 0 에서 멈춰 있는 이유를
+		// 사용자가 추측하게 두지 않는다.
+		if (!_sherbet_spray_live && !_sherbet_spray_chart)
+			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\x8A\xA4\xED\x94\x84\xEB\xA0\x88\xEC\x9D\xB4 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEA\xBA\xBC\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x95\x84\xEB\x9E\x98\xEC\x97\x90\xEC\x84\x9C \xEC\xBC\x9C\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x91\xEB\x8B\x88\xEB\x8B\xA4"); // "스프레이 기록이 꺼져 있어요 — 아래에서 켜면 이 숫자가 올라갑니다"
 		ImGui::TextDisabled("%s", "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C \xEC\x8F\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEB\xA9\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9D\x84 \xEC\xA0\x9C\xEB\x8C\x80\xEB\xA1\x9C \xEB\xB3\xB4\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94 \xEA\xB1\xB0\xEC\x98\x88\xEC\x9A\x94"); // 안내
 		ImGui::TextDisabled("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\xA9\x94\xEB\xAA\xA8\xEB\xA6\xAC\xEB\x82\x98 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x84 \xEC\x9D\xBD\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94. \xEC\x9D\xB4\xEB\xAF\xB8 \xED\x9B\x84\xED\x82\xB9 \xEC\xA4\x91\xEC\x9D\xB8 \xEC\x9E\x85\xEB\xA0\xA5\xEB\xA7\x8C \xEA\xB4\x80\xEC\xB0\xB0\xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안전 안내
 	}
