@@ -154,6 +154,19 @@ namespace reshade
 		unsigned int mouse_position_y() const { return _mouse_position[1]; }
 		void max_mouse_position(unsigned int position[2]) const;
 
+		// SHERBET: raw input 의 상대 이동(lLastX/lLastY) 누적.
+		// 게임이 마우스를 캡처하면 커서는 화면 중앙에 고정되어 _mouse_position 이 움직이지 않으므로,
+		// mouse_movement_delta_x/y() 로는 조준 이동을 알 수 없다. 스프레이 트레이너가 쓸 수 있는
+		// 이동량은 이것뿐이다.
+		// ⚠️ **읽으면 0 으로 리셋된다. 프레임당 정확히 한 번만 읽어야 한다.**
+		//    두 번 읽으면 두 번째 호출자가 0 을 받고, 한 프레임 건너뛰면 다음 프레임에 합산돼 나온다.
+		int raw_mouse_delta_x() { return take_raw_mouse_delta(0); }
+		int raw_mouse_delta_y() { return take_raw_mouse_delta(1); }
+		// 0 이 아닌 raw 상대 이동을 한 번이라도 받았으면 true(세션 내내 유지).
+		// false 면 이 게임에서는 이동을 읽을 수 없다는 뜻이므로(raw input 미등록 · 절대좌표 장치),
+		// UI 가 궤적을 조용히 비워 두지 말고 사용자에게 그대로 알려야 한다.
+		bool raw_mouse_available() const { return _raw_mouse_seen; }
+
 		/// <summary>
 		/// Gets the character input as captured by 'WM_CHAR' for the current frame.
 		/// </summary>
@@ -211,6 +224,20 @@ namespace reshade
 	private:
 		static bool is_keyboard_layout_german();
 
+		// SHERBET: 누적값을 int 범위로 잘라 반환하고 0 으로 리셋한다.
+		// 아무도 읽지 않는 프레임이 계속돼도(스프레이 트레이너가 꺼져 있거나 오버레이가 열려 있는 동안)
+		// 부호 있는 정수 오버플로(UB)로 가지 않도록 누적 자체는 64비트로 한다.
+		int take_raw_mouse_delta(int axis)
+		{
+			const int64_t value = _raw_mouse_delta[axis];
+			_raw_mouse_delta[axis] = 0;
+			if (value > INT32_MAX)
+				return INT32_MAX;
+			if (value < INT32_MIN)
+				return INT32_MIN;
+			return static_cast<int>(value);
+		}
+
 		std::recursive_mutex _mutex;
 		window_handle _window;
 		bool _block_mouse = false;
@@ -222,6 +249,8 @@ namespace reshade
 		short _mouse_wheel_delta = 0;
 		unsigned int _mouse_position[2] = {};
 		unsigned int _last_mouse_position[2] = {};
+		int64_t _raw_mouse_delta[2] = {}; // SHERBET: raw input 상대 이동 누적(읽으면 리셋)
+		bool _raw_mouse_seen = false;     // SHERBET: 상대 이동을 한 번이라도 받았는지
 		uint64_t _frame_count = 0; // Keep track of frame count to identify windows with a lot of rendering
 		std::wstring _text_input;
 	};

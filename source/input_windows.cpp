@@ -181,6 +181,32 @@ bool reshade::input::handle_window_message(const void *message_data)
 		case RIM_TYPEMOUSE:
 			is_mouse_message = true;
 
+			// SHERBET: raw 상대 이동 누적(스프레이 트레이너). 게임이 마우스를 캡처하면 커서는
+			// 화면 중앙에 고정되어 _mouse_position 이 움직이지 않으므로, 조준 이동을 알 수 있는
+			// 경로는 lLastX/lLastY 뿐이다. 리쉐이드는 이 값을 읽고 그냥 버리고 있었다.
+			//
+			// ⚠️ 아래 레거시 조기 탈출(break)보다 **앞에** 둔다:
+			//  - 그 break 의 목적은 "버튼·휠은 WM_LBUTTONDOWN/WM_MOUSEWHEEL 로도 오니 두 번
+			//    세지 말자"다(특히 _mouse_wheel_delta 는 += 라 두 번 세면 값이 배가 된다).
+			//    그런데 **레거시 메시지에는 상대 이동이 없다** — WM_MOUSEMOVE 가 주는 것은 클라이언트
+			//    절대 좌표뿐이고 그건 이미 위에서 _mouse_position 으로 들어갔다. 즉 이 누적을
+			//    두 번 세게 만들 다른 경로 자체가 존재하지 않는다(WM_INPUT 은 큐에서 한 번만 제거된다).
+			//  - 반대로 뒤에 두면 RIDEV_NOLEGACY 를 쓰지 않고 raw input 만 추가로 등록한 게임에서는
+			//    이동량을 통째로 못 얻는다. NOLEGACY 는 선택 사항이라 그런 게임이 흔하고,
+			//    이 기능은 궤적이 대부분이다.
+			//  - raw_data 는 바로 위에서 GetRawInputData 로 이미 받아 둔 것이라 API 호출도 늘지 않는다.
+			//
+			// MOUSE_MOVE_ABSOLUTE(태블릿·원격데스크톱 등)는 델타가 아니라 좌표라 건너뛴다.
+			// 짝인 MOUSE_MOVE_RELATIVE 는 값이 0 이라 & 로 검사할 수 없어, ABSOLUTE 비트가
+			// 꺼져 있는지로 판별한다.
+			if ((raw_data.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 &&
+				(raw_data.data.mouse.lLastX != 0 || raw_data.data.mouse.lLastY != 0))
+			{
+				input->_raw_mouse_delta[0] += raw_data.data.mouse.lLastX;
+				input->_raw_mouse_delta[1] += raw_data.data.mouse.lLastY;
+				input->_raw_mouse_seen = true;
+			}
+
 			if (raw_input_window == s_raw_input_windows.end() || (raw_input_window->second & 0x2) == 0)
 				break; // Input is already handled (since legacy mouse messages are enabled), so nothing to do here
 
