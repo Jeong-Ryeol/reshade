@@ -10,6 +10,7 @@
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
 #include "sherbet_spray.hpp"
+#include "sherbet_motion.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -239,6 +240,12 @@ namespace reshade
 
 		bool execute_screenshot_post_save_command(const std::filesystem::path &screenshot_path, unsigned int screenshot_count, std::string_view postfix);
 
+		// SHERBET(실험): 화면 이동 추정. render_effects() 안, 효과가 적용되기 **전**의
+		// 렌더 타깃에서 가운데를 잘라 리드백 링에 복사하고, 두 프레임 전 것을 매핑해 계산한다.
+		// _sherbet_motion_on 이 꺼져 있으면 즉시 반환하며 리소스도 만들지 않는다.
+		void sherbet_motion_tick(api::command_list *cmd_list, api::resource_view rtv);
+		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
+
 		api::swapchain *const _swapchain;
 		api::device *const _device;
 		api::command_queue *const _graphics_queue;
@@ -393,6 +400,42 @@ namespace reshade
 		float _sherbet_spray_scale = 1.0f;  // raw → 픽셀 배율(감도가 사람마다 달라 필수)
 		int _sherbet_spray_gap_ms = 400;    // 구간 나누기 임계값
 		float _sherbet_spray_fade = 0.0f;   // 마지막 발사 후 남은 표시 시간(초). 2초에서 0 으로
+
+		// SHERBET(실험): 화면 이동 추정 스파이크. 백버퍼 가운데를 잘라 CPU 로 리드백하고
+		// 프레임 간 이동을 1D 투영 매칭으로 재서, 마우스 이동을 빼 **게임의 실제 반동**을
+		// 추정한다(화면 = 반동 + 마우스 → 반동 = 화면 − 마우스).
+		// ⚠️ 스프레이 트레이너와 달리 **화면 픽셀을 읽는다.** 그래서 기본이 꺼짐이고,
+		//    꺼져 있으면 리소스 생성도 복사도 매핑도 전부 일어나지 않는다(렌더 경로 무변화).
+		//    이 토글은 실험용이며, 결과가 쓸 만한지 판정한 뒤에 정식 기능 여부를 정한다.
+		static constexpr unsigned int kSherbetMotionCrop = 512; // 가운데 크롭 한 변(px)
+		static constexpr int kSherbetMotionStep = 4;            // 프로파일 만들 때 샘플 간격
+		static constexpr int kSherbetMotionSearch = 32;         // 시프트 탐색 범위(±px)
+		static constexpr int kSherbetMotionSlots = 3;           // 리드백 링(GPU 를 기다리지 않으려는 지연)
+		static constexpr int kSherbetMotionMouseRing = 8;       // 프레임별 마우스 이동 보관
+		static constexpr int kSherbetMotionMaxAge = 4;          // 이보다 오래된 슬롯은 짝지을 마우스 값이 없다
+
+		bool _sherbet_motion_on = false;    // 메인 토글(기본 꺼짐)
+		bool _sherbet_motion_hud = true;    // 화면에 작은 숫자판(메인 토글이 켜져 있을 때만)
+		int _sherbet_motion_lag = 0;        // 화면 ↔ 마우스 정렬 보정(프레임). 엔진 입력 지연만큼 어긋난다
+		api::resource _sherbet_motion_stage[kSherbetMotionSlots] = {};
+		bool _sherbet_motion_slot_full[kSherbetMotionSlots] = {};
+		uint64_t _sherbet_motion_slot_tag[kSherbetMotionSlots] = {};
+		unsigned int _sherbet_motion_w = 0, _sherbet_motion_h = 0;
+		api::format _sherbet_motion_format = api::format::unknown;
+		int _sherbet_motion_kind = 0;       // sherbet::motion::pixel_kind 값
+		// 0=아직 1회도 안 돌음 · 1=동작중 · 2=백버퍼 포맷 미지원 · 3=리드백 리소스 생성 실패
+		// 2/3 은 매 프레임 재시도하지 않는다(실패가 확정된 상태다). 화면에 이유를 적는다.
+		int _sherbet_motion_state = 0;
+		uint64_t _sherbet_motion_frame = 0; // 이 기능 전용 프레임 카운터(draw_gui 에서 증가)
+		// 마지막 복사를 건 시점의 _frame_count. 토글을 끄면 링(3 MiB)을 놓아주는데,
+		// GPU 가 아직 그 복사를 처리 중일 수 있으므로 몇 프레임 지난 뒤에 놓는다.
+		// (_frame_count 는 토글과 무관하게 항상 증가하므로 여기 기준으로 쓴다)
+		uint64_t _sherbet_motion_last_write = 0;
+		float _sherbet_motion_mouse[kSherbetMotionMouseRing][2] = {};
+		std::vector<float> _sherbet_motion_vprof, _sherbet_motion_hprof;
+		sherbet::motion::tracker _sherbet_motion;
+		float _sherbet_motion_cpu_ms = 0.0f;      // 리드백+계산 CPU 시간(지수 이동평균, ms)
+		unsigned int _sherbet_motion_samples = 0; // 누적 추정 수(살아 있는지 확인용)
 
 		// SHERBET: 온라인 인증 컨트롤러. 캐시 토큰 로드 + 비동기 시작 검증을 담당하며,
 		// update_effects()에서 인증 전 이펙트 컴파일/적용을 막는 게이트로 쓰인다.

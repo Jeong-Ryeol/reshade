@@ -368,6 +368,13 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	// 구간이 끊겨 기록이 무의미해진다(기록기 쪽에서도 한 번 더 클램프한다).
 	_sherbet_spray_scale = ImClamp(_sherbet_spray_scale, 0.05f, 10.0f);
 	_sherbet_spray_gap_ms = ImClamp(_sherbet_spray_gap_ms, 50, 2000);
+	// SHERBET(실험): 화면 이동 추정. **기본 꺼짐** — 유일하게 화면 픽셀을 읽는 기능이라
+	// 켜지 않은 구매자는 리드백 비용을 한 푼도 내지 않아야 한다.
+	config.get("OVERLAY", "SherbetMotionSpike", _sherbet_motion_on);
+	config.get("OVERLAY", "SherbetMotionHud", _sherbet_motion_hud);
+	config.get("OVERLAY", "SherbetMotionLag", _sherbet_motion_lag);
+	// 보정 상한이 +1 인 이유: 링에 아직 안 적힌 '미래' 프레임의 마우스 값을 가리키게 된다.
+	_sherbet_motion_lag = ImClamp(_sherbet_motion_lag, -2, 1);
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
 	config.get("OVERLAY", "ShowClock", _show_clock);
 	config.get("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
@@ -504,6 +511,9 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
+	config.set("OVERLAY", "SherbetMotionSpike", _sherbet_motion_on);
+	config.set("OVERLAY", "SherbetMotionHud", _sherbet_motion_hud);
+	config.set("OVERLAY", "SherbetMotionLag", _sherbet_motion_lag);
 	config.set("OVERLAY", "ShowClock", _show_clock);
 	config.set("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
 	config.set("OVERLAY", "ShowFPS", _show_fps);
@@ -955,6 +965,10 @@ void reshade::runtime::draw_gui()
 		// 두 토글이 모두 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되므로,
 		// 기능을 켜지 않은 구매자는 프레임 비용을 한 푼도 내지 않는다.
 		&& !_sherbet_spray_live && !_sherbet_spray_chart
+		// SHERBET(실험): 화면 이동 추정도 마찬가지다. 여기서 early-out 하면 프레임별 마우스
+		// 이동 링이 한 번도 채워지지 않아, 리드백은 도는데 짝지을 마우스 값이 영영 0 이 된다
+		// (= "화면은 움직이는데 마우스는 0" 이라는 완전히 틀린 그래프가 나온다).
+		&& !_sherbet_motion_on
 #if RESHADE_ADDON
 		&& !has_addon_event<addon_event::reshade_overlay>()
 #endif
@@ -1201,6 +1215,20 @@ void reshade::runtime::draw_gui()
 		// 다음 프레임에 가짜 엣지가 잡힌다.
 		_sherbet_spray_lmb_prev = lmb;
 
+		// SHERBET(실험): 화면 이동 추정용 마우스 이동 링. 화면 쪽 추정치는 리드백 지연 때문에
+		// **두 프레임 늦게** 나오므로, 그때 짝지을 수 있도록 프레임별로 남겨 둔다.
+		// ⚠️ 위에서 이미 읽어 리셋한 값을 나눠 쓴다(raw_mouse_delta_x/y 를 여기서 또 읽으면
+		//    스프레이 기록과 서로 절반씩만 보게 된다).
+		// ⚠️ 카운터는 **오버레이가 열려 있어도** 증가한다 — runtime.cpp 의 추정 쪽이
+		//    "슬롯이 몇 프레임 묵었나"로 유효성을 판단하므로 프레임 축이 멈추면 안 된다.
+		if (_sherbet_motion_on)
+		{
+			const int mi = static_cast<int>(_sherbet_motion_frame % kSherbetMotionMouseRing);
+			_sherbet_motion_mouse[mi][0] = static_cast<float>(raw_dx);
+			_sherbet_motion_mouse[mi][1] = static_cast<float>(raw_dy);
+			_sherbet_motion_frame++;
+		}
+
 		// 두 토글이 모두 꺼져 있으면(기본) 아무것도 기록하지 않는다.
 		// 오버레이가 열려 있는 동안도 기록하지 않는다(스펙 §5.3) — UI 를 조작하는 클릭·이동은
 		// 사격이 아니다. 위에서 이미 읽어 리셋했으므로 그 이동이 다음 구간으로 새지도 않는다.
@@ -1306,6 +1334,66 @@ void reshade::runtime::draw_gui()
 					sp->AddLine(prev, p, sp_line, 2.0f);
 				sp->AddCircleFilled(p, 3.0f, (i + 1 == seg->shots.size()) ? sp_last : sp_dot);
 				prev = p;
+			}
+		}
+	}
+
+	// SHERBET(실험): 화면 이동 추정 숫자판. 조준점·궤적과 같은 ForegroundDrawList 라
+	// **오버레이 게이트 바깥**이고, 그래서 오버레이를 닫은 채로 검증할 수 있다 —
+	// 세 단계 검증은 전부 오버레이가 닫혀 있어야 성립한다(열려 있으면 게임이 마우스를
+	// 못 받아 화면이 아예 안 움직인다). 메인 토글이 꺼져 있으면 그리지 않는다.
+	if (_sherbet_motion_on && _sherbet_motion_hud && !_show_overlay && _sherbet_motion.count() > 0)
+	{
+		const ImGuiViewport *const mo_vp = ImGui::GetMainViewport();
+		ImDrawList *const mo = ImGui::GetForegroundDrawList();
+		const sherbet::motion::sample &s = _sherbet_motion.last();
+
+		char l1[96], l2[96], l3[96], l4[96];
+		snprintf(l1, sizeof(l1), "\xED\x99\x94\xEB\xA9\xB4   dx %+6.1f  dy %+6.1f", s.screen_dx, s.screen_dy);  // "화면"
+		snprintf(l2, sizeof(l2), "\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 dx %+6.1f  dy %+6.1f", s.mouse_dx, s.mouse_dy); // "마우스"
+		snprintf(l3, sizeof(l3), "\xEB\xB0\x98\xEB\x8F\x99   dx %+6.1f  dy %+6.1f", s.recoil_dx(), s.recoil_dy()); // "반동"
+		snprintf(l4, sizeof(l4), "\xEC\x8B\xA0\xEB\xA2\xB0\xEB\x8F\x84 x %3.0f%%  y %3.0f%%", s.conf_x * 100.0f, s.conf_y * 100.0f); // "신뢰도"
+
+		float tw = 0.0f;
+		for (const char *t : { l1, l2, l3, l4 })
+			tw = ImMax(tw, ImGui::CalcTextSize(t).x);
+
+		const float lh = ImGui::GetTextLineHeightWithSpacing();
+		const float pad = 10.0f, plot_h = 44.0f;
+		const ImVec2 p0(mo_vp->Pos.x + 24.0f, mo_vp->Pos.y + mo_vp->Size.y * 0.28f);
+		const ImVec2 p1(p0.x + tw + pad * 2.0f, p0.y + lh * 4.0f + plot_h + pad * 2.0f);
+
+		mo->AddRectFilled(p0, p1, IM_COL32(12, 12, 16, 170), 10.0f);
+		const sherbet::theme &mo_t = sherbet::active_theme();
+		mo->AddText(ImVec2(p0.x + pad, p0.y + pad), IM_COL32(235, 235, 235, 235), l1);
+		mo->AddText(ImVec2(p0.x + pad, p0.y + pad + lh), IM_COL32(180, 180, 180, 225), l2);
+		mo->AddText(ImVec2(p0.x + pad, p0.y + pad + lh * 2.0f), sherbet::with_alpha(mo_t.accent, 255), l3);
+		mo->AddText(ImVec2(p0.x + pad, p0.y + pad + lh * 3.0f), IM_COL32(170, 170, 170, 210), l4);
+
+		// 미니 그래프 — 반동 dy. 한 발 쏠 때 위로 튀는지가 여기서 바로 보인다.
+		// dy 는 아래가 + 이고 화면 좌표도 아래가 + 라, 그대로 더하면 위로 튄 것이 위로 나온다.
+		const int n = _sherbet_motion.count();
+		const int show = n > 120 ? 120 : n;
+		const float gy0 = p0.y + pad + lh * 4.0f, gy1 = gy0 + plot_h;
+		const float gmid = (gy0 + gy1) * 0.5f;
+		mo->AddLine(ImVec2(p0.x + pad, gmid), ImVec2(p1.x - pad, gmid), IM_COL32(255, 255, 255, 45));
+		if (show >= 2)
+		{
+			float peak = 6.0f;
+			for (int i = n - show; i < n; ++i)
+				peak = ImMax(peak, std::abs(_sherbet_motion.at(i).recoil_dy()));
+			const float sy = (plot_h * 0.5f - 3.0f) / peak;
+			const float stepx = (tw) / static_cast<float>(show - 1);
+			for (int i = n - show + 1; i < n; ++i)
+			{
+				const sherbet::motion::sample &a = _sherbet_motion.at(i - 1);
+				const sherbet::motion::sample &b = _sherbet_motion.at(i);
+				const int k = i - (n - show);
+				const float xa = p0.x + pad + stepx * static_cast<float>(k - 1);
+				const float xb = p0.x + pad + stepx * static_cast<float>(k);
+				const bool ok = ImMin(a.conf_y, b.conf_y) > 0.25f;
+				mo->AddLine(ImVec2(xa, gmid + a.recoil_dy() * sy), ImVec2(xb, gmid + b.recoil_dy() * sy),
+					ok ? IM_COL32(255, 255, 255, 230) : IM_COL32(140, 140, 140, 110), ok ? 1.8f : 1.0f);
 			}
 		}
 	}
@@ -3104,6 +3192,170 @@ void reshade::runtime::draw_gui_aim()
 				}
 				ImGui::TextDisabled("%s", "\xED\x81\xB4\xEB\xA6\xAD\xED\x95\x98\xEB\xA9\xB4 \xEA\xB7\xB8 \xEA\xB5\xAC\xEA\xB0\x84\xEB\xA7\x8C \xEC\xA7\x84\xED\x95\x98\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94"); // "클릭하면 그 구간만 진하게 보여요"
 			}
+		}
+		ImGui::Spacing();
+	}
+
+	// ── 화면 이동 추정 (실험) ────────────────────────────────────────────────
+	// 스프레이 트레이너는 "내 손이 어떻게 움직였나"만 보여준다. **기준**이 되는 게임의
+	// 실제 반동을 알려면 화면이 얼마나 밀렸는지가 필요하다:
+	//     화면 이동 = 게임 반동 + 내 마우스 이동   →   반동 = 화면 − 마우스
+	// ⚠️ 이 기능만 **화면 픽셀을 읽는다**(스프레이 트레이너는 읽지 않는다).
+	//    그래서 기본이 꺼짐이고, 꺼져 있으면 리드백도 계산도 전혀 일어나지 않는다.
+	//    쓸 만한지 판정하기 위한 실험이며, 결과를 보고 정식 기능 여부를 정한다.
+	if (ImGui::CollapsingHeader(ICON_FK_FLASK "  \xED\x99\x94\xEB\xA9\xB4 \xEC\x9D\xB4\xEB\x8F\x99 \xEC\xB6\x94\xEC\xA0\x95 (\xEC\x8B\xA4\xED\x97\x98)")) // "화면 이동 추정 (실험)"
+	{
+		const sherbet::theme &mt = sherbet::active_theme();
+
+		if (ImGui::Checkbox("\xEC\xBC\x9C\xEA\xB8\xB0 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB8\xB0\xEB\x8A\xA5\xEB\xA7\x8C \xED\x99\x94\xEB\xA9\xB4 \xED\x94\xBD\xEC\x85\x80\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x96\xB4\xEC\x9A\x94##motion", &_sherbet_motion_on)) // "켜기 — 이 기능만 화면 픽셀을 읽어요"
+		{
+			modified = true;
+			// 확정 실패 상태(포맷 미지원·리소스 실패)는 다시 켤 때 한 번 더 시도하게 푼다.
+			// 안 그러면 해상도만 바꾸고 다시 켠 사용자가 영영 같은 에러를 본다.
+			_sherbet_motion_state = 0;
+		}
+		ImGui::TextDisabled("%s", "\xED\x99\x94\xEB\xA9\xB4 \xEA\xB0\x80\xEC\x9A\xB4\xEB\x8D\xB0\xEB\xA5\xBC \xEC\xA1\xB0\xEA\xB8\x88 \xEB\x96\xBC\xEC\x96\xB4 CPU \xEB\xA1\x9C \xEA\xB0\x80\xEC\xA0\xB8\xEC\x99\x80, \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x82\xAC\xEC\x9D\xB4\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4 \xEC\x96\xBC\xEB\xA7\x88\xEB\x82\x98 \xEB\xB0\x80\xEB\xA0\xB8\xEB\x8A\x94\xEC\xA7\x80 \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4. \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\x8F\x84 \xEA\xB3\x84\xEC\x82\xB0\xEB\x8F\x84 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94."); // 설명
+
+		if (_sherbet_motion_on)
+		{
+			modified |= ImGui::Checkbox("\xED\x99\x94\xEB\xA9\xB4\xEC\x97\x90 \xEC\x88\xAB\xEC\x9E\x90\xED\x8C\x90 \xED\x91\x9C\xEC\x8B\x9C##motion", &_sherbet_motion_hud); // "화면에 숫자판 표시"
+			// 엔진의 입력 지연 때문에 '화면이 밀린 프레임'과 '그 마우스 입력이 들어온 프레임'이
+			// 한 칸쯤 어긋난다. 마우스만 움직였을 때 반동이 0 에 가장 가까운 값이 정답이다.
+			modified |= ImGui::SliderInt("\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\xA0\x95\xEB\xA0\xAC \xEB\xB3\xB4\xEC\xA0\x95(\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84)##motion", &_sherbet_motion_lag, -2, 1, "%d", ImGuiSliderFlags_AlwaysClamp); // "마우스 정렬 보정(프레임)"
+
+			// ── 상태 ──
+			if (_sherbet_motion_state == 2)
+				ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x98 \xEB\xB0\xB1\xEB\xB2\x84\xED\x8D\xBC \xED\x98\x95\xEC\x8B\x9D\xEC\x9D\x80 \xEC\x95\x84\xEC\xA7\x81 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 (8\xEB\xB9\x84\xED\x8A\xB8/10\xEB\xB9\x84\xED\x8A\xB8 \xEC\x83\x89\xEC\x83\x81\xEB\xA7\x8C \xEC\xA7\x80\xEC\x9B\x90)"); // 포맷 미지원
+			else if (_sherbet_motion_state == 3)
+				ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEB\xA6\xAC\xEB\x93\x9C\xEB\xB0\xB1 \xED\x85\x8D\xEC\x8A\xA4\xEC\xB2\x98\xEB\xA5\xBC \xEB\xA7\x8C\xEB\x93\xA4\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9E\xB4 \xEC\x88\x98 \xEC\x97\x86\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // 리소스 실패
+			else if (_sherbet_motion_state == 0)
+				// ⚠️ 캡처 지점이 render_effects() 안이라 **이펙트가 실제로 도는 프레임**에서만 뜬다
+				//    (반반 비교 스냅샷과 같은 자리다). 이펙트를 전부 끈 상태로는 한 장도 못 받는다.
+				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\x95\x84\xEC\xA7\x81 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\x84 \xEB\xAA\xBB \xEB\xB0\x9B\xEC\x95\x98\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0, \xEC\x9D\xB4\xED\x8E\x99\xED\x8A\xB8\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEB\x8A\x94 \xEC\x83\x81\xED\x83\x9C\xEC\x97\xAC\xEC\x95\xBC \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // 아직 프레임 없음
+			else
+				ImGui::TextDisabled("\xED\x81\xAC\xEB\xA1\xAD %ux%u \xC2\xB7 CPU %.2fms/\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xC2\xB7 \xEC\xB6\x94\xEC\xA0\x95 %u\xED\x9A\x8C", _sherbet_motion_w, _sherbet_motion_h, _sherbet_motion_cpu_ms, _sherbet_motion_samples); // "크롭 … · CPU … · 추정 …회"
+
+			ImGui::TextDisabled("%s", "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEC\x97\xAC\xEB\x8A\x94 \xEB\x8F\x99\xEC\x95\x88\xEC\x9D\x80 \xEC\x9E\xAC\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94 (\xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\xB4 \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4\xEB\xA5\xBC \xEB\xAA\xBB \xEB\xB0\x9B\xEC\x95\x84 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4 \xEB\xA9\x88\xEC\xB6\x94\xEB\xAF\x80\xEB\xA1\x9C)"); // 기록 정지 조건
+			ImGui::Spacing();
+
+			// ── 마지막 값 ──
+			// (오버레이가 열려 있는 동안은 측정이 멈추므로, 이 값은 '오버레이를 열기 직전'
+			//  프레임이다. 실시간으로 보려면 위의 숫자판을 켜고 오버레이를 닫는다)
+			if (_sherbet_motion.count() > 0)
+			{
+				const sherbet::motion::sample &s = _sherbet_motion.last();
+				ImGui::Text("%s", "\xED\x99\x94\xEB\xA9\xB4"); // "화면"
+				ImGui::SameLine(110.0f);
+				ImGui::Text("dx %+7.2f   dy %+7.2f", s.screen_dx, s.screen_dy);
+				ImGui::Text("%s", "\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4"); // "마우스"
+				ImGui::SameLine(110.0f);
+				ImGui::Text("dx %+7.2f   dy %+7.2f", s.mouse_dx, s.mouse_dy);
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "%s", "\xEB\xB0\x98\xEB\x8F\x99"); // "반동"
+				ImGui::SameLine(110.0f);
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "dx %+7.2f   dy %+7.2f", s.recoil_dx(), s.recoil_dy());
+				ImGui::Text("%s", "\xEC\x8B\xA0\xEB\xA2\xB0\xEB\x8F\x84"); // "신뢰도"
+				ImGui::SameLine(110.0f);
+				ImGui::Text("x %3.0f%%   y %3.0f%%", s.conf_x * 100.0f, s.conf_y * 100.0f);
+			}
+
+			// ── 롤링 히스토리 ──
+			// 검증 3단계(쏘기)는 오버레이를 닫고 해야 하므로, 라이브로 잡는 대신 여기 남는다.
+			const int total = _sherbet_motion.count();
+			const ImVec2 m0 = ImGui::GetCursorScreenPos();
+			const float mw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
+			const float mh = 170.0f;
+			const ImVec2 m1(m0.x + mw, m0.y + mh);
+			ImGui::InvisibleButton("##motion_canvas", ImVec2(mw, mh));
+			ImDrawList *const mdl = ImGui::GetWindowDrawList();
+			mdl->AddRectFilled(m0, m1, sherbet::with_alpha(mt.bg1, 220), 12.0f);
+			mdl->PushClipRect(m0, m1, true);
+			{
+				const float mid = (m0.y + m1.y) * 0.5f;
+				mdl->AddLine(ImVec2(m0.x, mid), ImVec2(m1.x, mid), sherbet::with_alpha(mt.border, 140));
+
+				if (total < 2)
+				{
+					mdl->AddText(ImVec2(m0.x + 14.0f, mid - 8.0f), sherbet::with_alpha(mt.text_dim, 220),
+						"\xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xEC\x9E\xA0\xEA\xB9\x90 \xEC\x9B\x80\xEC\xA7\x81\xEC\x9D\xB4\xEA\xB1\xB0\xEB\x82\x98 \xEC\x8F\x9C \xEB\x92\xA4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x97\xB4\xEC\x96\xB4\xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94."); // "기록이 없어요…"
+				}
+				else
+				{
+					// 세로 축 자동 배율. 하한을 두어 잡음만 있을 때 화면이 꽉 차 보이지 않게 한다.
+					float peak = 6.0f;
+					for (int i = 0; i < total; ++i)
+					{
+						const sherbet::motion::sample &s = _sherbet_motion.at(i);
+						peak = ImMax(peak, ImMax(std::abs(s.screen_dy), ImMax(std::abs(s.mouse_dy), std::abs(s.recoil_dy()))));
+					}
+					const float sy = (mh * 0.5f - 14.0f) / peak;
+					const float step = mw / static_cast<float>(total > 1 ? total - 1 : 1);
+					// dy 는 마우스 규약(아래가 +)이고 화면 좌표도 아래가 + 라, 그대로 더하면
+					// **위로 튄 반동이 그래프에서도 위로** 나온다. 부호를 또 뒤집지 않는다.
+					auto py = [&](float v) { return mid + v * sy; };
+
+					// 마우스(흐리게) → 화면(테마색) → 반동(흰색) 순으로 겹쳐 그린다.
+					for (int i = 1; i < total; ++i)
+					{
+						const sherbet::motion::sample &a = _sherbet_motion.at(i - 1);
+						const sherbet::motion::sample &b = _sherbet_motion.at(i);
+						const float xa = m0.x + step * static_cast<float>(i - 1), xb = m0.x + step * static_cast<float>(i);
+						mdl->AddLine(ImVec2(xa, py(a.mouse_dy)), ImVec2(xb, py(b.mouse_dy)), sherbet::with_alpha(mt.text_dim, 150), 1.0f);
+					}
+					for (int i = 1; i < total; ++i)
+					{
+						const sherbet::motion::sample &a = _sherbet_motion.at(i - 1);
+						const sherbet::motion::sample &b = _sherbet_motion.at(i);
+						const float xa = m0.x + step * static_cast<float>(i - 1), xb = m0.x + step * static_cast<float>(i);
+						// 신뢰도가 낮은 구간은 회색 — 숫자가 아니라 쓰레기라는 표시다.
+						const bool ok = ImMin(a.conf_y, b.conf_y) > 0.25f;
+						mdl->AddLine(ImVec2(xa, py(a.screen_dy)), ImVec2(xb, py(b.screen_dy)),
+							ok ? sherbet::with_alpha(mt.accent, 200) : IM_COL32(130, 130, 130, 110), ok ? 1.6f : 1.0f);
+						mdl->AddLine(ImVec2(xa, py(a.recoil_dy())), ImVec2(xb, py(b.recoil_dy())),
+							ok ? IM_COL32(255, 255, 255, 235) : IM_COL32(130, 130, 130, 90), ok ? 2.0f : 1.0f);
+					}
+					// 바닥에 신뢰도 막대 — 어느 구간이 쓰레기인지 한눈에 보인다.
+					for (int i = 0; i < total; ++i)
+					{
+						const float c = ImClamp(_sherbet_motion.at(i).conf_y, 0.0f, 1.0f);
+						const float x = m0.x + step * static_cast<float>(i);
+						mdl->AddLine(ImVec2(x, m1.y - 2.0f), ImVec2(x, m1.y - 2.0f - c * 12.0f),
+							IM_COL32(static_cast<int>(255 * (1.0f - c)), static_cast<int>(200 * c + 40), 60, 200), ImMax(1.0f, step));
+					}
+
+					char cap[64];
+					snprintf(cap, sizeof(cap), "\xC2\xB1%.0fpx", peak); // "±…px" — 세로 축 배율
+					mdl->AddText(ImVec2(m0.x + 8.0f, m0.y + 6.0f), sherbet::with_alpha(mt.text_dim, 200), cap);
+				}
+			}
+			mdl->PopClipRect();
+
+			// 위로 튄 최대값 — 검증 3단계에서 "튀었나"를 숫자 하나로 답한다.
+			float up_max = 0.0f;
+			for (int i = 0; i < total; ++i)
+			{
+				const sherbet::motion::sample &s = _sherbet_motion.at(i);
+				if (s.conf_y > 0.25f && -s.recoil_dy() > up_max)
+					up_max = -s.recoil_dy();
+			}
+			ImGui::Text("%s", "\xEC\x9C\x84\xEB\xA1\x9C \xED\x8A\x84 \xEC\xB5\x9C\xEB\x8C\x80\xEA\xB0\x92"); // "위로 튄 최대값"
+			ImGui::SameLine(130.0f);
+			if (up_max > 0.0f)
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "%.1f px", up_max);
+			else
+				ImGui::TextDisabled("%s", "\xEC\x97\x86\xEC\x9D\x8C"); // "없음"
+
+			if (sherbet::pill_button(ICON_FK_TRASH "  \xEA\xB8\xB0\xEB\xA1\x9D \xEC\xA7\x80\xEC\x9A\xB0\xEA\xB8\xB0##motion", false)) // "기록 지우기"
+			{
+				_sherbet_motion.reset();
+				_sherbet_motion_samples = 0;
+			}
+
+			ImGui::Spacing();
+			ImGui::TextDisabled("%s", "\xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEB\xB2\x95 \xE2\x80\x94 \xEC\x85\x8B \xEB\x8B\xA4 \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x9D\x80 \xEC\xB1\x84\xEB\xA1\x9C \xED\x95\x98\xEA\xB3\xA0, \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x97\xB4\xEC\x96\xB4\xEC\x84\x9C \xEC\x95\x84\xEB\x9E\x98 \xEA\xB7\xB8\xEB\x9E\x98\xED\x94\x84\xEB\xA5\xBC \xEB\xB4\x85\xEB\x8B\x88\xEB\x8B\xA4"); // 안내
+			ImGui::BulletText("%s", "\xEA\xB0\x80\xEB\xA7\x8C\xED\x9E\x88 \xEC\x9E\x88\xEA\xB8\xB0 \xE2\x86\x92 \xED\x99\x94\xEB\xA9\xB4\xC2\xB7\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEB\x91\x98 \xEB\x8B\xA4 0 \xEA\xB7\xBC\xEC\xB2\x98\xEC\x97\x90 \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x95\xBC \xED\x95\xB4\xEC\x9A\x94"); // ①
+			ImGui::BulletText("%s", "\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4\xEB\xA7\x8C \xEC\x9B\x80\xEC\xA7\x81\xEC\x9D\xB4\xEA\xB8\xB0 \xE2\x86\x92 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4 \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4\xEC\x99\x80 \xEA\xB0\x99\xEC\x9D\x80 \xEB\xB0\xA9\xED\x96\xA5\xC2\xB7\xEB\xB9\x84\xEC\x8A\xB7\xED\x95\x9C \xED\x81\xAC\xEA\xB8\xB0\xEB\xA1\x9C \xEB\x94\xB0\xEB\x9D\xBC\xEA\xB0\x80\xEC\x95\xBC \xED\x95\xB4\xEC\x9A\x94"); // ②
+			ImGui::BulletText("%s", "\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEA\xB3\xA0\xEC\xA0\x95\xED\x95\x98\xEA\xB3\xA0 \xEC\x8F\x98\xEA\xB8\xB0 \xE2\x86\x92 \xED\x95\x9C \xEB\xB0\x9C\xEB\xA7\x88\xEB\x8B\xA4 \xEB\xB0\x98\xEB\x8F\x99\xEC\x9D\xB4 \xEC\x9C\x84\xEB\xA1\x9C \xED\x8A\x80\xEC\x96\xB4\xEC\x95\xBC \xED\x95\xB4\xEC\x9A\x94 (\xEC\x9D\xB4\xEA\xB2\x8C \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x98 \xEC\x8B\xA4\xEC\xA0\x9C \xEB\xB0\x98\xEB\x8F\x99)"); // ③
+			ImGui::TextDisabled("%s", "\xED\x9A\x8C\xEC\x83\x89 \xEA\xB5\xAC\xEA\xB0\x84\xEC\x9D\x80 \xEC\x8B\xA0\xEB\xA2\xB0\xEB\x8F\x84\xEA\xB0\x80 \xEB\x82\xAE\xEC\x9D\x80 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94 \xE2\x80\x94 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x95\x84\xEB\x8B\x88\xEB\x9D\xBC \xEC\x93\xB0\xEB\xA0\x88\xEA\xB8\xB0\xEB\xA1\x9C \xEB\xB4\x90\xEC\x95\xBC \xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // 신뢰도 안내
 		}
 		ImGui::Spacing();
 	}

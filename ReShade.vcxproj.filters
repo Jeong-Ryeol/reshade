@@ -785,6 +785,9 @@
     <ClInclude Include="source\sherbet_nodelock.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_motion.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_owner.h">
       <Filter>core\runtime</Filter>
     </ClInclude>

@@ -647,6 +647,8 @@ exit_failure:
 	_device->destroy_resource_view(_sherbet_before_srv);
 	_sherbet_before_srv = {};
 
+	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
+
 	_device->destroy_resource(_sherbet_crosshair_tex);
 	_sherbet_crosshair_tex = {};
 	_device->destroy_resource_view(_sherbet_crosshair_srv);
@@ -718,6 +720,8 @@ void reshade::runtime::on_reset()
 	_sherbet_before_tex = {};
 	_device->destroy_resource_view(_sherbet_before_srv);
 	_sherbet_before_srv = {};
+
+	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
 
 	_device->destroy_resource(_sherbet_crosshair_tex);
 	_sherbet_crosshair_tex = {};
@@ -3919,6 +3923,204 @@ void reshade::runtime::update_effects()
 		invoke_addon_event<addon_event::reshade_reloaded_effects>(this);
 #endif
 }
+// SHERBET(실험): 리드백 링 해제. on_reset 과 초기화 실패 경로 둘 다에서 부른다.
+// 기록(tracker 의 링버퍼)은 지우지 않는다 — 해상도 전환 직전 몇 프레임을 보려고 켠 것이다.
+void reshade::runtime::sherbet_motion_release()
+{
+	for (int i = 0; i < kSherbetMotionSlots; ++i)
+	{
+		_device->destroy_resource(_sherbet_motion_stage[i]);
+		_sherbet_motion_stage[i] = {};
+		_sherbet_motion_slot_full[i] = false;
+		_sherbet_motion_slot_tag[i] = 0;
+	}
+
+	_sherbet_motion_w = _sherbet_motion_h = 0;
+	_sherbet_motion_format = api::format::unknown;
+	_sherbet_motion_state = 0;
+	_sherbet_motion.drop_prev();
+}
+
+// SHERBET(실험): 화면 이동 추정 한 프레임.
+//
+//   화면 이동 = 게임 반동 + 내 마우스 이동   →   반동 = 화면 이동 − 마우스 이동
+//
+// 마우스 이동은 이미 있다(1.2.0 스프레이 트레이너). 없는 항인 **화면 이동**을 여기서
+// 만든다. 2D 매칭은 프레임당 비용이 말이 안 되므로 가운데 크롭의 1D 투영(행 합/열 합)
+// 두 개만 이전 프레임과 맞춰본다. 계산은 전부 sherbet_motion.hpp(맥에서 단위테스트됨)에 있고
+// 이 함수가 하는 일은 **픽셀을 가져오는 것**과 **어긋난 시간축을 맞추는 것**뿐이다.
+//
+// GPU→CPU 리드백은 파이프라인을 세운다. 그래서:
+//   · 옮기는 양을 작게 — 512×512 정사각 크롭 한 장(1MiB). 프로파일을 만들 때 4픽셀마다
+//     샘플링하므로 실제로 읽는 것은 그 1/4 이다
+//   · 지연을 감수 — 슬롯 3개짜리 링에 복사해두고 **두 프레임 전** 것을 매핑한다.
+//     그 시점이면 GPU 는 이미 끝냈으므로 Map 이 기다리지 않는다
+//   · 진단이므로 늦어도 된다 — 두 프레임 늦은 값을 두 프레임 전 마우스 값과 짝지으면
+//     빼기(화면−마우스)는 그대로 성립한다
+void reshade::runtime::sherbet_motion_tick(api::command_list *cmd_list, api::resource_view rtv)
+{
+	// ⚠️ 기본 경로. 꺼져 있으면 리소스도 없고 복사도 매핑도 없다 — 렌더 경로가 그대로다.
+	if (!_sherbet_motion_on)
+	{
+		// 껐으면 링(3 MiB)을 놓아준다. 마지막 복사로부터 몇 프레임 지난 뒤에 놓는 이유는
+		// GPU 가 아직 그 복사를 처리 중일 수 있어서다(D3D12/Vulkan 에서 문제가 된다).
+		if (_sherbet_motion_stage[0] != 0 && _frame_count > _sherbet_motion_last_write + 4)
+			sherbet_motion_release();
+		return;
+	}
+	// 실패가 확정된 상태(포맷 미지원·리소스 생성 실패)는 매 프레임 다시 시도하지 않는다.
+	if (_sherbet_motion_state >= 2)
+		return;
+
+#if RESHADE_GUI
+	// 오버레이가 열려 있는 동안은 아예 뜨지 않는다. 게임이 마우스를 못 받아 화면이 멈추고,
+	// 열기 직전 프레임과 닫은 직후 프레임을 이어붙이면 그 사이 이동이 통째로 한 프레임
+	// 시프트로 잡혀 쓰레기 값이 하나 섞인다. 기록을 보는 동안 기록이 오염되면 안 된다.
+	if (_show_overlay)
+	{
+		_sherbet_motion.drop_prev();
+		return;
+	}
+#endif
+
+	const api::resource src = _device->get_resource_from_view(rtv);
+	if (src == 0)
+		return;
+
+	const api::resource_desc src_desc = _device->get_resource_desc(src);
+
+	// 크롭은 정사각형이고 백버퍼보다 클 수 없다. 짝수로 맞춘다(중앙 정렬).
+	unsigned int crop = kSherbetMotionCrop;
+	if (crop > src_desc.texture.width)
+		crop = src_desc.texture.width;
+	if (crop > src_desc.texture.height)
+		crop = src_desc.texture.height;
+	crop &= ~1u;
+	// ±32 탐색을 하려면 프로파일이 최소 73칸은 되어야 한다(sherbet_motion.hpp 참고).
+	// 그보다 작은 화면은 대상이 아니다.
+	if (crop < 128)
+		return;
+
+	const api::format fmt = api::format_to_default_typed(src_desc.texture.format, 0);
+
+	// 초록 채널 하나만 읽는다. RGBA8·BGRA8 은 초록이 바이트 1번, 10비트 포맷은 비트 10..19 로
+	// **둘 다 순서와 무관하게 같은 자리**라 분기가 필요 없다. 그 외 포맷(HDR float 등)은
+	// 이 스파이크의 범위 밖이다 — 조용히 이상한 숫자를 내는 대신 이유를 화면에 적는다.
+	int kind;
+	switch (fmt)
+	{
+	case api::format::r8g8b8a8_unorm:
+	case api::format::r8g8b8a8_unorm_srgb:
+	case api::format::r8g8b8x8_unorm:
+	case api::format::r8g8b8x8_unorm_srgb:
+	case api::format::b8g8r8a8_unorm:
+	case api::format::b8g8r8a8_unorm_srgb:
+	case api::format::b8g8r8x8_unorm:
+	case api::format::b8g8r8x8_unorm_srgb:
+		kind = static_cast<int>(sherbet::motion::pixel_kind::rgba8);
+		break;
+	case api::format::r10g10b10a2_unorm:
+	case api::format::b10g10r10a2_unorm:
+		kind = static_cast<int>(sherbet::motion::pixel_kind::rgb10a2);
+		break;
+	default:
+		_sherbet_motion_state = 2;
+		return;
+	}
+
+	// 크기나 포맷이 바뀌었으면(해상도 변경 등) 링을 다시 만든다.
+	if (_sherbet_motion_stage[0] == 0 || _sherbet_motion_w != crop || _sherbet_motion_format != fmt)
+	{
+		sherbet_motion_release();
+
+		for (int i = 0; i < kSherbetMotionSlots; ++i)
+		{
+			if (!_device->create_resource(
+					api::resource_desc(crop, crop, 1, 1, fmt, 1, api::memory_heap::readback, api::resource_usage::copy_dest),
+					nullptr, api::resource_usage::copy_dest, &_sherbet_motion_stage[i]))
+			{
+				log::message(log::level::error, "Failed to create Sherbet motion readback texture!");
+				sherbet_motion_release();
+				_sherbet_motion_state = 3;
+				return;
+			}
+
+			_device->set_resource_name(_sherbet_motion_stage[i], "Sherbet motion readback");
+		}
+
+		_sherbet_motion_w = _sherbet_motion_h = crop;
+		_sherbet_motion_format = fmt;
+		_sherbet_motion_kind = kind;
+		_sherbet_motion_vprof.resize(crop);
+		_sherbet_motion_hprof.resize(crop);
+		_sherbet_motion_state = 1;
+	}
+
+	const uint64_t frame = _sherbet_motion_frame;
+	const int write_slot = static_cast<int>(frame % kSherbetMotionSlots);
+	// (frame + 1) % 3 == (frame - 2) % 3 — 두 프레임 전에 복사를 건 슬롯이다.
+	const int read_slot = static_cast<int>((frame + 1) % kSherbetMotionSlots);
+
+	// ── (1) 두 프레임 전 캡처를 읽어 추정 ────────────────────────────────────
+	if (_sherbet_motion_slot_full[read_slot])
+	{
+		const uint64_t tag = _sherbet_motion_slot_tag[read_slot];
+		const uint64_t age = frame - tag;
+		_sherbet_motion_slot_full[read_slot] = false;
+
+		if (age >= 2 && age <= static_cast<uint64_t>(kSherbetMotionMaxAge))
+		{
+			const auto t0 = std::chrono::high_resolution_clock::now();
+
+			api::subresource_data mapped = {};
+			if (_device->map_texture_region(_sherbet_motion_stage[read_slot], 0, nullptr, api::map_access::read_only, &mapped) && mapped.data != nullptr)
+			{
+				if (sherbet::motion::build_profiles(
+						mapped.data, static_cast<int>(_sherbet_motion_w), static_cast<int>(_sherbet_motion_h), mapped.row_pitch,
+						static_cast<sherbet::motion::pixel_kind>(_sherbet_motion_kind), kSherbetMotionStep,
+						_sherbet_motion_vprof.data(), _sherbet_motion_hprof.data()))
+				{
+					// 짝지을 마우스 값은 **캡처한 그 프레임**의 것이다(지금 프레임이 아니라).
+					// 엔진의 입력 지연 때문에 한 프레임쯤 어긋날 수 있어 보정 슬라이더를 둔다 —
+					// "마우스만 움직였을 때 반동이 0 에 가장 가까운" 값이 그 게임의 정답이다.
+					const int64_t idx = static_cast<int64_t>(tag) + _sherbet_motion_lag;
+					const int mi = static_cast<int>(((idx % kSherbetMotionMouseRing) + kSherbetMotionMouseRing) % kSherbetMotionMouseRing);
+
+					if (_sherbet_motion.update(
+							_sherbet_motion_vprof.data(), static_cast<int>(_sherbet_motion_h),
+							_sherbet_motion_hprof.data(), static_cast<int>(_sherbet_motion_w),
+							kSherbetMotionSearch, _sherbet_motion_mouse[mi][0], _sherbet_motion_mouse[mi][1]))
+						_sherbet_motion_samples++;
+				}
+
+				_device->unmap_texture_region(_sherbet_motion_stage[read_slot], 0);
+			}
+
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - t0).count();
+			// 지수 이동평균 — 한 프레임 튀는 값이 아니라 '평소 얼마나 드는지'를 보여준다.
+			_sherbet_motion_cpu_ms = _sherbet_motion_cpu_ms * 0.9f + ms * 0.1f;
+		}
+		else
+		{
+			// 너무 오래된 슬롯(오버레이를 열었다 닫은 뒤 등) — 짝지을 마우스 값이 링에서
+			// 이미 덮였다. 이어붙이지 않고 버린다.
+			_sherbet_motion.drop_prev();
+		}
+	}
+
+	// ── (2) 이번 프레임 크롭을 링에 복사 ─────────────────────────────────────
+	const uint32_t x0 = (src_desc.texture.width - crop) / 2;
+	const uint32_t y0 = (src_desc.texture.height - crop) / 2;
+	const api::subresource_box box = { x0, y0, 0, x0 + crop, y0 + crop, 1 };
+
+	cmd_list->barrier(src, api::resource_usage::render_target, api::resource_usage::copy_source);
+	cmd_list->copy_texture_region(src, 0, &box, _sherbet_motion_stage[write_slot], 0, nullptr);
+	cmd_list->barrier(src, api::resource_usage::copy_source, api::resource_usage::render_target);
+
+	_sherbet_motion_slot_full[write_slot] = true;
+	_sherbet_motion_slot_tag[write_slot] = frame;
+	_sherbet_motion_last_write = _frame_count;
+}
 void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
 {
 	// Do not render effects twice in a frame
@@ -3945,6 +4147,12 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
 		cmd_list->barrier(compare_src, api::resource_usage::copy_source, api::resource_usage::render_target);
 	}
+
+	// SHERBET(실험): 화면 이동 추정. 위 반반 비교와 같은 자리·같은 방식이다 — 효과가
+	// 적용되기 전, ImGui 가 그려지기 전의 렌더 타깃에서 뜬다(효과의 노이즈·그레인과
+	// 오버레이가 픽셀에 섞이면 프레임 간 매칭이 그만큼 나빠진다).
+	// 토글이 꺼져 있으면(기본) 함수 첫 줄에서 그대로 돌아온다 — 리소스 조회조차 하지 않는다.
+	sherbet_motion_tick(cmd_list, rtv);
 
 	// Lock input so it cannot be modified by other threads while we are reading it here
 	std::unique_lock<std::recursive_mutex> input_lock;

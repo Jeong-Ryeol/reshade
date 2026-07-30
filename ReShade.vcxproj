@@ -788,6 +788,7 @@
     <ClInclude Include="source\sherbet_content.hpp" />
     <ClInclude Include="source\sherbet_http.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
+    <ClInclude Include="source\sherbet_motion.hpp" />
     <ClInclude Include="source\sherbet_nodelock.hpp" />
     <ClInclude Include="source\sherbet_owner.h" />
     <ClInclude Include="source\sherbet_spray.hpp" />
