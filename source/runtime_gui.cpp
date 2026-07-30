@@ -2939,6 +2939,175 @@ void reshade::runtime::draw_gui_aim()
 	sherbet::end_card();
 	ImGui::Spacing();
 
+	// ── 스프레이 트레이너 ────────────────────────────────────────────────────
+	// 사격 방식을 분류하지 않는다 — 무발사 간격으로만 구간을 나누므로 탭/버스트/연발이
+	// 저절로 다른 모양(점 하나 / 짧은 궤적 / 긴 궤적)으로 나온다.
+	if (ImGui::CollapsingHeader(ICON_FK_CHART_LINE "  \xEC\x8A\xA4\xED\x94\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x8A\xB8\xEB\xA0\x88\xEC\x9D\xB4\xEB\x84\x88", ImGuiTreeNodeFlags_DefaultOpen)) // "스프레이 트레이너"
+	{
+		// 두 토글은 독립이다. 둘 다 끄거나, 하나만 켜거나, 둘 다 켤 수 있다(기본은 둘 다 꺼짐).
+		modified |= ImGui::Checkbox("\xED\x99\x94\xEB\xA9\xB4\xEC\x97\x90 \xEC\x8B\xA4\xEC\x8B\x9C\xEA\xB0\x84 \xED\x91\x9C\xEC\x8B\x9C##spray", &_sherbet_spray_live); // "화면에 실시간 표시"
+		modified |= ImGui::Checkbox("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEC\x97\x90 \xEC\xB0\xA8\xED\x8A\xB8 \xED\x91\x9C\xEC\x8B\x9C##spray", &_sherbet_spray_chart); // "오버레이에 차트 표시"
+		// raw 단위는 감도가 사람마다 달라 픽셀로 바꾸는 계수가 필요하다(스펙 §5.1).
+		modified |= ImGui::SliderFloat("\xEA\xB6\xA4\xEC\xA0\x81 \xEB\xB0\xB0\xEC\x9C\xA8##spray", &_sherbet_spray_scale, 0.1f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp); // "궤적 배율"
+		modified |= ImGui::SliderInt("\xEA\xB5\xAC\xEA\xB0\x84 \xEB\x82\x98\xEB\x88\x84\xEA\xB8\xB0 \xEA\xB0\x84\xEA\xB2\xA9(ms)##spray", &_sherbet_spray_gap_ms, 50, 2000, "%d", ImGuiSliderFlags_AlwaysClamp); // "구간 나누기 간격(ms)"
+
+		if (_sherbet_spray_chart)
+		{
+			const std::vector<sherbet::spray::segment> &hist = _sherbet_spray.history();
+			const sherbet::spray::segment *const cur = _sherbet_spray.current();
+			const bool raw_ok2 = _input != nullptr && _input->raw_mouse_available();
+
+			static bool spray_overlay5 = false; // 최근 5개 겹쳐보기
+			static int spray_sel = -1;          // 목록에서 고른 구간(history 인덱스). -1 = 최신
+			ImGui::Checkbox("\xEC\xB5\x9C\xEA\xB7\xBC 5\xEA\xB0\x9C \xEA\xB2\xB9\xEC\xB3\x90\xEB\xB3\xB4\xEA\xB8\xB0##spray", &spray_overlay5); // "최근 5개 겹쳐보기"
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_TRASH "  \xEA\xB8\xB0\xEB\xA1\x9D \xEC\xA7\x80\xEC\x9A\xB0\xEA\xB8\xB0", false)) // "기록 지우기"
+			{
+				_sherbet_spray.clear();
+				spray_sel = -1;
+			}
+			if (spray_sel >= static_cast<int>(hist.size()))
+				spray_sel = -1; // 링버퍼가 돌아 선택이 사라졌다
+
+			// 강조해서 보여줄 구간: 고른 것 > 진행 중 > 가장 최근 완료분
+			const sherbet::spray::segment *focus = nullptr;
+			if (spray_sel >= 0)
+				focus = &hist[static_cast<std::size_t>(spray_sel)];
+			else if (cur != nullptr)
+				focus = cur;
+			else if (!hist.empty())
+				focus = &hist.back();
+
+			// ── 차트 캔버스 ──
+			const ImVec2 c0 = ImGui::GetCursorScreenPos();
+			// 창을 아주 좁게 줄이면 남는 폭이 0 이 될 수 있는데, InvisibleButton 은 0 크기를
+			// 허용하지 않는다(디버그 빌드에서 단언). 최소 폭을 준다.
+			const float cw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
+			const float ch = 220.0f;
+			const ImVec2 c1(c0.x + cw, c0.y + ch);
+			ImGui::InvisibleButton("##spray_canvas", ImVec2(cw, ch));
+			ImDrawList *const dl = ImGui::GetWindowDrawList();
+			const sherbet::theme &ct = sherbet::active_theme();
+			const ImVec2 org((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f); // 원점 = 첫 발
+
+			dl->AddRectFilled(c0, c1, sherbet::with_alpha(ct.bg1, 220), 12.0f);
+			dl->PushClipRect(c0, c1, true);
+			{
+				// 격자 + 중앙 십자
+				const ImU32 grid_col = sherbet::with_alpha(ct.border, 90);
+				for (float gx = 0.0f; gx <= cw * 0.5f; gx += 32.0f)
+				{
+					dl->AddLine(ImVec2(org.x + gx, c0.y), ImVec2(org.x + gx, c1.y), grid_col);
+					dl->AddLine(ImVec2(org.x - gx, c0.y), ImVec2(org.x - gx, c1.y), grid_col);
+				}
+				for (float gy = 0.0f; gy <= ch * 0.5f; gy += 32.0f)
+				{
+					dl->AddLine(ImVec2(c0.x, org.y + gy), ImVec2(c1.x, org.y + gy), grid_col);
+					dl->AddLine(ImVec2(c0.x, org.y - gy), ImVec2(c1.x, org.y - gy), grid_col);
+				}
+				const ImU32 cross_col = sherbet::with_alpha(ct.text_dim, 160);
+				dl->AddLine(ImVec2(org.x - 8.0f, org.y), ImVec2(org.x + 8.0f, org.y), cross_col, 1.5f);
+				dl->AddLine(ImVec2(org.x, org.y - 8.0f), ImVec2(org.x, org.y + 8.0f), cross_col, 1.5f);
+
+				// 이동을 못 읽는 게임이면 점이 전부 원점에 겹친다 — 궤적 대신 안내만 낸다.
+				if (!raw_ok2)
+				{
+					const ImVec2 tsz = ImGui::CalcTextSize("\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"); // "발사 기록만 표시 중 — 이 게임에서는 이동을 읽을 수 없어요"
+					dl->AddText(ImVec2(org.x - tsz.x * 0.5f, org.y + 14.0f), sherbet::with_alpha(ct.text_dim, 220),
+						"\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94");
+				}
+				else
+				{
+					// 한 구간을 그린다. 과거 구간은 흐리게, 강조 구간은 진하게.
+					auto draw_segment = [&](const sherbet::spray::segment &s, bool strong) {
+						if (s.shots.empty())
+							return;
+						const ImU32 lc = sherbet::with_alpha(strong ? ct.accent : ct.text_dim, strong ? 230u : 70u);
+						const ImU32 pc = sherbet::with_alpha(strong ? ct.accent2 : ct.text_dim, strong ? 255u : 90u);
+						ImVec2 prev(0.0f, 0.0f);
+						for (std::size_t i = 0; i < s.shots.size(); ++i)
+						{
+							const ImVec2 p(org.x + s.shots[i].x * _sherbet_spray_scale,
+							               org.y + s.shots[i].y * _sherbet_spray_scale);
+							if (i != 0)
+								dl->AddLine(prev, p, lc, strong ? 2.0f : 1.0f);
+							dl->AddCircleFilled(p, strong ? 3.5f : 2.0f, pc);
+							prev = p;
+						}
+						// 마지막 점(= 스프레이가 끝난 자리)에 링 하나 — 일관성은 여기가 얼마나
+						// 겹치는지로 보인다(종료 지점 편차와 같은 이야기).
+						if (strong)
+							dl->AddCircle(prev, 7.0f, sherbet::with_alpha(ct.accent, 200), 0, 1.5f);
+					};
+
+					if (spray_overlay5)
+					{
+						std::size_t drawn = 0;
+						for (std::size_t i = hist.size(); i > 0 && drawn < 5; --i, ++drawn)
+							if (&hist[i - 1] != focus)
+								draw_segment(hist[i - 1], false);
+					}
+					if (focus != nullptr)
+						draw_segment(*focus, true);
+				}
+			}
+			dl->PopClipRect();
+
+			// ── 통계 ──
+			if (focus != nullptr && !focus->shots.empty())
+			{
+				ImGui::Text("\xEB\xB0\x9C\xEC\x88\x98 %d", static_cast<int>(focus->shots.size())); // "발수 %d"
+				float iv = 0.0f;
+				if (sherbet::spray::avg_interval(*focus, iv) && iv > 0.0f)
+				{
+					ImGui::SameLine();
+					ImGui::Text("\xED\x8F\x89\xEA\xB7\xA0 %.0f RPM", 60.0f / iv); // "평균 %.0f RPM"
+				}
+			}
+			// 종료 지점 편차 — 최근 5구간의 마지막 점들이 그 중심에서 떨어진 평균 거리(스펙 §5.2).
+			// 배율을 적용해 화면 픽셀로 보여준다. 구간이 2개 미만이면 아예 표시하지 않는다.
+			float spread = 0.0f;
+			if (raw_ok2 && sherbet::spray::end_spread(hist, 5, spread))
+			{
+				ImGui::SameLine();
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ct.accent), "\xEC\xA2\x85\xEB\xA3\x8C \xEC\xA7\x80\xEC\xA0\x90 \xED\x8E\xB8\xEC\xB0\xA8 %.1fpx", spread * _sherbet_spray_scale); // "종료 지점 편차 %.1fpx"
+			}
+			else if (raw_ok2)
+			{
+				ImGui::TextDisabled("%s", "\xEA\xB5\xAC\xEA\xB0\x84\xEC\x9D\xB4 2\xEA\xB0\x9C \xEC\x9D\xB4\xEC\x83\x81\xEC\x9D\xB4\xEC\x96\xB4\xEC\x95\xBC \xED\x8E\xB8\xEC\xB0\xA8\xEA\xB0\x80 \xEB\x82\x98\xEC\x99\x80\xEC\x9A\x94"); // "구간이 2개 이상이어야 편차가 나와요"
+			}
+
+			// ── 구간 목록 (최근이 위) ──
+			ImGui::Spacing();
+			ImGui::TextDisabled("%s", "\xEA\xB5\xAC\xEA\xB0\x84 \xEB\xAA\xA9\xEB\xA1\x9D (\xEC\xB5\x9C\xEA\xB7\xBC\xEC\x9D\xB4 \xEC\x9C\x84)"); // "구간 목록 (최근이 위)"
+			if (hist.empty() && cur == nullptr)
+			{
+				ImGui::TextDisabled("%s", "\xEC\x95\x84\xEC\xA7\x81 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xED\x95\x9C \xEB\xB2\x88 \xEC\x8F\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94"); // "아직 기록이 없어요 — 오버레이를 닫고 한 번 쏴 보세요"
+			}
+			else
+			{
+				if (cur != nullptr)
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ct.accent2), ICON_FK_CIRCLE "  \xEC\xA7\x84\xED\x96\x89 \xEC\xA4\x91 \xC2\xB7 %d\xEB\xB0\x9C", static_cast<int>(cur->shots.size())); // "진행 중 · %d발"
+				// 최신이 #1 — 링버퍼가 돌아도 "방금 쏜 것"의 번호가 바뀌지 않는다.
+				for (std::size_t i = hist.size(), n = 1; i > 0; --i, ++n)
+				{
+					const sherbet::spray::segment &s = hist[i - 1];
+					const int idx = static_cast<int>(i - 1);
+					char label[96];
+					float iv = 0.0f;
+					if (sherbet::spray::avg_interval(s, iv))
+						snprintf(label, sizeof(label), "#%d \xC2\xB7 %d\xEB\xB0\x9C \xC2\xB7 %.0fms \xEA\xB0\x84\xEA\xB2\xA9##sprayseg%d", static_cast<int>(n), static_cast<int>(s.shots.size()), iv * 1000.0f, idx); // "#%d · %d발 · %.0fms 간격"
+					else
+						snprintf(label, sizeof(label), "#%d \xC2\xB7 %d\xEB\xB0\x9C##sprayseg%d", static_cast<int>(n), static_cast<int>(s.shots.size()), idx); // "#%d · %d발"
+					if (ImGui::Selectable(label, spray_sel == idx))
+						spray_sel = (spray_sel == idx) ? -1 : idx; // 다시 누르면 선택 해제
+				}
+				ImGui::TextDisabled("%s", "\xED\x81\xB4\xEB\xA6\xAD\xED\x95\x98\xEB\xA9\xB4 \xEA\xB7\xB8 \xEA\xB5\xAC\xEA\xB0\x84\xEB\xA7\x8C \xEC\xA7\x84\xED\x95\x98\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94"); // "클릭하면 그 구간만 진하게 보여요"
+			}
+		}
+		ImGui::Spacing();
+	}
+
 	// ── 커스텀 조준점 (설정 탭에서 이동) ─────────────────────────────────────
 	if (ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90")) // "커스텀 조준점"
 	{
