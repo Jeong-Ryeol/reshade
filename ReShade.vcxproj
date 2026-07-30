@@ -786,6 +786,7 @@
     <ClInclude Include="source\sherbet_auth.hpp" />
     <ClInclude Include="source\sherbet_auth_core.hpp" />
     <ClInclude Include="source\sherbet_content.hpp" />
+    <ClInclude Include="source\sherbet_crosshair.hpp" />
     <ClInclude Include="source\sherbet_http.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
     <ClInclude Include="source\sherbet_motion.hpp" />

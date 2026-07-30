@@ -65,7 +65,7 @@ jobs:
           # -Ideps/imgui 는 전부에 붙인다(안 쓰는 스위트에는 무해하다).
           for t in sherbet_auth_test sherbet_update_test sherbet_swap_sim \
                    sherbet_content_json_test sherbet_theme_json_test \
-                   sherbet_spray_test sherbet_motion_test; do
+                   sherbet_spray_test sherbet_motion_test sherbet_crosshair_test; do
             echo "=== $t ==="
             clang++ -std=c++17 -Wall -Isource -Ideps/imgui "tools/$t.cpp" -o "$RUNNER_TEMP/$t"
             # set -e 가 켜져 있으므로 종료코드 != 0 이면 여기서 잡이 실패한다.
@@ -84,7 +84,7 @@ jobs:
           # 여기서도 -DNDEBUG 금지 — assert 가 사라지면 세니타이저만 남는다.
           for t in sherbet_auth_test sherbet_update_test sherbet_swap_sim \
                    sherbet_content_json_test sherbet_theme_json_test \
-                   sherbet_spray_test sherbet_motion_test; do
+                   sherbet_spray_test sherbet_motion_test sherbet_crosshair_test; do
             echo "=== $t (asan+ubsan) ==="
             clang++ -std=c++17 -Wall -Wextra \
               -fsanitize=address,undefined -fno-sanitize-recover=all \
