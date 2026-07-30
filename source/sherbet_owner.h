@@ -46,7 +46,7 @@
 //    tools/update_version.ps1 의 앵커 없는 -match 에 걸려 res/version.h 를 탈취한다.
 // ⚠️ 이 값과 태그 접미사가 다르면 release.yml 이 빌드를 실패시킨다.
 #ifndef SHERBET_VERSION
-#define SHERBET_VERSION "1.3.0"
+#define SHERBET_VERSION "1.3.1"
 #endif
 
 namespace sherbet
