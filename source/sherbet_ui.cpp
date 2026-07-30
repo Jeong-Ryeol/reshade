@@ -240,6 +240,27 @@ namespace sherbet
 		return pressed;
 	}
 
+	void draw_crosshair_preview(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max,
+		const crosshair::layer &layer, std::vector<crosshair::quad> &scratch)
+	{
+		// 좌표는 정수 픽셀이어야 한다(§3.1) — 서브픽셀로 그리면 텍셀 블렌딩이 생겨
+		// 발로란트의 하드 에지가 사라지고, 카드 미리보기와 실제 화면이 달라 보인다.
+		const int cx = static_cast<int>(std::floor((min.x + max.x) * 0.5f));
+		const int cy = static_cast<int>(std::floor((min.y + max.y) * 0.5f));
+		// 오차 애니메이션은 0 — 진열대는 '휴지 상태' 를 보여준다(카드마다 흔들리면 못 고른다).
+		crosshair::build_crosshair(layer, cx, cy, 0.0f, 0.0f, scratch);
+
+		// 카드보다 큰 조준점은 잘라낸다. 축소하지 않는 이유: 실제 픽셀 크기가 조준점
+		// 선택의 핵심 정보이고, 축소하면 1px 선이 사라져 전혀 다른 물건으로 보인다.
+		dl->PushClipRect(min, max, true);
+		for (const crosshair::quad &q : scratch)
+			dl->AddRectFilled(
+				ImVec2(static_cast<float>(q.r.x), static_cast<float>(q.r.y)),
+				ImVec2(static_cast<float>(q.r.x + q.r.w), static_cast<float>(q.r.y + q.r.h)),
+				IM_COL32(q.color.r, q.color.g, q.color.b, q.alpha), 0.0f);
+		dl->PopClipRect();
+	}
+
 	bool rail_button(const char *id, const char *icon, bool active)
 	{
 		const theme &t = active_theme();

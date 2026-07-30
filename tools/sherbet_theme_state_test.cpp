@@ -54,6 +54,7 @@ static void restart()
 	clear_entitlements();
 	s_features.clear();
 	s_content_presets.clear();
+	s_content_crosshairs.clear();
 	s_active_id = "mint";
 	s_desired_id = "mint";
 	auth::g_auth_enabled = true;
@@ -233,6 +234,29 @@ static void test_entitlement_and_features_rebuild()
 	assert(!is_unlocked("deepdark"));
 }
 
+// ── 8. 조준점 마켓도 페치마다 재구성된다 ────────────────────────────────────────
+// (파싱 규칙 자체는 tools/sherbet_xhmarket_test.cpp 가 다 본다. 여기서 확인하는 것은
+//  **apply_content 라는 실제 진입점**을 지났을 때 목록이 갈리는가 하나다.)
+static void test_crosshair_market_rebuild()
+{
+	restart();
+	assert(content_crosshairs().empty());
+
+	apply_content("{\"themes\":[],\"presets\":[],\"crosshairs\":["
+		"{\"id\":\"x1\",\"display_name\":\"\xEC\xA0\x90\",\"code\":\"0;P;d;1;0b;0;1b;0\"},"
+		"{\"id\":\"x2\",\"display_name\":\"\xEC\x9C\xA0\xEB\xA3\x8C\",\"unlocked\":false,\"code\":\"0;P;c;5\"},"
+		"{\"id\":\"x3\",\"display_name\":\"\xEA\xB9\xA8\xEC\xA7\x90\",\"code\":\"9;bad\"}]}");
+	const std::vector<xhmarket::entry> &v = content_crosshairs();
+	assert(v.size() == 3);
+	assert(v[0].applicable());
+	assert(v[1].state() == xhmarket::entry_state::locked && v[1].code.empty()); // 잠긴 코드는 안 들고 있다
+	assert(v[2].state() == xhmarket::entry_state::broken && !v[2].applicable());
+
+	// 재페치(권한 만료 등) → 목록이 새로 만들어진다. 옛 항목이 남아 적용되면 안 된다.
+	apply_content(kNoThemes);
+	assert(content_crosshairs().empty());
+}
+
 int main()
 {
 	test_builtin_applies_immediately();
@@ -242,6 +266,7 @@ int main()
 	test_user_pick_updates_desired();
 	test_vanished_active_falls_back_without_clobbering_desired();
 	test_entitlement_and_features_rebuild();
+	test_crosshair_market_rebuild();
 	std::puts("sherbet_theme_state_test: ALL PASS");
 	return 0;
 }

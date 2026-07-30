@@ -9,6 +9,7 @@
 #include <vector>
 #include "sherbet_theme.hpp"
 #include "sherbet_content_json.hpp"
+#include "sherbet_xhmarket.hpp"
 
 namespace sherbet
 {
@@ -36,6 +37,9 @@ namespace sherbet
 	void clear_entitlements();            // 재페치 전 초기화
 	void apply_content(const std::string &body); // /content/me 응답(JSON) 반영
 	const std::vector<content_item> &content_presets(); // 서버가 내려준 프리셋 목록(마켓 UI)
+	// 서버가 내려준 조준점 목록(마켓 UI). 잠긴 항목은 코드 없이 이름만 들어 있다.
+	// /content/me 가 도착할 때 한 번 파싱되고, 그 뒤로는 매 프레임 읽기만 한다.
+	const std::vector<xhmarket::entry> &content_crosshairs();
 
 	// 테마 색/라운드/간격을 ImGui 스타일에 적용 (매 프레임 또는 테마 변경 시 호출)
 	void apply_style(ImGuiStyle &style, const theme &t);
@@ -57,4 +61,11 @@ namespace sherbet
 	bool pill_button(const char *label, bool active);
 	// 네비게이션 레일용 44x44 라운드 아이콘 버튼(활성 시 accent 배경+글로우). 클릭 시 true.
 	bool rail_button(const char *id, const char *icon, bool active);
+
+	// 마켓 카드 안 조준점 미리보기. 사각형 [min,max] 안 중앙에 **실제 픽셀 크기**로 그리고
+	// 넘치면 잘라낸다. 기하는 전부 crosshair::build_crosshair 가 계산한다 —
+	// 여기에는 산술이 없다(에임 탭 미리보기와 같은 규칙).
+	// scratch 는 호출자가 들고 있는 재사용 버퍼다(카드마다 새로 할당하지 않기 위해).
+	void draw_crosshair_preview(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max,
+		const crosshair::layer &layer, std::vector<crosshair::quad> &scratch);
 }

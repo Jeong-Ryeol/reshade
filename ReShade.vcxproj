@@ -789,6 +789,7 @@
     <ClInclude Include="source\sherbet_content.hpp" />
     <ClInclude Include="source\sherbet_crosshair.hpp" />
     <ClInclude Include="source\sherbet_http.hpp" />
+    <ClInclude Include="source\sherbet_json.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
     <ClInclude Include="source\sherbet_motion.hpp" />
     <ClInclude Include="source\sherbet_nodelock.hpp" />
@@ -798,6 +799,7 @@
     <ClInclude Include="source\sherbet_ui.hpp" />
     <ClInclude Include="source\sherbet_update.hpp" />
     <ClInclude Include="source\sherbet_update_core.hpp" />
+    <ClInclude Include="source\sherbet_xhmarket.hpp" />
     <ClInclude Include="source\state_block.hpp" />
     <ClInclude Include="source\vulkan\vulkan_hooks.hpp" />
     <ClInclude Include="source\vulkan\vulkan_impl_command_list.hpp" />

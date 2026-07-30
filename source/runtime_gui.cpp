@@ -434,6 +434,14 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "ValKeyRight", _sherbet_val_key_right);
 	  config.get("SHERBET", "ValKeyWalk", _sherbet_val_key_walk);
 	  config.get("SHERBET", "ValKeyPause", _sherbet_val_key_pause);
+	  // 조준점 마켓 — 내 조준점 슬롯과 되돌리기 스냅샷. 인코딩/상한은 sherbet_xhmarket.hpp 가
+	  // 전부 판정한다(맥에서 단위테스트되는 층). 여기서는 문자열 한 줄을 주고받을 뿐이다.
+	  { std::string xh_locals;
+	    config.get("SHERBET", "ValLocals", xh_locals);
+	    _sherbet_xh_locals = sherbet::xhmarket::decode_locals(xh_locals);
+	    _sherbet_xh_locals_dirty = true; // 설정을 다시 읽으면 카드도 다시 만든다
+	    config.get("SHERBET", "ValUndoCode", _sherbet_xh_session.undo_code);
+	    config.get("SHERBET", "ValAppliedId", _sherbet_xh_session.applied_id); }
 	  // 커스텀 배경 이미지 설정(custompicture 기능 전용)
 	  config.get("SHERBET", "BgOn", _sherbet_bg_on);
 	  config.get("SHERBET", "BgFile", _sherbet_bg_file);
@@ -587,6 +595,9 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "ValKeyRight", _sherbet_val_key_right);
 	config.set("SHERBET", "ValKeyWalk", _sherbet_val_key_walk);
 	config.set("SHERBET", "ValKeyPause", _sherbet_val_key_pause);
+	config.set("SHERBET", "ValLocals", sherbet::xhmarket::encode_locals(_sherbet_xh_locals));
+	config.set("SHERBET", "ValUndoCode", _sherbet_xh_session.undo_code);
+	config.set("SHERBET", "ValAppliedId", _sherbet_xh_session.applied_id);
 	config.set("SHERBET", "BgOn", _sherbet_bg_on);
 	config.set("SHERBET", "BgFile", _sherbet_bg_file);
 	config.set("SHERBET", "BgOpacity", _sherbet_bg_opacity);
@@ -3517,9 +3528,13 @@ void reshade::runtime::draw_gui_aim()
 		static int val_msg_kind = 0; // 0=없음 1=성공 2=실패 3=경고
 		static std::string val_msg;
 
-		if (!val_code_fresh)
+		// _sherbet_val_code_dirty 는 마켓에서 조준점을 적용했다는 신호다. 이걸 안 보면
+		// 두 탭이 서로 다른 코드를 보여 주고, 그 상태에서 [코드 복사]를 누르면 화면에
+		// 그려지는 것과 다른 코드가 복사된다.
+		if (!val_code_fresh || _sherbet_val_code_dirty)
 		{
 			val_code_fresh = true;
+			_sherbet_val_code_dirty = false;
 			const size_t n = _sherbet_val_code.size() < sizeof(val_code_buf) - 1 ? _sherbet_val_code.size() : sizeof(val_code_buf) - 1;
 			std::memcpy(val_code_buf, _sherbet_val_code.c_str(), n);
 			val_code_buf[n] = '\0';
@@ -3599,6 +3614,15 @@ void reshade::runtime::draw_gui_aim()
 				val_msg_kind = 1;
 				val_msg = "\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEA\xB8\xB0\xEB\xB3\xB8 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94" /* 발로란트 기본 조준점으로 되돌렸어요 */;
 			}
+			// 코드를 직접 구할 필요 없이 진열대에서 고르는 길. 여기서 안내하지 않으면
+			// 마켓 안에 조준점이 있다는 것을 아무도 모른다(마켓 = 테마라는 인식이 이미 있다).
+			ImGui::SameLine();
+			if (ImGui::Button(ICON_FK_SHOPPING_CART "  " "\xEB\xA7\x88\xEC\xBC\x93\xEC\x97\x90\xEC\x84\x9C \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEA\xB3\xA0\xEB\xA5\xB4\xEA\xB8\xB0" /* 마켓에서 조준점 고르기 */))
+			{
+				_sherbet_tab = 1;          // 「마켓」 탭
+				_sherbet_market_seg = 2;   // 조준점 세그먼트
+			}
+			ImGui::TextDisabled("%s", "\xE3\x80\x8C\xEB\xA7\x88\xEC\xBC\x93\xE3\x80\x8D \xED\x83\xAD > \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA8\xEB\x9D\xBC \xEC\x93\xB0\xEA\xB1\xB0\xEB\x82\x98, \xEC\xA7\x80\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4 \xEB\x91\x98 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94" /* 「마켓」 탭 > 조준점 에서 골라 쓰거나, 지금 조준점을 저장해 둘 수 있어요 */);
 
 			if (val_msg_kind != 0 && !val_msg.empty())
 			{
@@ -3854,6 +3878,10 @@ void reshade::runtime::draw_gui_aim()
 			_sherbet_val_code = xhr::generate_code(_sherbet_val_profile);
 			val_code_fresh = false; // 입력 상자를 "Sherbet 이 이해한 코드"로 갱신
 			modified = true;
+			// 사용자가 직접 만진 코드는 더 이상 마켓 항목이 아니다. 이걸 알려 주지 않으면
+			// 다음에 마켓 카드를 눌렀을 때 되돌리기 스냅샷이 갱신되지 않아 **방금 맞춘 값이
+			// 사라진다**(설계: sherbet_xhmarket.hpp 의 session).
+			sherbet::xhmarket::note_user_edit(_sherbet_xh_session);
 		}
 		ImGui::Spacing();
 	}
@@ -5452,6 +5480,274 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 
 	ImGui::PopTextWrapPos();
 }
+// SHERBET: 조준점 마켓 — 「마켓」 탭의 세 번째 세그먼트.
+//
+// 왜 새 탭이 아니라 마켓 안인가: 진열·역할 잠금·「내 전용 불러오기」가 테마/프리셋과
+// 완전히 같은 물건이다. 새 탭을 만들면 같은 UI 를 두 벌 유지하게 된다.
+//
+// **판정은 이 함수에 한 줄도 없다.** 무엇이 적용 가능한지(잠김/코드 불량), 되돌리기가
+// 무엇을 가리키는지는 전부 sherbet_xhmarket.hpp 가 정하고 tools/sherbet_xhmarket_test.cpp
+// 가 검증한다. 여기는 그 결과를 그리고 클릭을 전달할 뿐이다 — 서버가 보낸 코드가
+// 신뢰할 수 없는 입력이기 때문에, 판정이 UI 로 새면 맥에서 검증할 방법이 사라진다.
+//
+// 비용: 이 함수는 마켓 탭의 조준점 세그먼트가 열려 있을 때만 호출된다. 카드 미리보기는
+// 카드마다 build_crosshair 를 한 번 부르는데(작은 사각형 수십 개) 버퍼를 재사용하므로
+// 프레임당 할당이 없다. 서버 목록은 /content/me 도착 시 한 번 파싱된 것을 읽기만 하고,
+// 로컬 목록은 슬롯이 바뀔 때만 다시 만든다.
+void reshade::runtime::draw_gui_crosshair_market()
+{
+	namespace xm = sherbet::xhmarket;
+
+	static const char *const kXhIntro = "\xEB\xA7\x88\xEC\x9D\x8C\xEC\x97\x90 \xEB\x93\x9C\xEB\x8A\x94 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEA\xB3\xA8\xEB\x9D\xBC \xEB\xB0\x94\xEB\xA1\x9C \xEC\xA0\x81\xEC\x9A\xA9\xED\x95\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEA\xB3\xB5\xEC\x9C\xA0 \xEC\xBD\x94\xEB\x93\x9C \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4."; // "마음에 드는 조준점을 골라 바로 적용해요 — 발로란트 공유 코드 그대로입니다."
+	static const char *const kXhUndoTitle = "\xEB\x90\x98\xEB\x8F\x8C\xEB\xA6\xAC\xEA\xB8\xB0"; // "되돌리기"
+	static const char *const kXhUndoDesc = "\xEB\xA7\x88\xEC\xBC\x93\xEC\x97\x90\xEC\x84\x9C \xEC\xB2\x98\xEC\x9D\x8C \xEC\xA0\x81\xEC\x9A\xA9\xED\x95\x98\xEA\xB8\xB0 \xEC\xA7\x81\xEC\xA0\x84\xEC\x97\x90 \xEC\x93\xB0\xEB\x8D\x98 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEA\xB0\x96\xEA\xB3\xA0 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94. \xEC\xB9\xB4\xEB\x93\x9C\xEB\xA5\xBC \xEC\x95\x84\xEB\xAC\xB4\xEB\xA6\xAC \xEB\x88\x8C\xEB\x9F\xAC\xEB\xB4\x90\xEB\x8F\x84 \xEC\x9D\xB4 \xEA\xB0\x92\xEC\x9D\x80 \xEB\xB0\x94\xEB\x80\x8C\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."; // "마켓에서 처음 적용하기 직전에 쓰던 조준점을 그대로 갖고 있어요. 카드를 아무리 눌러봐도 이 값은 바뀌지 않습니다."
+	static const char *const kXhUndoBtn = "\xEC\x9B\x90\xEB\x9E\x98 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA6\xAC\xEA\xB8\xB0"; // "원래 조준점으로 되돌리기"
+	static const char *const kXhMine = "\xEB\x82\xB4 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90"; // "내 조준점"
+	static const char *const kXhSaveBtn = "\xEC\xA7\x80\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\xA0\x80\xEC\x9E\xA5"; // "지금 조준점 저장"
+	static const char *const kXhNameHint = "\xEC\x9D\xB4\xEB\xA6\x84 (\xEB\xB9\x84\xEC\x9A\xB0\xEB\xA9\xB4 \xEC\x9E\x90\xEB\x8F\x99)"; // "이름 (비우면 자동)"
+	static const char *const kXhMineEmpty = "\xEC\xA0\x80\xEC\x9E\xA5\xED\x95\x9C \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xE3\x80\x8C\xEC\x97\x90\xEC\x9E\x84\xE3\x80\x8D \xED\x83\xAD\xEC\x97\x90\xEC\x84\x9C \xEB\xA7\x9E\xEC\xB6\x98 \xEB\x92\xA4 \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\x98\xEB\xA9\xB4 \xEC\x96\xB8\xEC\xA0\x9C\xEB\x93\xA0 \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xAC \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94."; // "저장한 조준점이 없어요. 「에임」 탭에서 맞춘 뒤 여기서 저장하면 언제든 돌아올 수 있어요."
+	static const char *const kXhServer = "\xEB\xB0\x9B\xEC\x9D\x80 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90"; // "받은 조준점"
+	static const char *const kXhServerEmpty = "\xEB\xB0\x9B\xEC\x9D\x80 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEC\x9C\x84 \xE3\x80\x8C\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0\xE3\x80\x8D\xEB\xA1\x9C \xEB\xB0\x9B\xEC\x95\x84\xEC\x9A\x94."; // "받은 조준점이 없어요. 디스코드 로그인 후 위 「내 전용 불러오기」로 받아요."
+	static const char *const kXhApply = "\xEC\xA0\x81\xEC\x9A\xA9"; // "적용"
+	static const char *const kXhInUse = "\xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"; // "사용 중"
+	static const char *const kXhLocked = "\xEC\x9E\xA0\xEA\xB9\x80"; // "잠김"
+	static const char *const kXhBroken = "\xEC\x82\xAC\xEC\x9A\xA9 \xEB\xB6\x88\xEA\xB0\x80"; // "사용 불가"
+	static const char *const kXhLockedTip = "\xEC\x9D\xB4 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x80 \xEC\x95\x84\xEC\xA7\x81 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEB\xA9\xB4 \xEC\x97\xB4\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4"; // "이 조준점은 아직 잠겨 있어요 — 디스코드에서 구매하면 열립니다"
+	static const char *const kXhBrokenTip = "\xEC\x9D\xB4 \xED\x95\xAD\xEB\xAA\xA9\xEC\x9D\x98 \xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xED\x8C\x90\xEB\xA7\xA4\xEC\x9E\x90\xEC\x97\x90\xEA\xB2\x8C \xEC\x95\x8C\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "이 항목의 코드를 읽을 수 없어요 — 판매자에게 알려 주세요"
+	static const char *const kXhSaveFail = "\xEC\xA0\x80\xEC\x9E\xA5\xED\x95\x98\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\xA7\x80\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\xBD\x94\xEB\x93\x9C\xEA\xB0\x80 \xEC\x98\xAC\xEB\xB0\x94\xEB\xA5\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB1\xB0\xEB\x82\x98 \xEC\xB9\xB8\xEC\x9D\xB4 \xEA\xB0\x80\xEB\x93\x9D \xEC\xB0\xBC\xEC\x96\xB4\xEC\x9A\x94"; // "저장하지 못했어요 — 지금 조준점 코드가 올바르지 않거나 칸이 가득 찼어요"
+	static const char *const kXhSaveOk = "\xEB\x82\xB4 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x97\x90 \xEC\xA0\x80\xEC\x9E\xA5\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94"; // "내 조준점에 저장했어요"
+	static const char *const kXhApplied = "\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEC\xA0\x81\xEC\x9A\xA9\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 (\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEB\xAA\xA8\xEB\x93\x9C\xEB\xA1\x9C \xEC\xBC\x9C\xEC\xA7\x91\xEB\x8B\x88\xEB\x8B\xA4)"; // "조준점을 적용했어요 (발로란트 모드로 켜집니다)"
+	static const char *const kXhReverted = "\xEC\x9B\x90\xEB\x9E\x98 \xEC\x93\xB0\xEB\x8D\x98 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94"; // "원래 쓰던 조준점으로 되돌렸어요"
+	static const char *const kXhDelTip = "\xEC\x9D\xB4 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x82\xAD\xEC\xA0\x9C"; // "이 조준점 삭제"
+	static const char *const kXhSlots = "\xEC\xB9\xB8"; // "칸"
+
+	constexpr float kCardW = 172.0f;
+	constexpr float kCardH = 178.0f;
+	constexpr float kPreviewH = 96.0f;
+
+	static int msg_kind = 0; // 0=없음 1=성공 2=실패
+	static std::string msg;
+	static std::vector<sherbet::crosshair::quad> pv_quads; // 카드 미리보기 재사용 버퍼
+	static char name_buf[64] = "";
+	int pending_delete = -1; // 그리는 도중에 목록을 건드리지 않는다
+
+	ImGui::TextWrapped("%s", kXhIntro);
+	ImGui::Spacing();
+
+	// 조준점 하나를 적용한다. **여기서만** 조준점이 바뀐다.
+	auto apply_entry = [&](const xm::entry &e) {
+		if (!e.applicable())
+			return;
+		sherbet::crosshair::profile tmp;
+		// 매니페스트 파싱 때 이미 통과한 코드지만 적용 직전에 한 번 더 본다.
+		// 실패하면 아무것도 바꾸지 않고 나간다 — '절반 적용' 이 구조적으로 불가능해진다.
+		if (!sherbet::crosshair::parse_code(e.code, tmp).ok())
+			return;
+		std::string code;
+		if (!xm::apply(_sherbet_xh_session, e, _sherbet_val_code, code))
+			return;
+		_sherbet_val_profile = tmp;
+		_sherbet_val_code = code;
+		_sherbet_val_on = true;         // 골랐으면 켜진다 — 한 번 클릭으로 끝나야 한다
+		_sherbet_crosshair_on = false;  // 클래식과 같이 켜면 조준점이 두 개 겹쳐 보인다
+		_sherbet_val_code_dirty = true; // 「에임」 탭 입력상자도 같은 코드를 보여주게
+		msg_kind = 1;
+		msg = kXhApplied;
+		save_config();
+	};
+
+	// 카드 한 장. local_index >= 0 이면 삭제 버튼이 붙는다(내 조준점).
+	auto draw_card = [&](const xm::entry &e, int local_index) {
+		const sherbet::theme &t = sherbet::active_theme();
+		const bool in_use = (_sherbet_xh_session.applied_id == e.id);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(t.panel));
+		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(in_use ? t.accent : t.border));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, in_use ? 2.0f : 1.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+		ImGui::BeginChild(e.id.c_str(), ImVec2(kCardW, kCardH), ImGuiChildFlags_Borders,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		{
+			// ── 미리보기 ──
+			// 공유 코드를 글자로 늘어놓으면 무엇을 고르는지 알 수 없다. 같은 기하 함수로
+			// 카드마다 **실제 픽셀 크기** 그대로 그린다(배경은 게임처럼 어둡게).
+			const float pw = ImGui::GetContentRegionAvail().x;
+			const ImVec2 p0 = ImGui::GetCursorScreenPos();
+			const ImVec2 p1(p0.x + pw, p0.y + kPreviewH);
+			ImGui::Dummy(ImVec2(pw, kPreviewH));
+			ImDrawList *const dl = ImGui::GetWindowDrawList();
+			dl->AddRectFilled(p0, p1, IM_COL32(24, 25, 30, 255), 10.0f);
+			if (e.applicable())
+			{
+				sherbet::draw_crosshair_preview(dl, p0, p1, e.parsed.primary, pv_quads);
+			}
+			else
+			{
+				// 잠김/불량은 그릴 조준점이 없다 — 이유를 아이콘으로 말한다(빈 칸 금지).
+				const char *const icon = (e.state() == xm::entry_state::locked) ? ICON_FK_LOCK : ICON_FK_WARNING;
+				const ImVec2 ts = ImGui::CalcTextSize(icon);
+				dl->AddText(ImVec2((p0.x + p1.x - ts.x) * 0.5f, (p0.y + p1.y - ts.y) * 0.5f),
+					sherbet::with_alpha(t.text_dim, 220), icon);
+			}
+
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted(e.name.c_str());
+			ImGui::PopTextWrapPos();
+			if (!e.tag.empty() || !e.author.empty())
+				ImGui::TextDisabled("%s%s%s", e.tag.c_str(),
+					(!e.tag.empty() && !e.author.empty()) ? " \xC2\xB7 " : "", e.author.c_str());
+
+			// 액션 줄은 카드 아래에 고정한다 — 이름이 두 줄이 돼도 버튼 위치가 흔들리지 않게.
+			ImGui::SetCursorPosY(kCardH - 10.0f - ImGui::GetFrameHeight());
+			switch (e.state())
+			{
+			case xm::entry_state::ready:
+				if (in_use)
+					ImGui::TextDisabled("%s  %s", ICON_FK_OK, kXhInUse);
+				else if (sherbet::pill_button(kXhApply, false))
+					apply_entry(e);
+				break;
+			case xm::entry_state::locked:
+				ImGui::TextDisabled("%s  %s", ICON_FK_LOCK, kXhLocked);
+				ImGui::SetItemTooltip("%s", kXhLockedTip);
+				break;
+			case xm::entry_state::broken:
+				ImGui::TextDisabled("%s  %s", ICON_FK_WARNING, kXhBroken);
+				ImGui::SetItemTooltip("%s", kXhBrokenTip);
+				break;
+			}
+			if (local_index >= 0)
+			{
+				ImGui::SameLine();
+				if (ImGui::SmallButton(ICON_FK_TRASH))
+					pending_delete = local_index;
+				ImGui::SetItemTooltip("%s", kXhDelTip);
+			}
+		}
+		ImGui::EndChild();
+		ImGui::PopStyleVar(3);
+		ImGui::PopStyleColor(2);
+	};
+
+	// 카드를 창 폭에 맞춰 줄바꿈하며 깐다.
+	auto draw_grid = [&](const std::vector<xm::entry> &list, bool local) {
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		const float avail = ImGui::GetContentRegionAvail().x;
+		int per_row = static_cast<int>((avail + spacing) / (kCardW + spacing));
+		if (per_row < 1)
+			per_row = 1;
+		for (std::size_t i = 0; i < list.size(); ++i)
+		{
+			if (static_cast<int>(i) % per_row != 0)
+				ImGui::SameLine();
+			draw_card(list[i], local ? static_cast<int>(i) : -1);
+		}
+	};
+
+	// ── 되돌리기 ─────────────────────────────────────────────────────────
+	// 카드를 눌러보다 자기 조준점을 잃는 것이 이 기능의 최악의 결과다. 스냅샷이 있는
+	// 동안은 맨 위에 계속 보여 준다(어디에 숨겨 두면 없는 것과 같다).
+	if (xm::can_revert(_sherbet_xh_session))
+	{
+		sherbet::begin_card("##xh_undo");
+		ImGui::Text("%s  %s", ICON_FK_UNDO, kXhUndoTitle);
+		ImGui::TextDisabled("%s", kXhUndoDesc);
+		if (sherbet::pill_button(kXhUndoBtn, false))
+		{
+			sherbet::crosshair::profile tmp;
+			// 스냅샷은 설정 파일에 저장돼 있어 손으로 고쳐졌을 수 있다.
+			// 파싱에 성공할 때만 소비한다 — 실패하면 못 쓰는 스냅샷을 버리고 알린다.
+			if (sherbet::crosshair::parse_code(_sherbet_xh_session.undo_code, tmp).ok())
+			{
+				std::string code;
+				if (xm::revert(_sherbet_xh_session, code))
+				{
+					_sherbet_val_profile = tmp;
+					_sherbet_val_code = code;
+					_sherbet_val_code_dirty = true;
+					msg_kind = 1;
+					msg = kXhReverted;
+					save_config();
+				}
+			}
+			else
+			{
+				_sherbet_xh_session.undo_code.clear();
+				msg_kind = 2;
+				msg = kXhBrokenTip;
+				save_config();
+			}
+		}
+		sherbet::end_card();
+		ImGui::Spacing();
+	}
+
+	// ── 내 조준점 ────────────────────────────────────────────────────────
+	ImGui::Text("%s  %s", ICON_FK_FLOPPY, kXhMine);
+	ImGui::SameLine();
+	ImGui::TextDisabled("%d / %d %s", static_cast<int>(_sherbet_xh_locals.size()),
+		static_cast<int>(xm::kMaxLocals), kXhSlots);
+	ImGui::SetNextItemWidth(220.0f);
+	ImGui::InputTextWithHint("##xh_name", kXhNameHint, name_buf, sizeof(name_buf));
+	ImGui::SameLine();
+	if (ImGui::Button(kXhSaveBtn))
+	{
+		std::string nm = name_buf;
+		if (nm.empty())
+			nm = std::string(kXhMine) + " " + std::to_string(_sherbet_xh_locals.size() + 1);
+		// add_local 이 코드 유효성과 칸 수를 함께 판정한다(UI 는 조건을 다시 쓰지 않는다).
+		if (xm::add_local(_sherbet_xh_locals, nm, _sherbet_val_code))
+		{
+			name_buf[0] = '\0';
+			_sherbet_xh_locals_dirty = true;
+			msg_kind = 1;
+			msg = kXhSaveOk;
+			save_config();
+		}
+		else
+		{
+			msg_kind = 2;
+			msg = kXhSaveFail;
+		}
+	}
+
+	if (msg_kind != 0 && !msg.empty())
+	{
+		const ImVec4 c = (msg_kind == 2) ? ImVec4(0.95f, 0.42f, 0.42f, 1.0f) : ImVec4(0.36f, 0.86f, 0.45f, 1.0f);
+		ImGui::PushStyleColor(ImGuiCol_Text, c);
+		ImGui::TextWrapped("%s  %s", (msg_kind == 2) ? ICON_FK_CANCEL : ICON_FK_OK, msg.c_str());
+		ImGui::PopStyleColor();
+	}
+	ImGui::Spacing();
+
+	if (_sherbet_xh_locals_dirty)
+	{
+		_sherbet_xh_locals_dirty = false;
+		_sherbet_xh_local_cards = xm::local_entries(_sherbet_xh_locals);
+	}
+	if (_sherbet_xh_local_cards.empty())
+		ImGui::TextDisabled("%s", kXhMineEmpty);
+	else
+		draw_grid(_sherbet_xh_local_cards, true);
+	ImGui::Spacing();
+
+	// ── 받은 조준점(서버) ────────────────────────────────────────────────
+	ImGui::Separator();
+	ImGui::Text("%s  %s", ICON_FK_SHOPPING_CART, kXhServer);
+	const std::vector<xm::entry> &server_list = sherbet::content_crosshairs();
+	if (server_list.empty())
+		ImGui::TextDisabled("%s", kXhServerEmpty);
+	else
+		draw_grid(server_list, false);
+
+	// 그리기가 끝난 뒤에 삭제한다 — 그리는 도중에 목록을 줄이면 카드가 반쯤 그려진다.
+	if (pending_delete >= 0 && xm::remove_local(_sherbet_xh_locals, static_cast<std::size_t>(pending_delete)))
+	{
+		_sherbet_xh_locals_dirty = true;
+		save_config();
+	}
+}
+
 void reshade::runtime::draw_gui_market()
 {
 	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
@@ -5459,14 +5755,18 @@ void reshade::runtime::draw_gui_market()
 	ImGui::PopFont();
 	ImGui::Spacing();
 
-	// 세그먼트: 테마 마켓 / 프리셋 마켓
-	static int seg = 0;
+	// 세그먼트: 테마 마켓 / 프리셋 마켓 / 조준점 마켓
+	// ⚠️ 세그먼트 번호는 「에임」 탭의 「마켓에서 조준점 고르기」 버튼이 직접 세팅하므로
+	//    (_sherbet_market_seg = 2) 번호를 재배치하지 않는다.
+	int &seg = _sherbet_market_seg;
 	if (sherbet::pill_button("\xED\x85\x8C\xEB\xA7\x88 \xEB\xA7\x88\xEC\xBC\x93", seg == 0)) seg = 0; // "테마 마켓"
 	ImGui::SameLine();
 	if (sherbet::pill_button("\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B \xEB\xA7\x88\xEC\xBC\x93", seg == 1)) seg = 1; // "프리셋 마켓"
+	ImGui::SameLine();
+	if (sherbet::pill_button("\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEB\xA7\x88\xEC\xBC\x93", seg == 2)) seg = 2; // "조준점 마켓"
 	ImGui::Spacing();
 
-	// "내 전용 불러오기" 버튼 — 테마/프리셋 두 세그먼트 공용. 페치 중이면 클릭을 막고
+	// "내 전용 불러오기" 버튼 — 세 세그먼트 공용. 페치 중이면 클릭을 막고
 	// 로딩 표시로 바꿔, 되는지 안 되는지 헷갈려 연타하는 것을 방지한다.
 	auto sherbet_fetch_button = [&]() {
 		if (!(sherbet::auth::enabled() && _sherbet_auth.is_authed()))
@@ -5533,6 +5833,13 @@ void reshade::runtime::draw_gui_market()
 			sherbet::end_card();
 			ImGui::PopID();
 		}
+	}
+	else if (seg == 2)
+	{
+		// 조준점 마켓 — 항목이 공유 코드 한 줄이라 파일 다운로드가 없다.
+		// 페치 버튼은 여기서도 같은 것을 쓴다(/content/me 하나로 테마·프리셋·조준점이 전부 온다).
+		sherbet_fetch_button();
+		draw_gui_crosshair_market();
 	}
 	else
 	{

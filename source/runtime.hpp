@@ -11,6 +11,7 @@
 #include "sherbet_auth.hpp"
 #include "sherbet_spray.hpp"
 #include "sherbet_crosshair.hpp"
+#include "sherbet_xhmarket.hpp"
 #include "sherbet_motion.hpp"
 #include <atomic>
 #include <thread>
@@ -403,6 +404,23 @@ namespace reshade
 		unsigned int _sherbet_val_key_walk[4] = { 0x10, 0, 0, 0 }; // VK_SHIFT
 		unsigned int _sherbet_val_key_pause[4] = { 0, 0, 0, 0 };   // 기본 없음
 
+		// SHERBET: 조준점 마켓(「마켓」 탭 세 번째 세그먼트). 서버 항목은 sherbet::content_crosshairs()
+		// 가 들고 있고, 여기 있는 것은 **내 것** 과 **되돌리기** 뿐이다.
+		//
+		// 되돌리기 규칙(sherbet_xhmarket.hpp): 마켓에서 처음 적용할 때 그 직전의 코드를
+		// 한 번만 스냅샷한다. 카드를 몇 장을 눌러도 undo 는 "내가 튜닝하던 것" 을 가리킨다.
+		// 스냅샷과 '지금 적용 중인 항목' 은 설정에 저장돼 재시작 후에도 되돌릴 수 있다.
+		sherbet::xhmarket::session _sherbet_xh_session;
+		std::vector<sherbet::xhmarket::local_slot> _sherbet_xh_locals; // 내 조준점 슬롯
+		// 카드로 만든 로컬 슬롯(코드 파싱 결과 포함). 슬롯이 바뀔 때만 다시 만든다 —
+		// 매 프레임 parse_code 를 64번 돌릴 이유가 없다.
+		std::vector<sherbet::xhmarket::entry> _sherbet_xh_local_cards;
+		bool _sherbet_xh_locals_dirty = true;
+		// 마켓에서 코드를 적용하면 「에임」 탭의 공유 코드 입력상자도 갱신돼야 한다
+		// (두 탭이 서로 다른 코드를 보여 주면 어느 쪽이 진짜인지 알 수 없다).
+		bool _sherbet_val_code_dirty = false;
+		int _sherbet_market_seg = 0; // 0=테마 1=프리셋 2=조준점 (저장 안 함 — 세션 한정)
+
 		// SHERBET: 커스텀 배경 이미지 — 오버레이 창 배경을 사용자 사진으로. 'custompicture' 기능 구매자 전용.
 		api::resource _sherbet_bg_tex = {};
 		api::resource_view _sherbet_bg_srv = {};
@@ -551,6 +569,7 @@ namespace reshade
 		void draw_gui_log();
 		void draw_gui_about();
 		void draw_gui_market();
+		void draw_gui_crosshair_market(); // 「마켓」 탭의 조준점 세그먼트
 #if RESHADE_ADDON
 		void draw_gui_addons();
 #endif
