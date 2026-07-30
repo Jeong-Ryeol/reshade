@@ -1162,6 +1162,138 @@ namespace sherbet
 			return p;
 		}
 
+		// §2.6 — import 는 UI 범위 밖 값을 그대로 받는다. 그런 값이 슬라이더에 걸리면
+		// 유저가 그 슬라이더를 **건드리는 순간** 범위 안으로 잘린다. 조용히 잘리면
+		// "코드를 넣었는데 모양이 변했다"가 되므로, UI 가 미리 경고할 수 있게 판정만 내준다.
+		// (§6 #1 의 바깥선 상한이 확정되면 이 경고가 뜨는 빈도도 같이 정해진다.)
+		inline bool exceeds_ui_range(const line &L, const int_range &len, const int_range &off)
+		{
+			return L.thickness < kUiLineThickness.lo || L.thickness > kUiLineThickness.hi ||
+			       L.length < len.lo || L.length > len.hi ||
+			       L.length_vertical < kUiLineLengthVertical.lo || L.length_vertical > kUiLineLengthVertical.hi ||
+			       L.offset < off.lo || L.offset > off.hi ||
+			       L.opacity < kUiOpacity.lo || L.opacity > kUiOpacity.hi ||
+			       L.movement_error_scale < kUiErrorScale.lo || L.movement_error_scale > kUiErrorScale.hi ||
+			       L.firing_error_scale < kUiErrorScale.lo || L.firing_error_scale > kUiErrorScale.hi;
+		}
+
+		inline bool exceeds_ui_range(const layer &L)
+		{
+			if (L.color_index < kUiColorIndex.lo || L.color_index > kUiColorIndex.hi)
+				return true;
+			if (L.outline_thickness < kUiOutlineThickness.lo || L.outline_thickness > kUiOutlineThickness.hi)
+				return true;
+			if (L.center_dot_size < kUiCenterDotSize.lo || L.center_dot_size > kUiCenterDotSize.hi)
+				return true;
+			if (L.outline_opacity < kUiOpacity.lo || L.outline_opacity > kUiOpacity.hi)
+				return true;
+			if (L.center_dot_opacity < kUiOpacity.lo || L.center_dot_opacity > kUiOpacity.hi)
+				return true;
+			return exceeds_ui_range(L.inner, kUiInnerLineLength, kUiInnerLineOffset) ||
+			       exceeds_ui_range(L.outer, kUiOuterLineLength, kUiOuterLineOffset);
+		}
+
+		// ─────────────────────────────────────────────────────────────
+		// §1.6 클래식 → 발로란트 근사 변환
+		//
+		// 완전한 변환은 **불가능하다.** 원·이미지는 발로란트에 없고, 클래식에는 안쪽/바깥
+		// 2계층도 윤곽선도 없으며, 클래식의 화면 오프셋(위치 X/Y)은 발로란트에 대응이 없다.
+		// 그래서 **자동으로 하지 않는다** — 유저가 버튼을 눌렀을 때만 한다. 자동 변환은
+		// 이미지 조준점을 쓰던 구매자의 화면을 빈 화면으로 만들 수 있고, 그게 정확히
+		// 문의가 쏟아지는 시나리오다.
+		//
+		// 결과는 **완전히 정적인 조준점**이다(발사 오차 OFF). 클래식은 절대 움직이지 않았으므로
+		// 오차를 켠 채로 가져오면 "업데이트하니까 조준점이 떨린다"가 된다. 유저가 직접 켠다.
+		// ─────────────────────────────────────────────────────────────
+
+		struct classic_crosshair
+		{
+			int shape = 1;             // 0=커스텀이미지 1=점 2=십자 3=원 4=십자+점
+			float size = 24.0f;        // 도형 '지름'(십자는 전체 길이)
+			float thickness = 2.0f;
+			float gap = 6.0f;          // 십자 중앙 간격
+			float opacity = 1.0f;      // 0..1
+			float color[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // RGBA 0..1
+		};
+
+		// 0..1 실수 → 0..255. 반올림한다(클래식 UI 는 슬라이더라 경계값이 흔하다).
+		inline std::uint8_t byte_from_unit(float v)
+		{
+			const float x = clamp01(v) * 255.0f + 0.5f;
+			return static_cast<std::uint8_t>(x > 255.0f ? 255.0f : x);
+		}
+
+		inline int round_to_int(float v)
+		{
+			if (v <= 0.0f)
+				return 0;
+			return static_cast<int>(v + 0.5f);
+		}
+
+		inline layer layer_from_classic(const classic_crosshair &c)
+		{
+			layer L;
+
+			// 클래식에는 윤곽선이 없다. 켠 채로 가져오면 없던 검은 테두리가 생긴다.
+			L.has_outline = false;
+
+			// 색은 자유 RGB 였으므로 프리셋이 아니라 커스텀 스와치로 옮긴다(c;8 + b;1).
+			L.color_index = kCustomColorIndex;
+			L.use_custom_color = true;
+			L.custom_color.r = byte_from_unit(c.color[0]);
+			L.custom_color.g = byte_from_unit(c.color[1]);
+			L.custom_color.b = byte_from_unit(c.color[2]);
+			L.custom_color.a = 255; // §2.8 알파는 렌더링에 쓰지 않는다 — 아래 opacity 로 간다
+
+			// 클래식의 최종 알파 = 색 알파 × 투명도 슬라이더.
+			const float op = clamp01(c.color[3]) * clamp01(c.opacity);
+
+			const bool draw_cross = (c.shape == 2 || c.shape == 4 || c.shape == 3); // 원은 십자로 근사한다
+			const bool draw_dot = (c.shape == 1 || c.shape == 4);
+
+			// 바깥선은 클래식에 대응이 없다. 항상 끈다(1계층 → 안쪽선 하나).
+			L.outer = make_line(line_kind::outer);
+			L.outer.show_lines = false;
+
+			L.inner = make_line(line_kind::inner);
+			L.inner.show_lines = draw_cross;
+			if (draw_cross)
+			{
+				// 클래식 십자: 중심에서 gap 만큼 띄우고 size/2 까지 그린다 → 팔 길이 = size/2 − gap.
+				L.inner.offset = round_to_int(c.gap);
+				L.inner.length = round_to_int(c.size * 0.5f - c.gap);
+				L.inner.length_vertical = L.inner.length;
+				L.inner.allow_vert_scaling = false;
+				L.inner.thickness = round_to_int(c.thickness);
+				if (L.inner.thickness < 1)
+					L.inner.thickness = 1;
+				L.inner.opacity = op;
+			}
+			// ★ 오차를 전부 끈다. 특히 발사 오차를 켠 채로 두면 §3.4 의 +4px 이 붙어
+			//   "가져왔더니 간격이 4px 벌어졌다"가 된다.
+			L.inner.show_shooting_error = false;
+			L.inner.show_movement_error = false;
+			L.outer.show_shooting_error = false;
+			L.outer.show_movement_error = false;
+
+			L.show_center_dot = draw_dot;
+			if (draw_dot)
+			{
+				// 클래식 점은 반지름 max(1.5, thick) 의 **원**이었다. 발로란트 점은 한 변이 n 인
+				// 정사각형이므로 지름을 한 변으로 본다. 범위(1..6)를 넘지 않게 자른다.
+				const float r = c.thickness < 1.5f ? 1.5f : c.thickness;
+				int n = round_to_int(r * 2.0f);
+				if (n < 1)
+					n = 1;
+				if (n > kUiCenterDotSize.hi)
+					n = kUiCenterDotSize.hi;
+				L.center_dot_size = n;
+				L.center_dot_opacity = op;
+			}
+
+			return L;
+		}
+
 		// ─────────────────────────────────────────────────────────────
 		// 기하 (§3) — "이 파라미터면 어떤 사각형이 어디에 있는가"
 		//

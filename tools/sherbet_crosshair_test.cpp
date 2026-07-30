@@ -1794,6 +1794,158 @@ static void test_geometry_sweep()
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────
+// §1.6 클래식 → 발로란트 변환
+// ─────────────────────────────────────────────────────────────────
+
+// UI 슬라이더 범위를 넘는 값이 들어왔는지 — 넘었으면 UI 가 "슬라이더를 건드리면 잘린다"고
+// 미리 알려야 한다(§2.6 은 import 때 클램프를 금지하므로 이 상태가 정상적으로 생긴다).
+static void test_exceeds_ui_range()
+{
+	assert(!exceeds_ui_range(layer()));                       // 기본값은 당연히 범위 안
+	assert(!exceeds_ui_range(parse_ok("0").primary));
+
+	assert(exceeds_ui_range(parse_ok("0;P;1o;60").primary));  // 바깥선 간격 상한 40
+	assert(exceeds_ui_range(parse_ok("0;P;1l;18").primary));  // 바깥선 길이 상한 10 (§6 #1)
+	assert(exceeds_ui_range(parse_ok("0;P;0l;25").primary));  // 안쪽선 길이 상한 20
+	assert(exceeds_ui_range(parse_ok("0;P;0t;11").primary));
+	assert(exceeds_ui_range(parse_ok("0;P;c;12").primary));
+	assert(exceeds_ui_range(parse_ok("0;P;t;7").primary));    // 윤곽선 두께 상한 6
+	assert(exceeds_ui_range(parse_ok("0;P;z;9").primary));
+	assert(exceeds_ui_range(parse_ok("0;P;0s;5").primary));   // 배율 상한 3
+	assert(exceeds_ui_range(parse_ok("0;P;0a;2").primary));   // 투명도 상한 1
+
+	// 경계값은 범위 안이다
+	assert(!exceeds_ui_range(parse_ok("0;P;0l;20;1l;10;0o;20;1o;40;0t;10;t;6;z;6;c;8;0s;3;1e;3").primary));
+
+	// ⚠️ 윤곽선 두께의 min 은 0 이 아니라 1 이다(§1.2) — 0 은 범위 밖으로 잡혀야 한다
+	assert(exceeds_ui_range(parse_ok("0;P;t;0").primary));
+	assert(exceeds_ui_range(parse_ok("0;P;z;0").primary));
+	// 선 두께의 min 은 0 이 맞다
+	assert(!exceeds_ui_range(parse_ok("0;P;0t;0").primary));
+}
+
+static void test_classic_migration()
+{
+	// 십자: size 24 / gap 6 / thick 2 → 팔 길이 24/2−6 = 6, 오프셋 6, 두께 2
+	{
+		classic_crosshair c;
+		c.shape = 2;
+		c.size = 24.0f;
+		c.gap = 6.0f;
+		c.thickness = 2.0f;
+		c.opacity = 1.0f;
+		c.color[0] = 1.0f; c.color[1] = 0.0f; c.color[2] = 0.5f; c.color[3] = 1.0f;
+
+		const layer L = layer_from_classic(c);
+		assert(L.inner.show_lines);
+		assert(L.inner.offset == 6);
+		assert(L.inner.length == 6);
+		assert(L.inner.length_vertical == 6);
+		assert(L.inner.thickness == 2);
+		assert(!L.inner.allow_vert_scaling);
+		assert(!L.outer.show_lines);   // 클래식은 1계층이다
+		assert(!L.has_outline);        // 없던 검은 테두리가 생기면 안 된다
+		assert(!L.show_center_dot);
+		assert(uses_custom_color(L));
+		assert(resolve_color(L) == (rgb { 255, 0, 128 })); // 0.5 → 128(반올림)
+		assert(L.custom_color.a == 255);
+		assert(feq(L.inner.opacity, 1.0f));
+
+		// ★ 가장 중요한 단언: 휴지 오프셋이 **정확히 클래식의 간격**이어야 한다.
+		//   발사 오차를 켠 채로 가져오면 §3.4 의 +4px 이 붙어 10 이 된다.
+		assert(!L.inner.show_shooting_error && !L.inner.show_movement_error);
+		assert(resting_offset(L.inner, L) == 6);
+
+		// 실제 사각형도 클래식과 같은 자리에서 시작한다
+		quad_list q;
+		build_crosshair(L, 100, 100, 0.0f, 0.0f, q);
+		assert(q.size() == 4); // 윤곽선 없음 → 본체 4개
+		assert(q[0].r.x == 106 && q[0].r.w == 6);
+		assert(q[1].r.x + q[1].r.w == 94);
+	}
+
+	// 점: 반지름 max(1.5, thick) 의 원 → 한 변이 그 지름인 정사각형
+	{
+		classic_crosshair c;
+		c.shape = 1;
+		c.thickness = 2.0f;
+		const layer L = layer_from_classic(c);
+		assert(L.show_center_dot);
+		assert(L.center_dot_size == 4); // round(2 × 2.0)
+		assert(!L.inner.show_lines && !L.outer.show_lines);
+
+		c.thickness = 1.0f; // max(1.5, 1.0) = 1.5 → 3
+		assert(layer_from_classic(c).center_dot_size == 3);
+		c.thickness = 9.0f; // 18 → UI 상한 6 으로 자른다
+		assert(layer_from_classic(c).center_dot_size == kUiCenterDotSize.hi);
+	}
+
+	// 십자+점: 둘 다
+	{
+		classic_crosshair c;
+		c.shape = 4;
+		const layer L = layer_from_classic(c);
+		assert(L.inner.show_lines && L.show_center_dot);
+	}
+
+	// 원은 발로란트에 없다 → 십자로 근사한다(비어 있는 것보다 낫다)
+	{
+		classic_crosshair c;
+		c.shape = 3;
+		const layer L = layer_from_classic(c);
+		assert(L.inner.show_lines);
+	}
+
+	// ⚠️ 이미지 모드는 대응이 **없다** — 변환하면 화면에 아무것도 안 남는다.
+	//    함수는 정직하게 빈 결과를 주고, 그래서 UI 가 이 경우 버튼을 막아야 한다.
+	{
+		classic_crosshair c;
+		c.shape = 0;
+		const layer L = layer_from_classic(c);
+		quad_list q;
+		build_crosshair(L, 100, 100, 0.0f, 0.0f, q);
+		assert(q.empty());
+	}
+
+	// 간격이 크면 팔 길이가 음수가 될 수 있다 → 0 으로 잘리고 그 팔은 안 그려진다
+	{
+		classic_crosshair c;
+		c.shape = 2;
+		c.size = 10.0f;
+		c.gap = 40.0f;
+		const layer L = layer_from_classic(c);
+		assert(L.inner.length == 0);
+		quad_list q;
+		build_crosshair(L, 100, 100, 0.0f, 0.0f, q);
+		assert(q.empty());
+	}
+
+	// 투명도는 색 알파 × 슬라이더
+	{
+		classic_crosshair c;
+		c.shape = 2;
+		c.opacity = 0.5f;
+		c.color[3] = 0.5f;
+		const layer L = layer_from_classic(c);
+		assert(feq(L.inner.opacity, 0.25f));
+	}
+
+	// 변환 결과가 공유 코드로 왕복된다(= 그대로 export/import 가능하다)
+	{
+		classic_crosshair c;
+		c.shape = 4;
+		c.size = 30.0f;
+		c.gap = 4.0f;
+		c.thickness = 3.0f;
+		profile p;
+		p.primary = layer_from_classic(c);
+		const std::string code = generate_code(p);
+		assert_well_formed(code);
+		assert(parse_ok(code) == canonical(p));
+	}
+}
+
 int main()
 {
 	test_defaults();
@@ -1833,6 +1985,8 @@ int main()
 	test_geometry_uses_resolved_color();
 	test_effective_ads();
 	test_geometry_sweep();
+	test_exceeds_ui_range();
+	test_classic_migration();
 	std::printf("sherbet_crosshair: ALL PASS\n");
 	return 0;
 }
