@@ -890,8 +890,8 @@ static void test_lenient_paths()
 		assert(p.primary.color_index == 12);
 		assert(p.primary.center_dot_size == 9);
 		assert(p.primary.outline_thickness == 9);
-		assert(generate_code(p) == "0;P;c;12;t;9;d;0;0l;25;0o;40;1l;18;1o;60" ||
-		       generate_code(p) == "0;P;c;12;t;9;0l;25;0o;40;1l;18;1o;60");
+		// 범위 밖 값은 export 때도 그대로 나간다. z;9 는 중앙점이 꺼져 있어 붕괴로 사라진다.
+		assert(generate_code(p) == "0;P;c;12;t;9;0l;25;0o;40;1l;18;1o;60");
 	}
 	// 배율도 0–3 을 넘겨 받는다
 	{
