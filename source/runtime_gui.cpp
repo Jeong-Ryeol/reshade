@@ -410,6 +410,11 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
 	  config.get("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
 	  _sherbet_crosshair_dirty = true; // 로드 후 이미지 재로딩 예약
+	  // 발로란트 조준점 — 설정 전체가 공유 코드 문자열 하나다(설계 §3.8).
+	  // 코드가 망가져 있으면 파싱이 out 을 건드리지 않으므로 프로필은 전 기본값으로 남는다.
+	  config.get("SHERBET", "ValOn", _sherbet_val_on);
+	  config.get("SHERBET", "ValCode", _sherbet_val_code);
+	  sherbet::crosshair::parse_code(_sherbet_val_code, _sherbet_val_profile);
 	  // 커스텀 배경 이미지 설정(custompicture 기능 전용)
 	  config.get("SHERBET", "BgOn", _sherbet_bg_on);
 	  config.get("SHERBET", "BgFile", _sherbet_bg_file);
@@ -539,6 +544,8 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "CrosshairOpacity", _sherbet_crosshair_opacity);
 	config.set("SHERBET", "CrosshairOffset", _sherbet_crosshair_off);
 	config.set("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
+	config.set("SHERBET", "ValOn", _sherbet_val_on);
+	config.set("SHERBET", "ValCode", _sherbet_val_code);
 	config.set("SHERBET", "BgOn", _sherbet_bg_on);
 	config.set("SHERBET", "BgFile", _sherbet_bg_file);
 	config.set("SHERBET", "BgOpacity", _sherbet_bg_opacity);
@@ -958,7 +965,7 @@ void reshade::runtime::draw_gui()
 	if (!show_splash_window && !show_message_window && !show_statistics_window && !_show_overlay && _preview_texture == std::numeric_limits<size_t>::max()
 		// SHERBET: 커스텀 조준점/반반 비교는 오버레이가 닫혀도 항상 그려야 하므로 early-out 하지 않는다.
 		// (안 그러면 다른 GUI 요소가 없는 유저는 오버레이 닫을 때 조준점이 같이 사라진다)
-		&& !_sherbet_crosshair_on && !_sherbet_compare_active
+		&& !_sherbet_crosshair_on && !_sherbet_val_on && !_sherbet_compare_active
 		// SHERBET: 스프레이 기록도 오버레이가 닫힌 채로 돌아야 한다 — 실제로 총을 쏘는
 		// 순간이 바로 그때다. 여기서 early-out 하면 기록 자체가 한 프레임도 돌지 않아
 		// 「에임」 탭이 영영 0 을 보여준다.
@@ -1297,6 +1304,36 @@ void reshade::runtime::draw_gui()
 			if (draw_dot)
 				xh->AddCircleFilled(c, ImMax(1.5f, th), col);
 		}
+	}
+
+	// SHERBET: 발로란트급 조준점 — 위의 「클래식」 조준점과 별개 토글이고, 같은
+	// ForegroundDrawList 에 오버레이 게이트 바깥에서 그린다(렌더 파이프라인 무영향).
+	//
+	// **여기에는 산술이 없다.** 어떤 사각형이 어디에 있는지는 sherbet_crosshair.hpp 가
+	// 전부 정하고(설계 §3), 이 블록은 그 목록을 순서대로 AddRectFilled 로 옮기기만 한다.
+	// 그래야 좌표 판정 100% 가 맥에서 단위테스트된다(tools/sherbet_crosshair_test.cpp).
+	if (_sherbet_val_on)
+	{
+		// §3.1 좌표계. 모든 좌표는 **정수 픽셀**이다 — 서브픽셀 좌표를 쓰면 텍셀 블렌딩이
+		// 생겨 발로란트의 하드 에지가 사라진다. 절대 픽셀이므로 DPI 스케일을 곱하지 않는다(§0.4).
+		const ImGuiViewport *const val_vp = ImGui::GetMainViewport();
+		const int val_cx = static_cast<int>(std::floor(val_vp->Pos.x + val_vp->Size.x * 0.5f));
+		const int val_cy = static_cast<int>(std::floor(val_vp->Pos.y + val_vp->Size.y * 0.5f));
+
+		// FiveM 에는 ADS/스나이퍼 개념이 없으므로 Primary 만 그린다(설계 §5).
+		// A/S 섹션은 파싱·보관·재출력만 한다. 오차(§4)는 태스크 4 에서 붙는다 — 지금은 0 이다.
+		sherbet::crosshair::build_crosshair(_sherbet_val_profile.primary, val_cx, val_cy, 0.0f, 0.0f, _sherbet_val_quads);
+
+		// §3.1 AddRectFilled(rounding 0) 만 쓴다. 축 정렬 사각형은 ImGui 의 AA 경로를
+		// 타지 않으므로 ImDrawListFlags_AntiAliased* 를 만질 필요가 없다.
+		// AddLine/AddCircle 은 절대 쓰지 않는다 — 좌표 중심 기준 + AA 라 홀수 두께에서
+		// 반픽셀이 생긴다(위 클래식 조준점이 그래서 "비슷한데 다르다").
+		ImDrawList *const val_dl = ImGui::GetForegroundDrawList();
+		for (const sherbet::crosshair::quad &q : _sherbet_val_quads)
+			val_dl->AddRectFilled(
+				ImVec2(static_cast<float>(q.r.x), static_cast<float>(q.r.y)),
+				ImVec2(static_cast<float>(q.r.x + q.r.w), static_cast<float>(q.r.y + q.r.h)),
+				IM_COL32(q.color.r, q.color.g, q.color.b, q.alpha), 0.0f);
 	}
 
 	// SHERBET: 실시간 궤적(토글 ①). 조준점과 같은 ForegroundDrawList 라 오버레이를 열지

@@ -10,6 +10,7 @@
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
 #include "sherbet_spray.hpp"
+#include "sherbet_crosshair.hpp"
 #include "sherbet_motion.hpp"
 #include <atomic>
 #include <thread>
@@ -373,6 +374,18 @@ namespace reshade
 		float _sherbet_crosshair_off[2] = { 0.0f, 0.0f };            // 중앙 기준 오프셋(px)
 		float _sherbet_crosshair_col[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // 도형 색(딸기 핑크 기본)
 		bool _sherbet_crosshair_dirty = false;   // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+
+		// SHERBET: 발로란트급 조준점(신규). 위의 「클래식」 조준점과 **완전히 별개 토글**이다 —
+		// 이미지 조준점을 쓰던 기존 구매자의 설정이 깨지면 안 되므로 기존 멤버는 그대로 둔다.
+		// UI 는 아직 없다(태스크 3). 지금은 ReShade.ini 의 SHERBET/ValOn·ValCode 로만 켠다.
+		//
+		// 설정을 개별 키가 아니라 **공유 코드 문자열 1개**로 저장한다(설계 §3.8):
+		// ini 가 안 붐비고, 유저가 ini 를 그대로 주고받을 수 있으며, 무엇보다 범위 밖 값과
+		// 미지 키를 원문 그대로 보존한다(개별 키로 쪼개면 그 둘이 조용히 사라진다).
+		bool _sherbet_val_on = false;
+		std::string _sherbet_val_code = "0";              // 원문. 이것이 설정의 정본이다
+		sherbet::crosshair::profile _sherbet_val_profile; // _sherbet_val_code 를 파싱한 결과
+		std::vector<sherbet::crosshair::quad> _sherbet_val_quads; // 매 프레임 재사용(할당 회피)
 
 		// SHERBET: 커스텀 배경 이미지 — 오버레이 창 배경을 사용자 사진으로. 'custompicture' 기능 구매자 전용.
 		api::resource _sherbet_bg_tex = {};

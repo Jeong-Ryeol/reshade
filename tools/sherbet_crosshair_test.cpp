@@ -1070,6 +1070,9 @@ static void test_helpers()
 	}
 
 	// §3.4 휴지 상태 +4px. inner/outer 가 각자 독립적으로 받는다.
+	// ⚠️ 아래 단언들은 §6 #6 의 **채택한 읽기**를 못 박는다. 실물 확인 후 게이트가
+	//    bShowMinError 로 밝혀지면 kMinErrorGate 를 바꾸고 여기도 같이 고쳐야 한다.
+	assert(kMinErrorGate == min_error_gate::firing_error);
 	{
 		profile p;
 		assert(resting_offset(p.primary.inner, p.primary) == 3 + kMinErrorPx);
@@ -1263,6 +1266,534 @@ static void test_round_trip_from_codes()
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────
+// §3 기하 — "이 파라미터면 어떤 사각형이 어디에 있는가"
+// ─────────────────────────────────────────────────────────────────
+
+static bool contains(const rect &r, int x, int y)
+{
+	return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+// §3.3 검산: t=3, off=0, lenH=6, C=64.
+//   우 = x∈[64,70), 좌 = x∈[57,63) → 두 팔의 중점 63.5
+//   상/하 팔의 x = floor(64 − 1.5) = 62, 3px → [62,65) → 중심 63.5 ✔ 일치
+// 스펙이 손으로 계산해 둔 유일한 known-answer 다. 여기가 틀리면 나머지는 볼 것도 없다.
+static void test_arm_geometry_worked_example()
+{
+	line L = make_line(line_kind::inner);
+	L.thickness = 3;
+	L.length = 6;
+	L.allow_vert_scaling = false; // 세로 길이 = 가로 길이 = 6
+
+	rect a[4];
+	line_arms(L, 64, 64, 0, a);
+
+	assert(a[0] == (rect { 64, 62, 6, 3 })); // 우: x∈[64,70), y∈[62,65)
+	assert(a[1] == (rect { 57, 62, 6, 3 })); // 좌: x∈[57,63)
+	assert(a[2] == (rect { 62, 64, 3, 6 })); // 하: x∈[62,65)
+	assert(a[3] == (rect { 62, 57, 3, 6 })); // 상
+
+	// 두 가로 팔의 중점 = (64 + 63) / 2 = 63.5
+	assert((a[0].x + (a[1].x + a[1].w)) == 127); // 63.5 × 2
+	// 세로 팔의 중심도 63.5
+	assert((a[2].x + (a[2].x + a[2].w)) == 127);
+	// 세로 방향도 같은 값이어야 대칭이다
+	assert((a[2].y + (a[3].y + a[3].h)) == 127);
+	assert((a[0].y + (a[0].y + a[0].h)) == 127);
+
+	// 홀수 두께면 조준점 전체가 좌상단으로 0.5px 스냅된다 → 좌 팔이 우 팔보다 1px 더 나간다
+	assert(kOddThicknessShiftsTopLeft); // 지금 채택한 읽기(§6 #3)
+	assert(a[1].x == 64 - 0 - 6 - 1);
+}
+
+// 짝수 두께는 par==0 이라 정확히 (cx, cy) 가 중심이다.
+static void test_arm_geometry_even_thickness()
+{
+	line L = make_line(line_kind::inner);
+	L.thickness = 4;
+	L.length = 6;
+
+	rect a[4];
+	line_arms(L, 100, 100, 0, a);
+	assert(a[0] == (rect { 100, 98, 6, 4 }));  // 우
+	assert(a[1] == (rect { 94, 98, 6, 4 }));   // 좌 — par 가 붙지 않는다
+	assert(a[2] == (rect { 98, 100, 4, 6 }));  // 하
+	assert(a[3] == (rect { 98, 94, 4, 6 }));   // 상
+	// 좌우가 완전 대칭: 중점 정확히 100
+	assert((a[0].x + (a[1].x + a[1].w)) == 200);
+	assert((a[2].y + (a[3].y + a[3].h)) == 200);
+
+	// 두께 2 도 마찬가지
+	L.thickness = 2;
+	line_arms(L, 100, 100, 0, a);
+	assert(a[0] == (rect { 100, 99, 6, 2 }));
+	assert(a[1] == (rect { 94, 99, 6, 2 }));
+
+	// 두께 1(홀수)은 다시 좌상단 스냅
+	L.thickness = 1;
+	line_arms(L, 100, 100, 0, a);
+	assert(a[0] == (rect { 100, 99, 6, 1 }));
+	assert(a[1] == (rect { 93, 99, 6, 1 })); // 100-0-6-1
+	assert(a[2] == (rect { 99, 100, 1, 6 }));
+	assert(a[3] == (rect { 99, 93, 1, 6 }));
+}
+
+// §3.2 #1/#2 — 오프셋은 중심에서 선의 **안쪽 끝**까지의 거리이고, 길이는 바깥으로 자란다.
+// 선 중앙까지로 재거나 배율을 곱하는 구현이 흔하다(ValorantCC 는 offset 을 2배로 쟀다).
+static void test_offset_is_inner_edge_and_length_grows_outward()
+{
+	line L = make_line(line_kind::inner);
+	L.thickness = 2;
+	L.length = 6;
+
+	rect a[4];
+	line_arms(L, 100, 100, 3, a);
+	// 우 팔은 중심에서 3px 떨어진 곳에서 **시작**해서 바깥으로 6px 자란다 → [103, 109)
+	assert(a[0].x == 103 && a[0].w == 6);
+	// 좌 팔은 [100-3-6, 100-3) = [91, 97)
+	assert(a[1].x == 91 && a[1].x + a[1].w == 97);
+	// 하 팔은 [103, 109)
+	assert(a[2].y == 103 && a[2].y + a[2].h == 109);
+	// 상 팔은 [91, 97)
+	assert(a[3].y == 91 && a[3].y + a[3].h == 97);
+
+	// 오프셋을 키우면 안쪽 끝만 밀린다 — 길이는 그대로다(§4.1 #2 의 전제)
+	rect b[4];
+	line_arms(L, 100, 100, 10, b);
+	assert(b[0].x == 110 && b[0].w == a[0].w);
+	assert(b[1].x + b[1].w == 90 && b[1].w == a[1].w);
+	// 두께 방향 좌표는 오프셋과 무관하다
+	assert(b[0].y == a[0].y && b[2].x == a[2].x);
+
+	// §3.2 #4 — 바깥선도 안쪽선 끝 기준이 아니라 똑같이 중심에서 재는 절대 오프셋이다.
+	line O = make_line(line_kind::outer);
+	O.thickness = 2;
+	O.length = 2;
+	rect o[4];
+	line_arms(O, 100, 100, 10, o);
+	assert(o[0].x == 110); // inner 의 끝(109)과 무관하게 중심 + 10
+}
+
+// §3.2 #5 — w<=0 또는 h<=0 이면 그 팔을 아예 그리지 않는다(윤곽선도 없다).
+// `0l;0` + `0v;5` 면 세로 팔만 있는 조준점이 된다.
+static void test_zero_length_arms_are_dropped()
+{
+	profile p = parse_ok("0;P;h;0;0l;0;0v;5;0g;1;0o;0;1b;0");
+	quad_list q;
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+
+	// 가로 팔 2개는 길이 0 이라 사라지고 세로 팔 2개만 남는다
+	assert(q.size() == 2);
+	for (const quad &Q : q)
+		assert(Q.r.w > 0 && Q.r.h > 0);
+	assert(q[0].r.h == 5 && q[1].r.h == 5);
+
+	// 두께 0 이면 팔이 전부 사라진다
+	profile z = parse_ok("0;P;h;0;0t;0;1b;0");
+	build_crosshair(z.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(q.empty());
+
+	// 길이 0 인 팔은 윤곽선도 없다 — 윤곽선을 켜도 사각형이 늘지 않는다
+	profile g = parse_ok("0;P;t;3;0l;0;0v;5;0g;1;0o;0;1b;0");
+	build_crosshair(g.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(q.size() == 2 * (1 + 4)); // 세로 팔 2개 × (본체 + 링 4조각)
+}
+
+// §3.6 — 링은 본체를 사방 T 픽셀로 감싸되 조각끼리 겹치지 않아야 한다.
+// 이 성질 하나가 "끝단을 감싸는가"(구멍 없음)와 "모서리가 진해지지 않는가"(중복 없음)를
+// 동시에 못 박는다. 확장 사각형 전체를 픽셀 단위로 훑는다.
+static bool ring_covers_exactly(const rect &body, int T)
+{
+	quad_list q;
+	detail::push_ring(q, body, T, 255);
+
+	for (int y = body.y - T - 2; y < body.y + body.h + T + 2; ++y)
+		for (int x = body.x - T - 2; x < body.x + body.w + T + 2; ++x)
+		{
+			int n = 0;
+			for (const quad &Q : q)
+				if (contains(Q.r, x, y))
+					++n;
+
+			const bool in_expanded = contains(rect { body.x - T, body.y - T, body.w + 2 * T, body.h + 2 * T }, x, y);
+			const bool in_body = contains(body, x, y);
+			const int want = (in_expanded && !in_body) ? 1 : 0;
+			if (n != want)
+				return false;
+		}
+	return true;
+}
+
+static void test_outline_ring_geometry()
+{
+	// 손계산 한 건: 본체 (10,20,6,2), T=1
+	{
+		quad_list q;
+		detail::push_ring(q, rect { 10, 20, 6, 2 }, 1, 255);
+		assert(q.size() == 4);
+		assert(q[0].r == (rect { 9, 19, 8, 1 }));  // 상 — 모서리까지 포함해 w+2T
+		assert(q[1].r == (rect { 9, 22, 8, 1 }));  // 하
+		assert(q[2].r == (rect { 9, 20, 1, 2 }));  // 좌
+		assert(q[3].r == (rect { 16, 20, 1, 2 })); // 우
+		for (const quad &Q : q)
+		{
+			assert(Q.color == kOutlineColor); // 항상 검정(§0.3 #9)
+			assert(Q.alpha == 255);
+		}
+	}
+
+	// 성질: 링은 (확장 사각형 − 본체) 를 정확히 한 번씩 덮는다.
+	// 끝단 조각을 빼면 구멍이 생기고, 조각이 겹치면 2가 나온다. 본체를 채우면 본체에서 1이 나온다.
+	for (int T = 1; T <= 6; ++T)
+		for (int w = 1; w <= 7; ++w)
+			for (int h = 1; h <= 7; ++h)
+				assert(ring_covers_exactly(rect { 30, 40, w, h }, T));
+
+	// 세로로 긴 본체(세로 팔)도 마찬가지
+	assert(ring_covers_exactly(rect { 0, 0, 2, 20 }, 6));
+	assert(ring_covers_exactly(rect { -5, -5, 20, 2 }, 3));
+
+	// T=0 이거나 본체가 비면 링이 없다
+	{
+		quad_list q;
+		detail::push_ring(q, rect { 10, 20, 6, 2 }, 0, 255);
+		assert(q.empty());
+		detail::push_ring(q, rect { 10, 20, 0, 2 }, 3, 255);
+		assert(q.empty());
+		detail::push_ring(q, rect { 10, 20, 6, 2 }, 3, 0); // 알파 0 → 그릴 게 없다
+		assert(q.empty());
+	}
+}
+
+// §3.6 #3 — 본체 알파와 링 알파는 곱해지지 않는다. 각자 독립적으로 합성된다.
+static void test_body_and_ring_alpha_are_independent()
+{
+	// 안쪽선 불투명도 0.8(기본), 윤곽선 불투명도 0.5(기본)
+	profile p;
+	quad_list q;
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+
+	int body = 0, ring = 0;
+	for (const quad &Q : q)
+	{
+		if (Q.color == kOutlineColor)
+		{
+			assert(Q.alpha == alpha_from_opacity(0.5f)); // 127 — 0.8 × 0.5 = 0.4(102) 가 아니다
+			++ring;
+		}
+		else
+		{
+			++body;
+		}
+	}
+	assert(body > 0 && ring > 0);
+	// 기본 조준점의 안쪽선은 0.8, 바깥선은 0.35 — 서로 다른 값이 그대로 살아 있어야 한다
+	bool saw_inner = false, saw_outer = false;
+	for (const quad &Q : q)
+	{
+		if (Q.color == kOutlineColor)
+			continue;
+		if (Q.alpha == alpha_from_opacity(0.8f))
+			saw_inner = true;
+		if (Q.alpha == alpha_from_opacity(0.35f))
+			saw_outer = true;
+	}
+	assert(saw_inner && saw_outer);
+
+	// 라인 불투명도 0 이면 본체는 사라지고 링만 남는다(꺼진 것과 다르다)
+	profile t = parse_ok("0;P;0a;0;1b;0");
+	build_crosshair(t.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(!q.empty());
+	for (const quad &Q : q)
+		assert(Q.color == kOutlineColor);
+}
+
+// 윤곽선을 끄면 링이 하나도 안 나온다.
+static void test_outline_toggle()
+{
+	quad_list on, off;
+	profile a = parse_ok("0;P;1b;0");        // 윤곽선 기본 ON
+	profile b = parse_ok("0;P;h;0;1b;0");    // 윤곽선 OFF
+	build_crosshair(a.primary, 100, 100, 0.0f, 0.0f, on);
+	build_crosshair(b.primary, 100, 100, 0.0f, 0.0f, off);
+
+	assert(off.size() == 4); // 안쪽 팔 4개 본체만
+	assert(on.size() == 4 * (1 + 4));
+	for (const quad &Q : off)
+		assert(Q.color != kOutlineColor);
+
+	// 윤곽선 두께 0 도 같은 결과(링 없음)
+	profile c = parse_ok("0;P;t;0;1b;0");
+	quad_list z;
+	build_crosshair(c.primary, 100, 100, 0.0f, 0.0f, z);
+	assert(z.size() == 4);
+}
+
+// §3.5 — 중앙 점은 **정사각형**이고 값은 반지름이 아니라 한 변의 길이다.
+static void test_center_dot_is_a_square()
+{
+	layer L;
+	L.show_center_dot = true;
+
+	L.center_dot_size = 2;
+	assert(center_dot_rect(L, 100, 100) == (rect { 99, 99, 2, 2 })); // floor(100-1.0)
+	L.center_dot_size = 3;
+	assert(center_dot_rect(L, 100, 100) == (rect { 98, 98, 3, 3 })); // floor(100-1.5)
+	L.center_dot_size = 1;
+	assert(center_dot_rect(L, 100, 100) == (rect { 99, 99, 1, 1 })); // floor(100-0.5)
+	L.center_dot_size = 6;
+	assert(center_dot_rect(L, 100, 100) == (rect { 97, 97, 6, 6 }));
+	// 한 변이지 반지름이 아니다 — 6 이면 6px 짜리 정사각형이지 12px 이 아니다
+	assert(center_dot_rect(L, 100, 100).w == 6);
+	// 정사각형이다
+	const rect d = center_dot_rect(L, 100, 100);
+	assert(d.w == d.h);
+
+	L.center_dot_size = 0;
+	quad_list q;
+	detail::push_dot(q, L, 100, 100, rgb { 255, 255, 255 }, 1, 255);
+	assert(q.empty()); // 한 변 0 → 본체도 링도 없다
+
+	// §2.9 예제 D 전체를 사각형 단위로 못 박는다:
+	// "검은 윤곽선이 1px 둘린 초록 2×2 정사각형 하나. 선 없음."
+	const profile p = parse_ok("0;P;c;1;o;1;d;1;0b;0;1b;0");
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(q.size() == 5); // 본체 1 + 링 4
+	assert(q[0].r == (rect { 99, 99, 2, 2 }));
+	assert(q[0].color == (rgb { 0, 255, 0 }));
+	assert(q[0].alpha == 255);
+	assert(q[1].r == (rect { 98, 98, 4, 1 }));  // 상
+	assert(q[2].r == (rect { 98, 101, 4, 1 })); // 하
+	assert(q[3].r == (rect { 98, 99, 1, 2 }));  // 좌
+	assert(q[4].r == (rect { 101, 99, 1, 2 })); // 우
+	for (std::size_t i = 1; i < q.size(); ++i)
+	{
+		assert(q[i].color == kOutlineColor);
+		assert(q[i].alpha == 255); // o;1 → 윤곽선 불투명도 1
+	}
+
+	// 오차가 커져도 중앙 점은 움직이지 않는다(§3.5)
+	quad_list e;
+	build_crosshair(p.primary, 100, 100, 30.0f, 30.0f, e);
+	assert(e[0].r == q[0].r);
+}
+
+// §3.7 그리기 순서: Inner(우→좌→하→상) → 중앙 점 → Outer(우→좌→하→상).
+// 가로 먼저 세로 나중, outer 가 inner 위 — 4개 소스 전부 일치, 확정이다.
+static void test_draw_order()
+{
+	// 윤곽선을 꺼서 본체만 남긴다 — 순서만 본다. 두께는 짝수로 둔다(홀수 시프트는
+	// test_arm_geometry_worked_example 이 따로 못 박는다).
+	const profile p = parse_ok("0;P;h;0;d;1;0t;2;0l;4;0o;0;1t;2;1l;3;1o;20");
+	quad_list q;
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+
+	assert(q.size() == 4 + 1 + 4);
+
+	// inner 4개: 오프셋 0 + 발사 오차 기본 ON → 0+4 = 4
+	assert(q[0].r.x == 104);              // 우
+	assert(q[1].r.x + q[1].r.w == 96);    // 좌
+	assert(q[2].r.y == 104);              // 하
+	assert(q[3].r.y + q[3].r.h == 96);    // 상
+	// 가로 먼저 세로 나중 — 처음 둘은 가로(w>h), 다음 둘은 세로(h>w)
+	assert(q[0].r.w > q[0].r.h && q[1].r.w > q[1].r.h);
+	assert(q[2].r.h > q[2].r.w && q[3].r.h > q[3].r.w);
+
+	// 중앙 점이 inner 와 outer 사이에 온다(§6 #5 의 채택 읽기)
+	assert(kDotOrder == dot_order::above_inner);
+	assert(q[4].r == center_dot_rect(p.primary, 100, 100));
+
+	// outer 4개: 오프셋 20 + 4 = 24
+	assert(q[5].r.x == 124);
+	assert(q[6].r.x + q[6].r.w == 76);
+	assert(q[7].r.y == 124);
+	assert(q[8].r.y + q[8].r.h == 76);
+
+	// 각 팔은 [본체 → 자기 링] 1-pass 다(§3.6 #6 · §6 #4)
+	assert(kOutlineOnePass);
+	const profile o = parse_ok("0;P;t;1;0t;2;0l;4;0o;0;1b;0");
+	build_crosshair(o.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(q.size() == 4 * 5);
+	for (int arm = 0; arm < 4; ++arm)
+	{
+		assert(q[arm * 5 + 0].color != kOutlineColor); // 본체 먼저
+		for (int k = 1; k < 5; ++k)
+			assert(q[arm * 5 + k].color == kOutlineColor); // 그 다음 자기 링
+	}
+}
+
+// §3.4 — 휴지 상태 +4px 가 실제 좌표에 나타난다. 기본 조준점은 inner 7, outer 14 다.
+static void test_min_error_offset_in_geometry()
+{
+	{
+		const profile p; // 전 기본값
+		quad_list q;
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		// inner 우 팔의 안쪽 끝 = 100 + 3 + 4 = 107
+		assert(q[0].r.x == 107);
+		// outer 우 팔 = 100 + 10 + 4 = 114. inner 5개(본체+링4) × 4팔 = 20 뒤에 온다.
+		assert(q[20].r.x == 114);
+	}
+	// m;1 이면 +4 가 사라진다
+	{
+		const profile p = parse_ok("0;P;m;1;h;0;1b;0");
+		quad_list q;
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r.x == 103);
+	}
+	// 0f;0 이면 그 라인만 +4 가 사라진다 (§6 #6 의 채택한 읽기 — kMinErrorGate 로 뒤집는다)
+	{
+		assert(kMinErrorGate == min_error_gate::firing_error);
+		const profile p = parse_ok("0;P;h;0;0f;0");
+		quad_list q;
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r.x == 103);  // inner: 3 + 0
+		assert(q[4].r.x == 114);  // outer: 10 + 4
+	}
+	// 동적 오차는 오프셋만 늘린다 — 길이·두께는 그대로다(§4.1 #2)
+	{
+		const profile p = parse_ok("0;P;h;0;1b;0");
+		quad_list a, b;
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, a);
+		build_crosshair(p.primary, 100, 100, 6.4f, 0.0f, b);
+		assert(b[0].r.x == a[0].r.x + 6); // floor(6.4 + 0.5) = 6
+		assert(b[0].r.w == a[0].r.w && b[0].r.h == a[0].r.h);
+		quad_list c;
+		build_crosshair(p.primary, 100, 100, 6.5f, 0.0f, c);
+		assert(c[0].r.x == a[0].r.x + 7); // 1px 계단(§4.3)
+	}
+}
+
+// §1 범위의 양 끝. 상한을 넘겨도 클램프하지 않으므로(§2.6) 좌표가 그대로 커져야 한다.
+static void test_range_extremes()
+{
+	quad_list q;
+
+	// inner 최대: 길이 20, 두께 10, 오프셋 20 / outer 최대: 길이 10, 오프셋 40
+	{
+		const profile p = parse_ok("0;P;h;0;0t;10;0l;20;0o;20;0f;0;1t;10;1l;10;1o;40;1f;0");
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r == (rect { 120, 95, 20, 10 }));  // inner 우
+		assert(q[4].r == (rect { 140, 95, 10, 10 }));  // outer 우
+	}
+	// 최소: 전부 0
+	{
+		const profile p = parse_ok("0;P;h;0;0t;1;0l;1;0v;1;0o;0;0f;0;1b;0");
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q.size() == 4);
+		assert(q[0].r == (rect { 100, 99, 1, 1 }));
+		assert(q[1].r == (rect { 98, 99, 1, 1 })); // 100-0-1-1
+	}
+	// UI 상한을 넘는 값도 좌표에 그대로 반영된다(§6 #1 이 정해지기 전까지 클램프 금지)
+	{
+		const profile p = parse_ok("0;P;h;0;0b;0;1l;18;1o;60;1f;0");
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r.x == 160 && q[0].r.w == 18);
+	}
+	// 안전 상한(200px)까지 밀어도 정수 연산이 무너지지 않는다
+	{
+		const profile p = parse_ok("0;P;h;0;0t;200;0l;200;0o;200;0f;0;1b;0");
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r == (rect { 300, 0, 200, 200 }));
+	}
+	// 세로 길이 링크 해제가 기하에 반영된다
+	{
+		const profile p = parse_ok("0;P;h;0;0l;6;0v;2;0g;1;0o;0;0f;0;1b;0");
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[0].r.w == 6); // 가로 팔
+		assert(q[2].r.h == 2); // 세로 팔은 v
+	}
+	{
+		const profile p = parse_ok("0;P;h;0;0l;6;0v;2;0o;0;0f;0;1b;0"); // g 없음 → 링크 상태
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+		assert(q[2].r.h == 6); // 세로 팔도 l 을 쓴다
+	}
+}
+
+// 선이 꺼져 있으면 그 그룹은 통째로 사라진다.
+static void test_show_lines_gate()
+{
+	quad_list q;
+	const profile p = parse_ok("0;P;h;0;0b;0;1b;0;d;1");
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(q.size() == 1); // 중앙 점 본체만
+	assert(q[0].r == center_dot_rect(p.primary, 100, 100));
+}
+
+// 그리기 좌표는 cx/cy 의 순수 평행이동이다(음수 좌표에서도 깨지지 않는다).
+static void test_translation_invariance()
+{
+	const profile p = parse_ok("0;P;c;3;t;2;d;1;z;5;0t;3;0l;7;0v;2;0g;1;1t;1;1l;4");
+	quad_list a, b;
+	build_crosshair(p.primary, 0, 0, 0.0f, 0.0f, a);
+	build_crosshair(p.primary, -640, 360, 0.0f, 0.0f, b);
+	assert(a.size() == b.size());
+	for (std::size_t i = 0; i < a.size(); ++i)
+	{
+		assert(b[i].r.x == a[i].r.x - 640);
+		assert(b[i].r.y == a[i].r.y + 360);
+		assert(b[i].r.w == a[i].r.w && b[i].r.h == a[i].r.h);
+		assert(b[i].color == a[i].color && b[i].alpha == a[i].alpha);
+	}
+}
+
+// 색 해석이 기하까지 이어진다 — 커스텀 색의 알파는 렌더링에 쓰이지 않는다(§2.8).
+static void test_geometry_uses_resolved_color()
+{
+	const profile p = parse_ok("0;P;c;8;u;11223344;b;1;h;0;1b;0");
+	quad_list q;
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, q);
+	assert(!q.empty());
+	for (const quad &Q : q)
+	{
+		assert(Q.color == (rgb { 0x11, 0x22, 0x33 }));
+		assert(Q.alpha == alpha_from_opacity(0.8f)); // 라인 불투명도이지 커스텀 색의 0x44 가 아니다
+	}
+}
+
+// §2.6 파싱 후처리 — 원본을 파괴하지 않고 사용 시점에 고른다.
+static void test_effective_ads()
+{
+	{
+		const profile p = parse_ok("0;p;0;s;1;P;c;5;A;c;6");
+		assert(effective_ads(p).color_index == 6); // 고급 옵션 ON + 복사 안 함 → A
+		assert(p.ads.color_index == 6);            // 원본은 그대로
+	}
+	{
+		const profile p = parse_ok("0;s;1;P;c;5;A;c;6"); // p 미기재 → 기본 true(복사)
+		assert(effective_ads(p).color_index == 5);
+		assert(p.ads.color_index == 6); // 파싱된 원본은 파괴되지 않는다
+	}
+	{
+		const profile p = parse_ok("0;p;0;P;c;5;A;c;6"); // 고급 옵션 OFF → Primary
+		assert(effective_ads(p).color_index == 5);
+		assert(p.ads.color_index == 6);
+	}
+}
+
+// 어떤 프로필이 와도 기하가 폭주하지 않는다(세니타이저 패스에서 진짜 의미가 있다).
+static void test_geometry_sweep()
+{
+	quad_list q;
+	for (int iter = 0; iter < 3000; ++iter)
+	{
+		layer L = rnd_layer();
+		const int cx = rnd_int(-2000, 4000), cy = rnd_int(-2000, 4000);
+		build_crosshair(L, cx, cy, static_cast<float>(rnd() % 40), static_cast<float>(rnd() % 40), q);
+
+		assert(q.size() <= 2 * 4 * 5 + 5); // 안쪽·바깥 팔 4개씩 × (본체+링4) + 중앙 점 5
+		for (const quad &Q : q)
+		{
+			assert(Q.r.w > 0 && Q.r.h > 0); // 빈 사각형은 목록에 들어가지 않는다
+			assert(Q.alpha > 0);            // 안 보이는 것도 마찬가지
+			// 좌표가 안전 상한 안에 머문다(중심에서 최대 offset+length+outline)
+			assert(Q.r.x >= cx - 900 && Q.r.x <= cx + 900);
+			assert(Q.r.y >= cy - 900 && Q.r.y <= cy + 900);
+		}
+	}
+}
+
 int main()
 {
 	test_defaults();
@@ -1286,6 +1817,22 @@ int main()
 	test_helpers();
 	test_round_trip_sweep();
 	test_round_trip_from_codes();
+	test_arm_geometry_worked_example();
+	test_arm_geometry_even_thickness();
+	test_offset_is_inner_edge_and_length_grows_outward();
+	test_zero_length_arms_are_dropped();
+	test_outline_ring_geometry();
+	test_body_and_ring_alpha_are_independent();
+	test_outline_toggle();
+	test_center_dot_is_a_square();
+	test_draw_order();
+	test_min_error_offset_in_geometry();
+	test_range_extremes();
+	test_show_lines_gate();
+	test_translation_invariance();
+	test_geometry_uses_resolved_color();
+	test_effective_ads();
+	test_geometry_sweep();
 	std::printf("sherbet_crosshair: ALL PASS\n");
 	return 0;
 }

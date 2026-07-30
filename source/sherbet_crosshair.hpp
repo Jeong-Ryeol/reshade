@@ -52,6 +52,52 @@ namespace sherbet
 		// §0.4. 발로란트 기본이 false 다. Sherbet 도 기본은 백버퍼 픽셀 그대로 그린다.
 		constexpr bool kScaleToResolutionDefault = false;
 
+		// ─────────────────────────────────────────────────────────────
+		// §6 실물 확인 대기 — 추측으로 채우지 않고 **한 곳에서 뒤집을 수 있게** 둔 것들
+		//
+		// 넷 다 "발로란트를 한 번 켜서 스크린샷을 확대하면 끝나는" 항목이다. 지금 값은
+		// 스펙이 채택한 읽기이고, 근거 등급이 낮다는 것도 스펙이 명시하고 있다.
+		// 실물 확인 후에는 **여기 상수 하나만** 바꾸면 렌더 전체가 따라온다.
+		// ─────────────────────────────────────────────────────────────
+
+		// §6 #3 · §0.3 #3 — 홀수 두께에서 어느 쪽이 1px 밀리는가.
+		//   true (채택) : 좌·상 팔이 1px 더 자라 조준점이 **좌상단으로 0.5px** 스냅된다.
+		//   false       : 우·하 팔이 밀려 우하단으로 스냅된다(정확한 거울상).
+		// 근거가 VCRDB 단일 계보뿐이고 인게임 스크린샷으로 검증된 바 없다.
+		// 확인법: `0;P;h;0;0t;3;0o;0;0l;6;1b;0` 스크린샷을 확대해 좌 팔이 우 팔보다
+		// 왼쪽으로 1px 더 나가 있는지 본다.
+		constexpr bool kOddThicknessShiftsTopLeft = true;
+
+		// §6 #6 · §0.3 #18 — 휴지 상태 +4px(min error)의 게이트.
+		//   firing_error (채택) : 그 라인의 f(bShowShootingError)가 꺼지면 +4 도 사라진다.
+		//                         커뮤니티 렌더러 전부의 관행이다.
+		//   always              : 게임의 실제 게이트가 라인 레벨 bShowMinError(기본 true,
+		//                         공유 코드 키 없음)일 경우. 그러면 f;0 이어도 +4 가 남는다.
+		// 확인법: `0f;1`(기본)과 `0f;0` 두 코드로 휴지 상태 중앙~선 안쪽 끝을 잰다.
+		//   7px vs 3px → firing_error 가 맞다.   둘 다 7px → always 로 바꾼다.
+		// ⚠️ 바꾸면 tools/sherbet_crosshair_test.cpp 의 test_helpers / test_example_c 가
+		//    실패한다. 그건 정상이다 — 그 단언들이 지금 읽기를 못 박고 있다는 뜻이다.
+		enum class min_error_gate { firing_error, always };
+		constexpr min_error_gate kMinErrorGate = min_error_gate::firing_error;
+
+		// §6 #4 · §0.3 #5 — 팔의 윤곽선을 언제 그리는가.
+		//   true (채택) : 팔마다 [본체 → 자기 링] 1-pass. 뒤에 오는 팔의 링이 앞 팔의
+		//                 본체를 덮을 수 있어 겹치는 자리가 더 진해진다. 모든 레퍼런스
+		//                 렌더러가 이렇게 한다.
+		//   false       : 그룹마다 [링 4개 전부 → 본체 4개 전부] 2-pass. 본체가 항상
+		//                 모든 링 위에 온다.
+		// 확인법: `0o;0` + `t;6` + `o;0.5` + `0t;2`. 팔 4개의 윤곽선이 중앙에서 만나는
+		//   자리에 더 진한 십자 이음매가 보이면 1-pass, 균일하면 2-pass 다.
+		constexpr bool kOutlineOnePass = true;
+
+		// §6 #5 · §0.3 #6 — 중앙 점을 안쪽선 위에 그리는가 아래에 그리는가. 소스가 2:2 다.
+		//   above_inner (채택) : inner → dot → outer (VCRDB + valoreye)
+		//   below_all          : dot → inner → outer (genesy + iNiR)
+		// 확인법: `d;1;z;6;a;0.5` + `0o;0;0t;2`. 반투명 점 아래로 안쪽선이 비쳐 보이면
+		//   점이 위(above_inner), 안 보이면 아래(below_all)다.
+		enum class dot_order { above_inner, below_all };
+		constexpr dot_order kDotOrder = dot_order::above_inner;
+
 		// §1 의 UI 슬라이더 범위. **파서는 이 범위를 강제하지 않는다**(위 주석 참고) —
 		// 나중에 UI 를 붙일 때 슬라이더 한계로만 쓴다.
 		struct int_range { int lo, hi; };
@@ -321,9 +367,30 @@ namespace sherbet
 		//   +4 는 발사 오차 배율로 곱해지지 않는다. 불리언만 본다.
 		// ⚠️ 게이트를 f 로 두는 것은 커뮤니티 렌더러 전부의 관행이고 **근사임이 명시돼 있다**
 		//    (§0.3 #18 / §6 #6). 게임의 실제 게이트는 코드 키가 없는 bShowMinError 일 수 있다.
+		//    → kMinErrorGate 하나로 뒤집는다.
 		inline int resting_offset(const line &L, const layer &owner)
 		{
-			return L.offset + ((L.show_shooting_error && !owner.fix_min_error) ? kMinErrorPx : 0);
+			const bool gated = (kMinErrorGate == min_error_gate::always) ? true : L.show_shooting_error;
+			return clamp_int(L.offset) + ((gated && !owner.fix_min_error) ? kMinErrorPx : 0);
+		}
+
+		// §3.4 유효 오프셋 = 휴지 오프셋 + §4 의 동적 오차(정수 반올림).
+		// err_px 는 태스크 4(오차 애니메이션)가 넘긴다. 정적 조준점에서는 0 이다.
+		// 정수 반올림 때문에 확장이 1px 계단으로 움직인다 — 의도한 것이다(§4.3).
+		inline int effective_offset(const line &L, const layer &owner, float err_px)
+		{
+			int off = resting_offset(L, owner);
+			if (err_px > 0.0f)
+				off += static_cast<int>(err_px + 0.5f); // err_px >= 0 이므로 floor(x+0.5) 와 같다
+			return off;
+		}
+
+		// §2.6 파싱 후처리. **파싱된 원본 값은 파괴하지 않는다** — 고급 옵션이 꺼져 있다고
+		// 파싱 단계에서 ads = primary 를 대입해 버리면, 유저가 다시 켰을 때 원래 ADS 설정이
+		// 날아가고 export 도 원본과 달라진다. 그래서 *사용 시점*의 계산으로 둔다.
+		inline const layer &effective_ads(const profile &p)
+		{
+			return (p.ads_copies_primary || !p.advanced_options) ? p.primary : p.ads;
 		}
 
 		// ─────────────────────────────────────────────────────────────
@@ -1093,6 +1160,186 @@ namespace sherbet
 			detail::canon_sniper(p.snipe);
 			detail::canon_unknowns(p.unknowns);
 			return p;
+		}
+
+		// ─────────────────────────────────────────────────────────────
+		// 기하 (§3) — "이 파라미터면 어떤 사각형이 어디에 있는가"
+		//
+		// 여기서 좌표를 **전부** 확정한다. ImGui 레이어는 아래 목록을 순서대로
+		// AddRectFilled 로 옮기기만 한다. 그리기 쪽에 산술이 남아 있으면 경계가 잘못
+		// 그어진 것이다 — 맥에서 테스트할 수 없는 코드에 판정이 숨는다.
+		//
+		// 모든 좌표는 **정수 픽셀**이다(§3.1). 서브픽셀 좌표를 쓰면 텍셀 블렌딩이 생겨
+		// 발로란트의 하드 에지가 사라진다. 절대 픽셀이므로 DPI 스케일을 곱하면 안 된다(§0.4).
+		// ─────────────────────────────────────────────────────────────
+
+		// 좌상단 + 크기. 반열린 구간 [x, x+w) × [y, y+h) 다.
+		struct rect
+		{
+			int x = 0, y = 0, w = 0, h = 0;
+		};
+		inline bool operator==(const rect &a, const rect &b) { return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; }
+		inline bool operator!=(const rect &a, const rect &b) { return !(a == b); }
+
+		// 그릴 사각형 하나. 색은 이미 해석돼 있다(프리셋/커스텀/검정 윤곽선).
+		struct quad
+		{
+			rect r;
+			rgb color;
+			std::uint8_t alpha = 255;
+		};
+		inline bool operator==(const quad &a, const quad &b) { return a.r == b.r && a.color == b.color && a.alpha == b.alpha; }
+		inline bool operator!=(const quad &a, const quad &b) { return !(a == b); }
+
+		using quad_list = std::vector<quad>;
+
+		// §3.2 · §3.3 — 팔 4개의 기하. 그리기 순서(우 → 좌 → 하 → 상)로 채운다.
+		//
+		//   1. 오프셋은 "중심에서 선의 **안쪽 끝**까지의 거리"다. 선 중앙까지가 아니고 배율도 없다.
+		//   2. 길이는 항상 중심 **바깥** 방향으로 자란다. 우 팔은 cx+off → cx+off+lenH.
+		//   3. 두께는 축에 수직으로 중앙 정렬되되 floor() 로 스냅된다.
+		//   4. 바깥선도 안쪽선 끝 기준이 아니라 **똑같이 중심에서 재는 절대 오프셋**이다.
+		//      inner/outer 는 이 함수를 다른 설정으로 두 번 부를 뿐이다.
+		//
+		// w<=0 이나 h<=0 인 팔도 그대로 채운다 — 그리지 않는 판정(§3.2 #5)은 push 단계에서 한다.
+		inline void line_arms(const line &L, int cx, int cy, int off, rect out[4])
+		{
+			const int t = clamp_int(L.thickness);
+			const int len_h = clamp_int(L.length);
+			const int len_v = clamp_int(effective_vertical_length(L));
+			const int o = clamp_int(off);
+
+			// §3.3 홀수 두께 −0.5px 시프트. 짝수면 par==0 이라 두 분기가 완전히 같다.
+			const int par = t & 1;
+			const int snap  = kOddThicknessShiftsTopLeft ? (t + par) / 2 : (t - par) / 2;
+			const int lead  = kOddThicknessShiftsTopLeft ? par : 0; // 좌·상 팔이 1px 더 자란다
+			const int trail = kOddThicknessShiftsTopLeft ? 0 : par; // 우·하 팔의 시작이 1px 밀린다
+
+			const int cross_y = cy - snap; // 좌/우 팔의 y = floor(cy - t/2)
+			const int cross_x = cx - snap; // 상/하 팔의 x = floor(cx - t/2)
+
+			out[0] = rect { cx + o + trail,           cross_y,                  len_h, t };     // 우
+			out[1] = rect { cx - o - len_h - lead,    cross_y,                  len_h, t };     // 좌
+			out[2] = rect { cross_x,                  cy + o + trail,           t, len_v };     // 하
+			out[3] = rect { cross_x,                  cy - o - len_v - lead,    t, len_v };     // 상
+		}
+
+		// §3.5 중앙 점 — **원이 아니라 정사각형**이고, 값은 반지름이 아니라 **한 변의 길이**다.
+		// 기존 Sherbet 의 AddCircleFilled 는 여기서 틀린다. 오차가 커져도 움직이지 않는다.
+		// 홀짝 스냅은 팔과 동일하다(floor(c - n/2)).
+		// (스나이퍼 중앙 점만 원이지만 Sherbet 은 스나이퍼를 그리지 않는다 — §3.5 마지막 · §5)
+		inline rect center_dot_rect(const layer &L, int cx, int cy)
+		{
+			const int n = clamp_int(L.center_dot_size);
+			const int par = n & 1;
+			const int snap = kOddThicknessShiftsTopLeft ? (n + par) / 2 : (n - par) / 2;
+			return rect { cx - snap, cy - snap, n, n };
+		}
+
+		namespace detail
+		{
+			// §3.6 #5 · §3.2 #5 — 길이 0 이면 그 팔을 아예 그리지 않는다(윤곽선도 없다).
+			// 알파 0 도 그릴 게 없다 — 목록에서 빼면 그리기 쪽이 그만큼 가벼워진다.
+			inline void push_body(quad_list &out, const rect &r, rgb c, std::uint8_t a)
+			{
+				if (r.w <= 0 || r.h <= 0 || a == 0)
+					return;
+				out.push_back(quad { r, c, a });
+			}
+
+			// §3.6 윤곽선 — 캔버스 원문 strokeRect(x−T/2, y−T/2, w+T, h+T) + lineWidth=T 는
+			// 정확히 **본체를 사방 T픽셀로 감싸는 링**이다. ImGui 에는 stroke 가 없으므로 링을
+			// 4조각으로 분해하되 **조각끼리 겹치지 않게 잘라** 모서리가 진해지지 않게 한다.
+			//
+			//   * 본체 아래는 채우지 않는다(링만). 그래야 본체 알파(기본 inner 0.8)가 배경과
+			//     직접 블렌딩된다. 확장 사각형을 통째로 검게 채우면 선이 훨씬 탁해진다(§0.3 #4).
+			//   * **선의 끝단도 감싼다** — 링이므로 4변 전부에 붙어 길이 방향으로 2T 만큼
+			//     길어 보인다. 상·하 조각이 모서리를 포함하는 것이 그 끝단이다.
+			//   * 색은 검정. 공유 코드에 윤곽선 색 키가 없다(§0.3 #9).
+			inline void push_ring(quad_list &out, const rect &r, int T, std::uint8_t a)
+			{
+				if (r.w <= 0 || r.h <= 0 || T <= 0 || a == 0)
+					return;
+				out.push_back(quad { rect { r.x - T, r.y - T, r.w + 2 * T, T }, kOutlineColor, a }); // 상(모서리 포함)
+				out.push_back(quad { rect { r.x - T, r.y + r.h, r.w + 2 * T, T }, kOutlineColor, a }); // 하(모서리 포함)
+				out.push_back(quad { rect { r.x - T, r.y, T, r.h }, kOutlineColor, a });               // 좌
+				out.push_back(quad { rect { r.x + r.w, r.y, T, r.h }, kOutlineColor, a });             // 우
+			}
+
+			// 본체 알파와 링 알파는 **곱해지지 않는다**. 각자 독립적으로 합성된다(§3.6 #3).
+			inline void push_piece(quad_list &out, const rect &r, rgb c, std::uint8_t body_a, int T, std::uint8_t ring_a)
+			{
+				push_body(out, r, c, body_a);
+				push_ring(out, r, T, ring_a);
+			}
+
+			inline void push_line_group(quad_list &out, const line &Ln, const layer &L, int cx, int cy, float err_px,
+			                            rgb c, int T, std::uint8_t ring_a)
+			{
+				if (!Ln.show_lines)
+					return;
+
+				rect a[4];
+				line_arms(Ln, cx, cy, effective_offset(Ln, L, err_px), a);
+				const std::uint8_t body_a = alpha_from_opacity(Ln.opacity);
+
+				if (kOutlineOnePass)
+				{
+					// §3.6 #6 팔 단위 1-pass — 팔마다 [본체 → 자기 링].
+					for (int i = 0; i < 4; ++i)
+						push_piece(out, a[i], c, body_a, T, ring_a);
+				}
+				else
+				{
+					// 대안(§6 #4): 그룹마다 [링 4개 → 본체 4개]. 본체가 항상 링 위에 온다.
+					for (int i = 0; i < 4; ++i)
+						push_ring(out, a[i], T, ring_a);
+					for (int i = 0; i < 4; ++i)
+						push_body(out, a[i], c, body_a);
+				}
+			}
+
+			inline void push_dot(quad_list &out, const layer &L, int cx, int cy, rgb c, int T, std::uint8_t ring_a)
+			{
+				if (!L.show_center_dot)
+					return;
+				// 중앙 점도 윤곽선을 두른다 — §2.9 예제 D "검은 윤곽선이 1px 둘린 초록 2×2 정사각형",
+				// 예제 B "검은 윤곽선 두른 흰 3px 사각점".
+				push_piece(out, center_dot_rect(L, cx, cy), c, alpha_from_opacity(L.center_dot_opacity), T, ring_a);
+			}
+		}
+
+		// 레이어 하나를 그리는 데 필요한 사각형을 **그리기 순서 그대로** out 에 채운다.
+		// out 은 비워지고 다시 채워진다 — 호출 측이 하나를 계속 재사용해 매 프레임 할당을 피한다.
+		//
+		// §3.7 그리기 순서:
+		//   1) Inner  : 우 → 좌 → 하 → 상   (가로 먼저, 세로 나중)
+		//   2) Center dot                    (위치는 §6 #5 의 선택 사항 = kDotOrder)
+		//   3) Outer  : 우 → 좌 → 하 → 상
+		// 가로 먼저 세로 나중, outer 가 inner 위 — 4개 소스 전부 일치. **확정**이다.
+		// 그래서 오프셋이 가까우면 outer 의 검은 윤곽선이 inner 선의 끝을 덮는다.
+		// 실제 게임에서도 나는 아티팩트이므로 고치지 않는다.
+		//
+		// inner_err_px / outer_err_px 는 §4 의 동적 오차(태스크 4). 정적 조준점에서는 0 이다.
+		// 오차는 **오프셋만** 늘린다 — 길이·두께·투명도는 절대 변하지 않는다(§4.1 #2).
+		inline void build_crosshair(const layer &L, int cx, int cy, float inner_err_px, float outer_err_px, quad_list &out)
+		{
+			out.clear();
+
+			const rgb c = resolve_color(L);
+			// 윤곽선이 꺼져 있으면 두께·알파를 0 으로 만들어 링이 아예 안 나오게 한다(§2.4 붕괴와 동일한 뜻).
+			const int T = L.has_outline ? clamp_int(L.outline_thickness) : 0;
+			const std::uint8_t ring_a = L.has_outline ? alpha_from_opacity(L.outline_opacity) : 0;
+
+			if (kDotOrder == dot_order::below_all)
+				detail::push_dot(out, L, cx, cy, c, T, ring_a);
+
+			detail::push_line_group(out, L.inner, L, cx, cy, inner_err_px, c, T, ring_a);
+
+			if (kDotOrder == dot_order::above_inner)
+				detail::push_dot(out, L, cx, cy, c, T, ring_a);
+
+			detail::push_line_group(out, L.outer, L, cx, cy, outer_err_px, c, T, ring_a);
 		}
 	}
 }
