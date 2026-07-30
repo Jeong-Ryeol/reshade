@@ -1946,6 +1946,488 @@ static void test_classic_migration()
 	}
 }
 
+// ─────────────────────────────────────────────────────────────────
+// §4 오차 애니메이션 — 합성 타임라인
+// ─────────────────────────────────────────────────────────────────
+
+static const float kF60 = 1.0f / 60.0f;
+
+// 프레임 하나. 기본은 "아무 입력 없음".
+static error_input frame(float dt = kF60)
+{
+	error_input in;
+	in.dt = dt;
+	return in;
+}
+static void run(error_state &s, const error_tuning &t, error_input in, int frames)
+{
+	for (int i = 0; i < frames; ++i)
+		update_error(s, t, in);
+}
+
+// 아무 입력이 없으면 값이 **정확히** 0 이어야 한다. 0.0001 이라도 남으면
+// 오차를 켜 둔 유저의 조준점이 영원히 미세하게 어긋난다.
+static void test_error_idle_is_exactly_zero()
+{
+	error_state s;
+	const error_tuning t;
+	run(s, t, frame(), 600); // 10초
+
+	assert(s.vel == 0.0f);
+	assert(s.fire_px == 0.0f);
+	assert(movement_error_px(s, t) == 0.0f);
+
+	const profile p; // 기본 조준점(안쪽 이동오차 OFF/발사오차 ON, 바깥 둘 다 ON)
+	assert(line_error_px(p.primary.inner, s, t) == 0.0f);
+	assert(line_error_px(p.primary.outer, s, t) == 0.0f);
+	assert(top_arm_fade(p.primary, s, t) == 1.0f);
+}
+
+// 클릭 한 번 = 정확히 한 발. 연사 누적이 끼어들면 안 된다.
+static void test_error_single_shot()
+{
+	error_state s;
+	const error_tuning t;
+
+	error_input down = frame();
+	down.fire = true;
+	update_error(s, t, down); // 상승 엣지
+	assert(feq(s.fire_px, t.fire_per_shot_px)); // 2px
+	assert(s.since_last_shot == 0.0f);
+
+	// 한 발 간격(600rpm → 0.1초) 안에는 회복하지 않는다 — 연사가 이어질 수 있기 때문이다
+	run(s, t, frame(), 5); // 5/60 = 0.083초 < 0.1초
+	assert(feq(s.fire_px, t.fire_per_shot_px));
+
+	// 그 간격을 넘기면 회복이 시작되고, 탭 한 번은 금방 사라진다
+	run(s, t, frame(), 3);
+	assert(s.fire_px < t.fire_per_shot_px);
+	run(s, t, frame(), 60);
+	assert(s.fire_px == 0.0f);
+
+	// 클릭을 누르고 있지 않으면 추가 발사가 없다
+	error_state s2;
+	update_error(s2, t, down);
+	run(s2, t, frame(), 600);
+	assert(s2.fire_px == 0.0f);
+}
+
+// 누르고 있으면 fire_rate_rpm 으로 계속 쏜다고 가정한다(§4.4 #7 — 가정임을 명시).
+// 600rpm = 10발/초 → 60fps 에서 6프레임마다 한 발.
+static void test_error_sustained_fire_caps()
+{
+	error_state s;
+	error_tuning t;
+	error_input hold = frame();
+	hold.fire = true;
+
+	update_error(s, t, hold);           // 엣지 1발
+	assert(feq(s.fire_px, 2.0f));
+	run(s, t, hold, 5);                 // 5프레임 더 → auto_accum 0.1667×6 = 1.0 → 1발
+	assert(feq(s.fire_px, 4.0f));
+
+	// 계속 누르고 있으면 상한에서 멈춘다(무한 증가 금지)
+	run(s, t, hold, 600);
+	assert(feq(s.fire_px, t.fire_max_px));
+	assert(s.since_last_shot == 0.0f);
+
+	// 상한을 낮추면 그 값에서 멈춘다
+	error_state s2;
+	t.fire_max_px = 5.0f;
+	run(s2, t, hold, 600);
+	assert(feq(s2.fire_px, 5.0f));
+}
+
+// ★ 스프레이 중에 조준점이 **실제로 벌어져야** 한다.
+// 설계 §4.3 의 의사코드를 글자 그대로 옮기면 회복이 확장을 앞질러 2px 에서 멈춘다
+// (회복 37.3px/s × 발 간격 0.1초 = 3.73px 손실 vs 1발 2px 확장). 이 단언이 그 회귀를 잡는다.
+static void test_error_spray_actually_blooms()
+{
+	error_state s;
+	const error_tuning t;
+	error_input hold = frame();
+	hold.fire = true;
+
+	float peak = 0.0f;
+	for (int i = 0; i < 120; ++i) // 2초 연사
+	{
+		update_error(s, t, hold);
+		if (s.fire_px > peak)
+			peak = s.fire_px;
+	}
+	assert(feq(peak, t.fire_max_px));      // 상한까지 차오른다
+	assert(peak > t.fire_per_shot_px * 3); // 한두 발 분량에서 멈추지 않는다
+
+	// 단조 증가여야 한다 — 연사 중에 들쭉날쭉하면 조준점이 떨려 보인다
+	error_state m;
+	float prev = 0.0f;
+	for (int i = 0; i < 120; ++i)
+	{
+		update_error(m, t, hold);
+		assert(m.fire_px >= prev);
+		prev = m.fire_px;
+	}
+
+	// 느리게 탭하면(회복 시간보다 긴 간격) 누적되지 않는다
+	error_state tap;
+	for (int k = 0; k < 5; ++k)
+	{
+		error_input down = frame();
+		down.fire = true;
+		update_error(tap, t, down);
+		run(tap, t, frame(), 60); // 1초 쉬기
+	}
+	assert(tap.fire_px == 0.0f);
+}
+
+// 회복: 가득 찬 상태에서 recovery_time 만에 정확히 0 이 된다.
+static void test_error_recovery_reaches_exactly_zero()
+{
+	error_state s;
+	const error_tuning t;
+	error_input hold = frame();
+	hold.fire = true;
+	run(s, t, hold, 300);
+	assert(feq(s.fire_px, t.fire_max_px));
+
+	// 회복은 '마지막 발 + 한 발 간격' 부터 시작해 recovery_time 에 걸쳐 진행된다.
+	const float total = 60.0f / t.fire_rate_rpm + t.recovery_time; // 0.1 + 0.375
+	const int need = static_cast<int>(total / kF60);               // 28프레임
+
+	error_state a = s;
+	run(a, t, frame(), need - 3);
+	assert(a.fire_px > 0.0f);
+
+	// 조금 더 지나면 정확히 0 — "거의 0" 이 아니라 0 이어야 한다
+	error_state b = s;
+	run(b, t, frame(), need + 3);
+	assert(b.fire_px == 0.0f);
+
+	// 그 뒤로 아무리 지나도 음수로 내려가지 않는다
+	run(b, t, frame(), 600);
+	assert(b.fire_px == 0.0f);
+}
+
+// 이동: 램프업 → deadzone → 램프다운. 멈추면 정확히 0.
+static void test_error_movement_ramp_and_deadzone()
+{
+	error_state s;
+	const error_tuning t;
+	error_input w = frame();
+	w.fwd = true;
+	w.walk_key = true; // 기본 tuning 은 walk_key_means_run=true → Shift 누르면 달리기
+
+	// deadzone(0.275) 아래에서는 오차가 0 이다 — 살짝 움직였다고 벌어지면 안 된다
+	update_error(s, t, w); // vel = 12 × 1/60 = 0.2
+	assert(feq(s.vel, 0.2f));
+	assert(movement_error_px(s, t) == 0.0f);
+
+	update_error(s, t, w); // vel = 0.4 → deadzone 위
+	assert(feq(s.vel, 0.4f));
+	assert(movement_error_px(s, t) > 0.0f);
+
+	// 최고 속도에서는 run_err_px
+	run(s, t, w, 60);
+	assert(feq(s.vel, 1.0f));
+	assert(feq(movement_error_px(s, t), t.run_err_px));
+
+	// 손을 떼면 정확히 0 으로 떨어진다(잔류값 금지)
+	run(s, t, frame(), 60);
+	assert(s.vel == 0.0f);
+	assert(movement_error_px(s, t) == 0.0f);
+
+	// 걷기(수정키 안 누름)는 walk_speed 에서 멈춘다
+	error_state slow;
+	error_input jog = frame();
+	jog.fwd = true;
+	jog.walk_key = false;
+	run(slow, t, jog, 60);
+	assert(feq(slow.vel, t.walk_speed));
+
+	// 수정키 의미를 뒤집으면 정반대가 된다(§4.4 #3 — 게임마다 반대다)
+	error_tuning val = t;
+	val.walk_key_means_run = false;
+	error_state s3;
+	run(s3, val, w, 60); // Shift 누름 = 발로란트식 걷기
+	assert(feq(s3.vel, val.walk_speed));
+}
+
+// counter-strafe(A↔D): 속도가 **0 을 통과**해야 deadzoning 감각이 성립한다(§4.1 #5).
+static void test_error_counter_strafe_passes_through_zero()
+{
+	error_state s;
+	const error_tuning t;
+	error_input a = frame();
+	a.left = true;
+	a.walk_key = true;
+	run(s, t, a, 60);
+	assert(feq(s.vel, 1.0f));
+
+	// A 를 누른 채 D 를 같이 누르면 상쇄 → 목표 0 으로 감속
+	error_input ad = frame();
+	ad.left = true;
+	ad.right = true;
+	ad.walk_key = true;
+	bool hit_zero = false;
+	for (int i = 0; i < 60; ++i)
+	{
+		update_error(s, t, ad);
+		if (s.vel == 0.0f)
+			hit_zero = true;
+	}
+	assert(hit_zero);
+	assert(movement_error_px(s, t) == 0.0f);
+
+	// 전/후 상쇄도 마찬가지
+	error_state s2;
+	error_input wsd = frame();
+	wsd.fwd = true;
+	wsd.back = true;
+	run(s2, t, wsd, 60);
+	assert(s2.vel == 0.0f);
+}
+
+// 이동 오차와 발사 오차는 **덧셈**으로 합산된다(최댓값이 아니다, §4.1 #3).
+static void test_error_is_additive()
+{
+	error_state s;
+	const error_tuning t;
+	error_input both = frame();
+	both.fwd = true;
+	both.walk_key = true;
+	both.fire = true;
+	run(s, t, both, 300);
+
+	const float mv = movement_error_px(s, t);
+	const float fr = s.fire_px;
+	assert(mv > 0.0f && fr > 0.0f);
+
+	line L = make_line(line_kind::outer); // 이동·발사 둘 다 ON 이 기본
+	assert(L.show_movement_error && L.show_shooting_error);
+	assert(feq(line_error_px(L, s, t), mv + fr));   // 덧셈
+	assert(line_error_px(L, s, t) > (mv > fr ? mv : fr)); // 최댓값이 아니다
+
+	// 배율은 각각에만 곱해진다(0..3)
+	L.movement_error_scale = 2.0f;
+	L.firing_error_scale = 0.5f;
+	assert(feq(line_error_px(L, s, t), mv * 2.0f + fr * 0.5f));
+
+	// 토글을 하나씩 끄면 그쪽 항만 사라진다
+	L.movement_error_scale = 1.0f;
+	L.firing_error_scale = 1.0f;
+	L.show_movement_error = false;
+	assert(feq(line_error_px(L, s, t), fr));
+	L.show_movement_error = true;
+	L.show_shooting_error = false;
+	assert(feq(line_error_px(L, s, t), mv));
+	L.show_movement_error = false;
+	assert(line_error_px(L, s, t) == 0.0f); // 둘 다 끄면 **정확히** 0
+}
+
+// ★ 오차를 끈 조준점은 태스크 2 의 정적 결과와 바이트 단위로 같아야 한다.
+static void test_error_off_is_byte_identical_to_static()
+{
+	// 격렬하게 움직이고 쏜 상태를 만든다
+	error_state s;
+	const error_tuning t;
+	error_input busy = frame();
+	busy.fwd = true;
+	busy.walk_key = true;
+	busy.fire = true;
+	run(s, t, busy, 300);
+	assert(s.vel > 0.0f && s.fire_px > 0.0f);
+
+	// (a) 이동·발사 오차 + fade 를 전부 끈 레이어 → 언제나 정적 결과와 동일
+	{
+		profile p = parse_ok("0;P;f;0;0m;0;0f;0;1m;0;1f;0");
+		quad_list anim, stat;
+		build_crosshair_animated(p.primary, 100, 100, s, t, anim);
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, stat);
+		assert(anim == stat);
+	}
+	// (b) 오차만 끄고 fade 는 켠 경우 → 좌표는 같고 위쪽 팔 알파만 다르다
+	//     (fade 는 오차 토글과 **별개 항목**이다 — §4.1 #8)
+	{
+		profile p = parse_ok("0;P;h;0;0m;0;0f;0;1b;0"); // f 는 기본 ON
+		assert(p.primary.fade_with_firing_error);
+		quad_list anim, stat;
+		build_crosshair_animated(p.primary, 100, 100, s, t, anim);
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, stat);
+		assert(anim.size() == stat.size());
+		for (std::size_t i = 0; i < anim.size(); ++i)
+			assert(anim[i].r == stat[i].r); // 좌표는 한 픽셀도 안 움직인다
+		assert(anim[3].alpha < stat[3].alpha); // 위쪽 팔(인덱스 3)만 흐려진다
+		assert(anim[0].alpha == stat[0].alpha);
+		assert(anim[1].alpha == stat[1].alpha);
+		assert(anim[2].alpha == stat[2].alpha);
+	}
+	// (b2) 윤곽선을 켠 경우 — 위쪽 팔의 **링도 같이** 흐려져야 한다.
+	//      본체만 흐려지면 검은 윤곽선만 남아 유령 같은 사각형이 떠 있게 된다.
+	{
+		profile p = parse_ok("0;P;t;2;0m;0;0f;0;1b;0"); // 윤곽선 ON, 안쪽선만
+		quad_list anim, stat;
+		build_crosshair_animated(p.primary, 100, 100, s, t, anim);
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, stat);
+		assert(anim.size() == stat.size() && anim.size() == 4 * 5);
+		// 팔 3(위쪽) = 인덱스 15..19 : 본체 1 + 링 4
+		for (std::size_t i = 15; i < 20; ++i)
+		{
+			assert(anim[i].r == stat[i].r);
+			assert(anim[i].alpha < stat[i].alpha);
+		}
+		// 나머지 팔은 손대지 않는다
+		for (std::size_t i = 0; i < 15; ++i)
+			assert(anim[i].alpha == stat[i].alpha);
+	}
+	// (c) 휴지 상태(아무 입력 없음)에서는 오차를 켜 둬도 정적 결과와 동일하다
+	{
+		error_state idle;
+		run(idle, t, frame(), 600);
+		const profile p; // 전 기본값 = 오차 토글 켜져 있음
+		quad_list anim, stat;
+		build_crosshair_animated(p.primary, 100, 100, idle, t, anim);
+		build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, stat);
+		assert(anim == stat);
+	}
+}
+
+// 일시정지(오버레이 열림 · 핫키): 오차가 자라지 않고, 풀 때 없던 발이 생기지 않는다.
+static void test_error_pause()
+{
+	error_state s;
+	const error_tuning t;
+
+	// 일시정지 중에는 WASD 도 클릭도 무시된다
+	error_input busy = frame();
+	busy.fwd = true;
+	busy.fire = true;
+	busy.paused = true;
+	run(s, t, busy, 120);
+	assert(s.vel == 0.0f);
+	assert(s.fire_px == 0.0f);
+
+	// ★ 클릭을 누른 채로 일시정지를 풀어도 유령 발사가 없다 —
+	//   엣지는 일시정지 중에도 갱신되기 때문이다.
+	error_input unpaused = busy;
+	unpaused.paused = false;
+	unpaused.fwd = false;
+	update_error(s, t, unpaused);
+	assert(s.fire_px == 0.0f);
+
+	// 뗐다 다시 누르면 정상적으로 한 발
+	error_input up = frame();
+	update_error(s, t, up);
+	error_input down = frame();
+	down.fire = true;
+	update_error(s, t, down);
+	assert(feq(s.fire_px, t.fire_per_shot_px));
+}
+
+// dt 가 통째로 튀어도(알트탭·로딩·디버거) 죽거나 멈추지 않는다.
+static void test_error_dt_spike_guard()
+{
+	error_state s;
+	const error_tuning t;
+
+	error_input spike = frame(1000.0f); // 1000초짜리 프레임
+	spike.fire = true;
+	update_error(s, t, spike);          // 연사 루프가 폭주하면 여기서 멈춘다
+	assert(s.fire_px <= t.fire_max_px);
+	assert(s.fire_px >= 0.0f);
+	// ★ 알트탭 한 번에 조준점이 상한까지 튀면 안 된다 — dt 상한이 그걸 막는다.
+	//   가드가 없으면 1초짜리 프레임에 10발이 한꺼번에 들어가 곧장 최대가 된다.
+	assert(s.fire_px < t.fire_max_px);
+	assert(feq(s.fire_px, t.fire_per_shot_px * 3.0f)); // dt 0.25초 → 엣지 1발 + 자동 2발
+
+	// 음수·NaN dt 도 안전하다
+	error_state s2;
+	error_input neg = frame(-5.0f);
+	neg.fwd = true;
+	run(s2, t, neg, 10);
+	assert(s2.vel == 0.0f);
+
+	error_input nan_dt = frame(0.0f / 0.0f);
+	nan_dt.fwd = true;
+	update_error(s2, t, nan_dt);
+	assert(s2.vel >= 0.0f && s2.vel <= 1.0f);
+
+	// 말도 안 되는 연사 속도
+	error_tuning crazy = t;
+	crazy.fire_rate_rpm = 1.0e9f;
+	error_state s3;
+	error_input hold = frame();
+	hold.fire = true;
+	run(s3, crazy, hold, 10);
+	assert(s3.fire_px <= crazy.fire_max_px);
+}
+
+// §4.1 #8 · §6 #8 — f 는 위쪽 팔의 알파다.
+static void test_top_arm_fade()
+{
+	error_state s;
+	const error_tuning t;
+	profile p;
+	assert(p.primary.fade_with_firing_error); // 기본 ON
+
+	assert(top_arm_fade(p.primary, s, t) == 1.0f); // 안 쏘면 아무 일 없음
+
+	error_input hold = frame();
+	hold.fire = true;
+	run(s, t, hold, 300);
+	assert(feq(s.fire_px, t.fire_max_px));
+	// 가득 찼을 때 = 1 − fade_depth
+	assert(kFadeMode == fade_mode::alpha);
+	assert(feq(top_arm_fade(p.primary, s, t), 1.0f - t.fade_depth));
+
+	// 중간값에서는 연속적으로 변한다(이진이 아니다)
+	error_state half;
+	half.fire_px = t.fire_max_px * 0.5f;
+	const float f = top_arm_fade(p.primary, half, t);
+	assert(f > 1.0f - t.fade_depth && f < 1.0f);
+
+	// 끄면 언제나 1
+	p.primary.fade_with_firing_error = false;
+	assert(top_arm_fade(p.primary, s, t) == 1.0f);
+
+	// §6 #8 — 바깥선에도 걸리는지는 상수 하나로 뒤집는다
+	assert(kFadeAppliesToOuter);
+	{
+		profile q = parse_ok("0;P;h;0");
+		quad_list out;
+		build_crosshair(q.primary, 100, 100, 0.0f, 0.0f, out, 0.5f);
+		assert(out.size() == 8);           // 안쪽 4 + 바깥 4 (윤곽선 없음)
+		assert(out[3].alpha < out[0].alpha); // 안쪽 위쪽 팔
+		assert(out[7].alpha < out[4].alpha); // 바깥 위쪽 팔도 같이
+	}
+}
+
+// 오차가 실제 좌표로 이어진다 — **오프셋만** 늘고 길이·두께는 고정이다(§4.1 #2).
+static void test_animated_geometry()
+{
+	error_state s;
+	const error_tuning t;
+	error_input hold = frame();
+	hold.fire = true;
+	run(s, t, hold, 300); // fire_px = 14
+
+	const profile p = parse_ok("0;P;h;0;0o;0;1b;0"); // 안쪽만, 오프셋 0, 발사오차 기본 ON
+	quad_list q;
+	build_crosshair_animated(p.primary, 100, 100, s, t, q);
+
+	// 휴지 오프셋 0+4 = 4, 거기에 발사 오차 14 → 18
+	assert(q[0].r.x == 100 + 4 + 14);
+	// 길이·두께는 그대로다
+	quad_list stat;
+	build_crosshair(p.primary, 100, 100, 0.0f, 0.0f, stat);
+	assert(q[0].r.w == stat[0].r.w && q[0].r.h == stat[0].r.h);
+
+	// 배율 0 이면 확장이 없다
+	profile z = parse_ok("0;P;h;0;0o;0;0e;0;1b;0");
+	quad_list qz;
+	build_crosshair_animated(z.primary, 100, 100, s, t, qz);
+	assert(qz[0].r.x == 100 + 4); // +4(min error)는 배율과 무관하다(§3.4)
+}
+
 int main()
 {
 	test_defaults();
@@ -1987,6 +2469,19 @@ int main()
 	test_geometry_sweep();
 	test_exceeds_ui_range();
 	test_classic_migration();
+	test_error_idle_is_exactly_zero();
+	test_error_single_shot();
+	test_error_sustained_fire_caps();
+	test_error_spray_actually_blooms();
+	test_error_recovery_reaches_exactly_zero();
+	test_error_movement_ramp_and_deadzone();
+	test_error_counter_strafe_passes_through_zero();
+	test_error_is_additive();
+	test_error_off_is_byte_identical_to_static();
+	test_error_pause();
+	test_error_dt_spike_guard();
+	test_top_arm_fade();
+	test_animated_geometry();
 	std::printf("sherbet_crosshair: ALL PASS\n");
 	return 0;
 }

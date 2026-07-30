@@ -415,6 +415,25 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	  config.get("SHERBET", "ValOn", _sherbet_val_on);
 	  config.get("SHERBET", "ValCode", _sherbet_val_code);
 	  sherbet::crosshair::parse_code(_sherbet_val_code, _sherbet_val_profile);
+	  config.get("SHERBET", "ValErrOn", _sherbet_val_err_on);
+	  config.get("SHERBET", "ValMoveAccel", _sherbet_val_tune.move_accel);
+	  config.get("SHERBET", "ValMoveDecel", _sherbet_val_tune.move_decel);
+	  config.get("SHERBET", "ValDeadzone", _sherbet_val_tune.deadzone);
+	  config.get("SHERBET", "ValWalkErrPx", _sherbet_val_tune.walk_err_px);
+	  config.get("SHERBET", "ValRunErrPx", _sherbet_val_tune.run_err_px);
+	  config.get("SHERBET", "ValWalkSpeed", _sherbet_val_tune.walk_speed);
+	  config.get("SHERBET", "ValWalkKeyIsRun", _sherbet_val_tune.walk_key_means_run);
+	  config.get("SHERBET", "ValFirePerShot", _sherbet_val_tune.fire_per_shot_px);
+	  config.get("SHERBET", "ValFireMax", _sherbet_val_tune.fire_max_px);
+	  config.get("SHERBET", "ValFireRate", _sherbet_val_tune.fire_rate_rpm);
+	  config.get("SHERBET", "ValRecovery", _sherbet_val_tune.recovery_time);
+	  config.get("SHERBET", "ValFadeDepth", _sherbet_val_tune.fade_depth);
+	  config.get("SHERBET", "ValKeyFwd", _sherbet_val_key_fwd);
+	  config.get("SHERBET", "ValKeyBack", _sherbet_val_key_back);
+	  config.get("SHERBET", "ValKeyLeft", _sherbet_val_key_left);
+	  config.get("SHERBET", "ValKeyRight", _sherbet_val_key_right);
+	  config.get("SHERBET", "ValKeyWalk", _sherbet_val_key_walk);
+	  config.get("SHERBET", "ValKeyPause", _sherbet_val_key_pause);
 	  // 커스텀 배경 이미지 설정(custompicture 기능 전용)
 	  config.get("SHERBET", "BgOn", _sherbet_bg_on);
 	  config.get("SHERBET", "BgFile", _sherbet_bg_file);
@@ -546,6 +565,25 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("SHERBET", "CrosshairColor", _sherbet_crosshair_col);
 	config.set("SHERBET", "ValOn", _sherbet_val_on);
 	config.set("SHERBET", "ValCode", _sherbet_val_code);
+	config.set("SHERBET", "ValErrOn", _sherbet_val_err_on);
+	config.set("SHERBET", "ValMoveAccel", _sherbet_val_tune.move_accel);
+	config.set("SHERBET", "ValMoveDecel", _sherbet_val_tune.move_decel);
+	config.set("SHERBET", "ValDeadzone", _sherbet_val_tune.deadzone);
+	config.set("SHERBET", "ValWalkErrPx", _sherbet_val_tune.walk_err_px);
+	config.set("SHERBET", "ValRunErrPx", _sherbet_val_tune.run_err_px);
+	config.set("SHERBET", "ValWalkSpeed", _sherbet_val_tune.walk_speed);
+	config.set("SHERBET", "ValWalkKeyIsRun", _sherbet_val_tune.walk_key_means_run);
+	config.set("SHERBET", "ValFirePerShot", _sherbet_val_tune.fire_per_shot_px);
+	config.set("SHERBET", "ValFireMax", _sherbet_val_tune.fire_max_px);
+	config.set("SHERBET", "ValFireRate", _sherbet_val_tune.fire_rate_rpm);
+	config.set("SHERBET", "ValRecovery", _sherbet_val_tune.recovery_time);
+	config.set("SHERBET", "ValFadeDepth", _sherbet_val_tune.fade_depth);
+	config.set("SHERBET", "ValKeyFwd", _sherbet_val_key_fwd);
+	config.set("SHERBET", "ValKeyBack", _sherbet_val_key_back);
+	config.set("SHERBET", "ValKeyLeft", _sherbet_val_key_left);
+	config.set("SHERBET", "ValKeyRight", _sherbet_val_key_right);
+	config.set("SHERBET", "ValKeyWalk", _sherbet_val_key_walk);
+	config.set("SHERBET", "ValKeyPause", _sherbet_val_key_pause);
 	config.set("SHERBET", "BgOn", _sherbet_bg_on);
 	config.set("SHERBET", "BgFile", _sherbet_bg_file);
 	config.set("SHERBET", "BgOpacity", _sherbet_bg_opacity);
@@ -1320,9 +1358,44 @@ void reshade::runtime::draw_gui()
 		const int val_cx = static_cast<int>(std::floor(val_vp->Pos.x + val_vp->Size.x * 0.5f));
 		const int val_cy = static_cast<int>(std::floor(val_vp->Pos.y + val_vp->Size.y * 0.5f));
 
+		// ── §4 오차 애니메이션 ─────────────────────────────────────────────
+		// 게임 메모리는 읽지 않는다. 이미 후킹 중인 WASD·좌클릭만 본다 — 그래서 근사이고,
+		// 가장 크게 어긋나는 항목(캐릭터 속도 대신 키 입력)은 「에임」 탭이 글로 설명한다.
+		// 판정은 전부 sherbet_crosshair.hpp 안에서 끝난다. 여기는 입력을 모아 넘길 뿐이다.
+		if (_sherbet_val_err_on && _input != nullptr)
+		{
+			// 일시정지 핫키(§4.4 #2) — 게임 내 채팅 상태를 알 수 없어서 필요한 장치다.
+			if (_sherbet_val_key_pause[0] != 0)
+			{
+				const bool pk = _input->is_key_down(_sherbet_val_key_pause[0]);
+				if (pk && !_sherbet_val_pause_prev)
+					_sherbet_val_err_paused = !_sherbet_val_err_paused;
+				_sherbet_val_pause_prev = pk;
+			}
+
+			sherbet::crosshair::error_input ei;
+			ei.dt = imgui_io.DeltaTime;
+			ei.fwd = _input->is_key_down(_sherbet_val_key_fwd[0]);
+			ei.back = _input->is_key_down(_sherbet_val_key_back[0]);
+			ei.left = _input->is_key_down(_sherbet_val_key_left[0]);
+			ei.right = _input->is_key_down(_sherbet_val_key_right[0]);
+			ei.walk_key = _sherbet_val_key_walk[0] != 0 && _input->is_key_down(_sherbet_val_key_walk[0]);
+			ei.fire = _input->is_mouse_button_down(0);
+			// 오버레이가 열려 있으면 WASD 도 클릭도 UI 조작이지 사격이 아니다.
+			ei.paused = _sherbet_val_err_paused || _show_overlay;
+			sherbet::crosshair::update_error(_sherbet_val_err, _sherbet_val_tune, ei);
+		}
+		else
+		{
+			// 꺼져 있으면 상태를 초기화해 둔다 — 다시 켰을 때 옛날 오차가 남아 있으면 안 된다.
+			_sherbet_val_err = sherbet::crosshair::error_state();
+		}
+
 		// FiveM 에는 ADS/스나이퍼 개념이 없으므로 Primary 만 그린다(설계 §5).
-		// A/S 섹션은 파싱·보관·재출력만 한다. 오차(§4)는 태스크 4 에서 붙는다 — 지금은 0 이다.
-		sherbet::crosshair::build_crosshair(_sherbet_val_profile.primary, val_cx, val_cy, 0.0f, 0.0f, _sherbet_val_quads);
+		// A/S 섹션은 파싱·보관·재출력만 한다.
+		// 오차가 꺼져 있으면 error_state 가 전부 0 이라 정적 조준점과 **완전히 같은 결과**가 나온다.
+		sherbet::crosshair::build_crosshair_animated(
+			_sherbet_val_profile.primary, val_cx, val_cy, _sherbet_val_err, _sherbet_val_tune, _sherbet_val_quads);
 
 		// §3.1 AddRectFilled(rounding 0) 만 쓴다. 축 정렬 사각형은 ImGui 의 AA 경로를
 		// 타지 않으므로 ImDrawListFlags_AntiAliased* 를 만질 필요가 없다.
@@ -3669,6 +3742,64 @@ void reshade::runtime::draw_gui_aim()
 		if (ImGui::TreeNodeEx("##val_outer", ImGuiTreeNodeFlags_DefaultOpen, "%s", "\xEB\xB0\x94\xEA\xB9\xA5\xEC\x84\xA0" /* 바깥선 */))
 		{
 			val_line_ui("outer", VL.outer, xhr::kUiOuterLineLength, xhr::kUiOuterLineOffset);
+			ImGui::TreePop();
+		}
+
+		// ── 오차 애니메이션 (§4) ───────────────────────────────────────────
+		if (ImGui::TreeNodeEx("##val_error", ImGuiTreeNodeFlags_DefaultOpen, "%s", "\xEC\x98\xA4\xEC\xB0\xA8 \xEC\x95\xA0\xEB\x8B\x88\xEB\xA9\x94\xEC\x9D\xB4\xEC\x85\x98 (\xEC\x9B\x80\xEC\xA7\x81\xEC\x9E\x84/\xEC\x82\xAC\xEA\xB2\xA9)" /* 오차 애니메이션 (움직임/사격) */))
+		{
+			if (ImGui::Checkbox("\xEC\x98\xA4\xEC\xB0\xA8 \xEC\x95\xA0\xEB\x8B\x88\xEB\xA9\x94\xEC\x9D\xB4\xEC\x85\x98 \xEC\xBC\x9C\xEA\xB8\xB0" /* 오차 애니메이션 켜기 */, &_sherbet_val_err_on))
+			{
+				_sherbet_val_err = xhr::error_state(); // 껐다 켜면 옛 오차가 남지 않게
+				modified = true;
+			}
+			ImGui::TextDisabled("%s", "\xEC\x96\xB4\xEB\x8A\x90 \xEC\x84\xA0\xEC\x97\x90 \xEC\xA0\x81\xEC\x9A\xA9\xED\x95\xA0\xEC\xA7\x80\xEB\x8A\x94 \xEC\x9C\x84\xEC\x9D\x98 \xEC\x95\x88\xEC\xAA\xBD\xEC\x84\xA0/\xEB\xB0\x94\xEA\xB9\xA5\xEC\x84\xA0 \xED\x95\xAD\xEB\xAA\xA9\xEC\x97\x90\xEC\x84\x9C \xEB\x94\xB0\xEB\xA1\x9C \xEC\xBC\xAD\xEB\x8B\x88\xEB\x8B\xA4" /* 어느 선에 적용할지는 위의 안쪽선/바깥선 항목에서 따로 켭니다 */);
+
+			if (_sherbet_val_err_on)
+			{
+				// ⚠️ 감추지 않는다(설계 §5). 이동 오차는 *캐릭터 속도*의 함수인데 우리가 가진 건
+				//    *키 입력*이라 물리량 자체가 다르다. 이걸 숨기면 "왜 안 벌어지죠?" 문의가 온다.
+				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  " "\xEC\x9D\xB4\xEB\x8F\x99 \xEC\x98\xA4\xEC\xB0\xA8\xEB\x8A\x94 \xED\x82\xA4 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9C\xBC\xEB\xA1\x9C \xED\x9D\x89\xEB\x82\xB4 \xEB\x82\xB8 \xEA\xB0\x92\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94" /* 이동 오차는 키 입력으로 흉내 낸 값이에요 */);
+				ImGui::TextWrapped("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\xA9\x94\xEB\xAA\xA8\xEB\xA6\xAC\xEB\xA5\xBC \xEC\x9D\xBD\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB8\xB0 \xEB\x95\x8C\xEB\xAC\xB8\xEC\x97\x90 \xEC\x8B\xA4\xEC\xA0\x9C \xEC\xBA\x90\xEB\xA6\xAD\xED\x84\xB0 \xEC\x86\x8D\xEB\x8F\x84\xEB\xA5\xBC \xEC\x95\x8C \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEB\x84\x89\xEB\xB0\xB1\xC2\xB7\xEC\x8A\xAC\xEB\xA1\x9C\xEC\x9A\xB0\xC2\xB7\xEA\xB2\xBD\xEC\x82\xAC\xC2\xB7\xEC\xB0\xA8\xEB\x9F\x89\xC2\xB7\xEB\xAC\xBC\xEC\x86\x8D\xC2\xB7\xEC\x95\x89\xEA\xB8\xB0\xEB\x8A\x94 \xEB\xB0\x98\xEC\x98\x81\xEB\x90\x98\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB3\xA0, \xED\x82\xA4\xEB\xA5\xBC \xEC\x95\x88 \xEB\x88\x8C\xEB\x9F\xAC\xEB\x8F\x84 \xEB\xB0\x80\xEB\xA0\xA4\xEB\x82\x98\xEB\x8A\x94 \xEC\x83\x81\xED\x99\xA9\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x98\xA4\xEC\xB0\xA8\xEA\xB0\x80 0 \xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB3\xB4\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4. \xEC\x82\xAC\xEA\xB2\xA9 \xEC\x98\xA4\xEC\xB0\xA8\xEB\x8A\x94 \xED\x81\xB4\xEB\xA6\xAD\xEC\x9D\x84 \xEC\xA0\x95\xED\x99\x95\xED\x9E\x88 \xEA\xB0\x90\xEC\xA7\x80\xED\x95\x98\xEB\xAF\x80\xEB\xA1\x9C \xED\x9B\xA8\xEC\x94\xAC \xEC\x9E\x98 \xEB\xA7\x9E\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4." /* 게임 메모리를 읽지 않기 때문에 실제 캐릭터 속도를 알 수 없어요. 넉백·슬로우·경사·차량·물속·앉기는 반영되지 않고, 키를 안 눌러도 밀려나는 상황에서는 오차가 0 으로 보입니다. 사격 오차는 클릭을 정확히 감지하므로 훨씬 잘 맞습니다. */);
+				ImGui::Spacing();
+
+				ImGui::SeparatorText("\xEC\x82\xAC\xEA\xB2\xA9" /* 사격 */);
+				modified |= ImGui::SliderFloat("1\xEB\xB0\x9C\xEB\x8B\xB9 \xED\x99\x95\xEC\x9E\xA5(px)" /* 1발당 확장(px) */, &_sherbet_val_tune.fire_per_shot_px, 0.0f, 10.0f, "%.2f");
+				modified |= ImGui::SliderFloat("\xEC\xB5\x9C\xEB\x8C\x80 \xED\x99\x95\xEC\x9E\xA5(px)" /* 최대 확장(px) */, &_sherbet_val_tune.fire_max_px, 0.0f, 60.0f, "%.1f");
+				modified |= ImGui::SliderFloat("\xEA\xB0\x80\xEC\xA0\x95 \xEC\x97\xB0\xEC\x82\xAC \xEC\x86\x8D\xEB\x8F\x84(rpm)" /* 가정 연사 속도(rpm) */, &_sherbet_val_tune.fire_rate_rpm, 60.0f, 1200.0f, "%.0f");
+				ImGui::TextDisabled("%s", "\xEB\x88\x84\xEB\xA5\xB4\xEA\xB3\xA0 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x9D\xB4 \xEC\x86\x8D\xEB\x8F\x84\xEB\xA1\x9C \xEC\x8F\x9C\xEB\x8B\xA4\xEA\xB3\xA0 \xEA\xB0\x80\xEC\xA0\x95\xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4 \xE2\x80\x94 3\xEC\xA0\x90\xEC\x82\xAC\xEB\x82\x98 \xEB\xB0\x98\xEC\x9E\x90\xEB\x8F\x99 \xEC\x97\xB0\xED\x83\x80\xEB\x8A\x94 \xEC\x96\xB4\xEA\xB8\x8B\xEB\x82\x98\xEC\x9A\x94" /* 누르고 있을 때 이 속도로 쏜다고 가정합니다 — 3점사나 반자동 연타는 어긋나요 */);
+				modified |= ImGui::SliderFloat("\xED\x9A\x8C\xEB\xB3\xB5 \xEC\x8B\x9C\xEA\xB0\x84(\xEC\xB4\x88)" /* 회복 시간(초) */, &_sherbet_val_tune.recovery_time, 0.05f, 2.0f, "%.3f");
+				ImGui::TextDisabled("%s", "\xEB\xA7\x88\xEC\xA7\x80\xEB\xA7\x89 \xEB\xB0\x9C \xEC\x9D\xB4\xED\x9B\x84 \xED\x95\x9C \xEB\xB0\x9C \xEA\xB0\x84\xEA\xB2\xA9\xEC\x9D\xB4 \xEC\xA7\x80\xEB\x82\x98\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x8B\x9C\xEA\xB0\x84\xEC\x97\x90 \xEA\xB1\xB8\xEC\xB3\x90 \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4" /* 마지막 발 이후 한 발 간격이 지나면 이 시간에 걸쳐 원래대로 돌아옵니다 */);
+				modified |= ImGui::SliderFloat("\xEC\x9C\x84\xEC\xAA\xBD \xED\x8C\x94 \xED\x9D\x90\xEB\xA0\xA4\xEC\xA7\x80\xEB\x8A\x94 \xEC\xA0\x95\xEB\x8F\x84" /* 위쪽 팔 흐려지는 정도 */, &_sherbet_val_tune.fade_depth, 0.0f, 1.0f, "%.2f");
+
+				ImGui::SeparatorText("\xEC\x9D\xB4\xEB\x8F\x99" /* 이동 */);
+				modified |= ImGui::SliderFloat("\xEA\xB1\xB7\xEA\xB8\xB0 \xEC\xB5\x9C\xEB\x8C\x80 \xED\x99\x95\xEC\x9E\xA5(px)" /* 걷기 최대 확장(px) */, &_sherbet_val_tune.walk_err_px, 0.0f, 40.0f, "%.1f");
+				modified |= ImGui::SliderFloat("\xEB\x8B\xAC\xEB\xA6\xAC\xEA\xB8\xB0 \xEC\xB5\x9C\xEB\x8C\x80 \xED\x99\x95\xEC\x9E\xA5(px)" /* 달리기 최대 확장(px) */, &_sherbet_val_tune.run_err_px, 0.0f, 60.0f, "%.1f");
+				modified |= ImGui::SliderFloat("\xEB\xAC\xB4\xEC\x8B\x9C \xEA\xB5\xAC\xEA\xB0\x84(deadzone)" /* 무시 구간(deadzone) */, &_sherbet_val_tune.deadzone, 0.0f, 0.9f, "%.3f");
+				ImGui::TextDisabled("%s", "\xEB\x8B\xAC\xEB\xA6\xAC\xEA\xB8\xB0 \xEC\x86\x8D\xEB\x8F\x84\xEC\x9D\x98 27.5% \xEB\xAF\xB8\xEB\xA7\x8C\xEC\x9D\xB4\xEB\xA9\xB4 \xEC\x98\xA4\xEC\xB0\xA8 0 \xE2\x80\x94 \xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEA\xB3\xB5\xEC\x8B\x9D \xED\x8C\xA8\xEC\xB9\x98\xEB\x85\xB8\xED\x8A\xB8 \xEA\xB0\x92\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4" /* 달리기 속도의 27.5% 미만이면 오차 0 — 발로란트 공식 패치노트 값입니다 */);
+				modified |= ImGui::SliderFloat("\xEA\xB0\x80\xEC\x86\x8D(1/\xEC\xB4\x88)" /* 가속(1/초) */, &_sherbet_val_tune.move_accel, 1.0f, 60.0f, "%.1f");
+				modified |= ImGui::SliderFloat("\xEA\xB0\x90\xEC\x86\x8D(1/\xEC\xB4\x88)" /* 감속(1/초) */, &_sherbet_val_tune.move_decel, 1.0f, 60.0f, "%.1f");
+				modified |= ImGui::SliderFloat("\xEA\xB1\xB7\xEA\xB8\xB0 \xEC\x86\x8D\xEB\x8F\x84 \xEB\xB9\x84\xEC\x9C\xA8" /* 걷기 속도 비율 */, &_sherbet_val_tune.walk_speed, 0.0f, 1.0f, "%.2f");
+
+				ImGui::SeparatorText("\xED\x82\xA4 \xEC\x84\xA4\xEC\xA0\x95" /* 키 설정 */);
+				modified |= imgui::key_input_box("\xEC\x95\x9E\xEC\x9C\xBC\xEB\xA1\x9C" /* 앞으로 */, _sherbet_val_key_fwd, *_input);
+				modified |= imgui::key_input_box("\xEB\x92\xA4\xEB\xA1\x9C" /* 뒤로 */, _sherbet_val_key_back, *_input);
+				modified |= imgui::key_input_box("\xEC\x99\xBC\xEC\xAA\xBD" /* 왼쪽 */, _sherbet_val_key_left, *_input);
+				modified |= imgui::key_input_box("\xEC\x98\xA4\xEB\xA5\xB8\xEC\xAA\xBD" /* 오른쪽 */, _sherbet_val_key_right, *_input);
+				modified |= imgui::key_input_box("\xEA\xB1\xB7\xEA\xB8\xB0/\xEB\x8B\xAC\xEB\xA6\xAC\xEA\xB8\xB0 \xEC\x88\x98\xEC\xA0\x95\xED\x82\xA4" /* 걷기/달리기 수정키 */, _sherbet_val_key_walk, *_input);
+				modified |= ImGui::Checkbox("\xEC\x88\x98\xEC\xA0\x95\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEB\x8B\xAC\xEB\xA6\xAC\xEA\xB8\xB0 (GTA/FiveM \xEB\xB0\xA9\xEC\x8B\x9D)" /* 수정키를 누르면 달리기 (GTA/FiveM 방식) */, &_sherbet_val_tune.walk_key_means_run);
+				ImGui::TextDisabled("%s", "\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8\xEB\x8A\x94 Shift \xEA\xB0\x80 \xEA\xB1\xB7\xEA\xB8\xB0, GTA \xEA\xB3\x84\xEC\x97\xB4\xEC\x9D\x80 Shift \xEA\xB0\x80 \xEB\x8B\xAC\xEB\xA6\xAC\xEA\xB8\xB0\xEB\x9D\xBC \xEC\x9D\x98\xEB\xAF\xB8\xEA\xB0\x80 \xEB\xB0\x98\xEB\x8C\x80\xEC\x98\x88\xEC\x9A\x94" /* 발로란트는 Shift 가 걷기, GTA 계열은 Shift 가 달리기라 의미가 반대예요 */);
+
+				modified |= imgui::key_input_box("\xEC\x9D\xBC\xEC\x8B\x9C\xEC\xA0\x95\xEC\xA7\x80 \xED\x95\xAB\xED\x82\xA4" /* 일시정지 핫키 */, _sherbet_val_key_pause, *_input);
+				ImGui::TextDisabled("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\x82\xB4 \xEC\xB1\x84\xED\x8C\x85 \xEC\xA4\x91\xEC\x97\x90\xEB\x8A\x94 WASD \xEA\xB0\x80 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x9E\xA1\xED\x98\x80\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB7\xB8\xEB\x95\x8C \xEC\x9D\xB4 \xED\x82\xA4\xEB\xA1\x9C \xEC\x9E\xA0\xEC\x8B\x9C \xEB\xA9\x88\xEC\xB6\x94\xEC\x84\xB8\xEC\x9A\x94" /* 게임 내 채팅 중에는 WASD 가 이동으로 잡혀요 — 그때 이 키로 잠시 멈추세요 */);
+				if (_sherbet_val_err_paused)
+					ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  " "\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9D\xBC\xEC\x8B\x9C\xEC\xA0\x95\xEC\xA7\x80 \xEC\x83\x81\xED\x83\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4" /* 지금 일시정지 상태입니다 */);
+
+				ImGui::Spacing();
+				ImGui::TextDisabled("\xED\x98\x84\xEC\x9E\xAC \xED\x99\x95\xEC\x9E\xA5: \xEC\x82\xAC\xEA\xB2\xA9 %.1fpx \xC2\xB7 \xEC\x9D\xB4\xEB\x8F\x99 %.1fpx" /* 현재 확장: 사격 %.1fpx · 이동 %.1fpx */,
+					static_cast<double>(_sherbet_val_err.fire_px),
+					static_cast<double>(xhr::movement_error_px(_sherbet_val_err, _sherbet_val_tune)));
+			}
 			ImGui::TreePop();
 		}
 

@@ -98,6 +98,18 @@ namespace sherbet
 		enum class dot_order { above_inner, below_all };
 		constexpr dot_order kDotOrder = dot_order::above_inner;
 
+		// §6 #8 · §0.3 #19 — f(Fade Crosshair With Firing Error)가 알파 페이드인가 완전 숨김인가.
+		//   alpha (채택) : 위쪽 팔의 알파를 연속적으로 낮춘다. 커뮤니티 원문이 "top half … **fade**"
+		//                  이고 "사격을 멈추면 돌아온다" → 연속량이다.
+		//   binary       : 툭 사라졌다 툭 돌아온다. VCRDB 의 이진 숨김은 정적 프리뷰의 근사다.
+		// 확인법: `f;1` + 안팎 둘 다 켠 상태로 연사하며 위쪽 팔을 본다. 서서히 흐려지면 alpha.
+		enum class fade_mode { alpha, binary };
+		constexpr fade_mode kFadeMode = fade_mode::alpha;
+
+		// §6 #8 — 페이드가 바깥선 위쪽 팔에도 걸리는지는 미확인이다. 같이 거는 쪽을 채택한다
+		// (안쪽만 흐려지면 위쪽만 두 계층이 어긋나 보인다).
+		constexpr bool kFadeAppliesToOuter = true;
+
 		// §1 의 UI 슬라이더 범위. **파서는 이 범위를 강제하지 않는다**(위 주석 참고) —
 		// 나중에 UI 를 붙일 때 슬라이더 한계로만 쓴다.
 		struct int_range { int lo, hi; };
@@ -1405,8 +1417,20 @@ namespace sherbet
 				push_ring(out, r, T, ring_a);
 			}
 
+			// §4.1 #8 f(Fade Crosshair With Firing Error) — 반동으로 탄착이 위로 올라가므로
+			// "여기는 이미 맞지 않는다"를 알려주는 연출이다. **벌어짐이 아니라 위쪽 팔의 알파**다.
+			// fade 는 0..1 배수이고 1 이면 아무 일도 일어나지 않는다(= 태스크 2 결과와 동일).
+			inline std::uint8_t scale_alpha(std::uint8_t a, float f)
+			{
+				if (f >= 1.0f)
+					return a;
+				if (f <= 0.0f)
+					return 0;
+				return static_cast<std::uint8_t>(static_cast<float>(a) * f); // §3.6 관례와 같은 절삭
+			}
+
 			inline void push_line_group(quad_list &out, const line &Ln, const layer &L, int cx, int cy, float err_px,
-			                            rgb c, int T, std::uint8_t ring_a)
+			                            rgb c, int T, std::uint8_t ring_a, float top_fade)
 			{
 				if (!Ln.show_lines)
 					return;
@@ -1415,19 +1439,24 @@ namespace sherbet
 				line_arms(Ln, cx, cy, effective_offset(Ln, L, err_px), a);
 				const std::uint8_t body_a = alpha_from_opacity(Ln.opacity);
 
+				// 인덱스 3 이 위쪽 팔이다(§3.7 우 → 좌 → 하 → 상). 본체와 링을 같이 흐린다 —
+				// 링만 남으면 유령 같은 검은 윤곽선이 떠 있게 된다.
+				const std::uint8_t fade_body[4] = { body_a, body_a, body_a, scale_alpha(body_a, top_fade) };
+				const std::uint8_t fade_ring[4] = { ring_a, ring_a, ring_a, scale_alpha(ring_a, top_fade) };
+
 				if (kOutlineOnePass)
 				{
 					// §3.6 #6 팔 단위 1-pass — 팔마다 [본체 → 자기 링].
 					for (int i = 0; i < 4; ++i)
-						push_piece(out, a[i], c, body_a, T, ring_a);
+						push_piece(out, a[i], c, fade_body[i], T, fade_ring[i]);
 				}
 				else
 				{
 					// 대안(§6 #4): 그룹마다 [링 4개 → 본체 4개]. 본체가 항상 링 위에 온다.
 					for (int i = 0; i < 4; ++i)
-						push_ring(out, a[i], T, ring_a);
+						push_ring(out, a[i], T, fade_ring[i]);
 					for (int i = 0; i < 4; ++i)
-						push_body(out, a[i], c, body_a);
+						push_body(out, a[i], c, fade_body[i]);
 				}
 			}
 
@@ -1454,7 +1483,11 @@ namespace sherbet
 		//
 		// inner_err_px / outer_err_px 는 §4 의 동적 오차(태스크 4). 정적 조준점에서는 0 이다.
 		// 오차는 **오프셋만** 늘린다 — 길이·두께·투명도는 절대 변하지 않는다(§4.1 #2).
-		inline void build_crosshair(const layer &L, int cx, int cy, float inner_err_px, float outer_err_px, quad_list &out)
+		//
+		// top_fade 는 §4 의 f(Fade Crosshair With Firing Error) 배수다. **1.0 이면 태스크 2 의
+		// 정적 결과와 바이트 단위로 같다** — 오차 기능을 끈 사람이 비용을 한 푼도 안 내야 한다.
+		inline void build_crosshair(const layer &L, int cx, int cy, float inner_err_px, float outer_err_px,
+		                            quad_list &out, float top_fade = 1.0f)
 		{
 			out.clear();
 
@@ -1466,12 +1499,228 @@ namespace sherbet
 			if (kDotOrder == dot_order::below_all)
 				detail::push_dot(out, L, cx, cy, c, T, ring_a);
 
-			detail::push_line_group(out, L.inner, L, cx, cy, inner_err_px, c, T, ring_a);
+			detail::push_line_group(out, L.inner, L, cx, cy, inner_err_px, c, T, ring_a, top_fade);
 
 			if (kDotOrder == dot_order::above_inner)
 				detail::push_dot(out, L, cx, cy, c, T, ring_a);
 
-			detail::push_line_group(out, L.outer, L, cx, cy, outer_err_px, c, T, ring_a);
+			// §6 #8 — 바깥선 위쪽 팔에도 페이드를 거는지는 미확인이다(kFadeAppliesToOuter).
+			detail::push_line_group(out, L.outer, L, cx, cy, outer_err_px, c, T, ring_a,
+				kFadeAppliesToOuter ? top_fade : 1.0f);
+		}
+
+		// ─────────────────────────────────────────────────────────────
+		// 오차 애니메이션 (§4) — 입력만으로 근사한다
+		//
+		// **재현 불가를 먼저 적는다(§4.4 · §5).** 발로란트의 이동 오차는 *캐릭터 속도*의
+		// 함수인데 우리가 가진 건 *키 입력*이다. 물리량 자체가 다르다 — 넉백·슬로우·경사·
+		// 차량·물속·앉기가 전부 무시되고, 키를 안 눌러도 밀려나는 상황에서는 오차가 0 으로
+		// 보인다. 무기도 탄창도 모른다. 이 기능에서 가장 크게 어긋나는 항목이다.
+		//
+		// 반대로 **발사 오차는 재료가 좋다** — 클릭은 정확히 감지되므로 발당 확장과 회복
+		// 타이밍은 실제와 가깝게 맞출 수 있다.
+		//
+		// §4.2 에서 폐기된 것: 도(degree)→픽셀 환산표 전체. 재검증에서 재현되지 않았다.
+		// 그래서 **모든 수치를 픽셀로 직접 다루고, 전부 UI 슬라이더로 노출한다.**
+		// FiveM 은 서버마다 무기 스크립트가 달라 "정답 곡선"이 애초에 존재하지 않는다.
+		// ─────────────────────────────────────────────────────────────
+
+		// 프레임 스파이크 방어. 알트탭·로딩·디버거 정지에서 dt 가 통째로 튀면
+		// 아래 연사 루프가 수천 번 돌 수 있다. 4fps 아래는 어차피 시뮬레이션이 무의미하다.
+		constexpr float kMaxErrorDt = 0.25f;
+		constexpr int kMaxShotsPerFrame = 64;
+
+		// 튜닝 파라미터 — 전부 UI 에 노출한다(§4.2).
+		struct error_tuning
+		{
+			// ── 이동 ────────────────────────────────────────────────
+			float move_accel = 12.0f;  // 1/초. 키를 누른 뒤 최고속도까지
+			float move_decel = 20.0f;  // 1/초. 뗀 뒤 0 까지(발로란트 감속은 빠르다)
+			float deadzone = 0.275f;   // **공식 패치노트 값**(패치 3.0, 30%→27.5%). 미만이면 오차 0
+			float walk_err_px = 6.0f;  // 걷기 최대 확장
+			float run_err_px = 15.0f;  // 달리기 최대 확장 — walk:run ≈ 1:2.5 (§0.3 #11)
+			float walk_speed = 0.4f;   // 걷기일 때의 정규화 속도
+
+			// §4.4 #3 — 수정키의 **의미가 게임마다 반대다.** 발로란트는 Shift=걷기,
+			// GTA/FiveM 은 Shift=달리기다. Sherbet 의 고객은 FiveM 이므로 기본을 후자로 둔다.
+			bool walk_key_means_run = true;
+
+			// ── 발사 ────────────────────────────────────────────────
+			float fire_per_shot_px = 2.0f; // 1발당 확장
+			float fire_max_px = 14.0f;     // 상한
+			float fire_rate_rpm = 600.0f;  // 누르고 있을 때 가정하는 연사 속도(§4.4 #7 — 가정이다)
+			float recovery_time = 0.375f;  // 밴달의 Gun Recovery Time(공식 패치노트 0.50)
+			float fade_depth = 0.85f;      // f 옵션의 최대 페이드량 0..1
+		};
+
+		// 프레임 간 유지되는 상태. 전부 순수한 스칼라라 합성 타임라인으로 테스트된다.
+		struct error_state
+		{
+			float vel = 0.0f;              // 0..1 정규화 가짜 속도
+			float fire_px = 0.0f;
+			float since_last_shot = 999.0f;
+			float auto_accum = 0.0f;
+			bool fire_prev = false;
+		};
+
+		// 한 프레임의 입력. **VK 코드는 여기 들어오지 않는다** — 키 매핑은 Windows 쪽 일이다.
+		struct error_input
+		{
+			float dt = 0.0f;
+			bool fwd = false, back = false, left = false, right = false;
+			bool walk_key = false;
+			bool fire = false;   // 좌클릭 '눌림 상태'(엣지가 아니다)
+			bool paused = false; // 오버레이 열림 · 일시정지 핫키(§4.4 #2)
+		};
+
+		// 매 프레임 정확히 한 번 호출한다.
+		inline void update_error(error_state &s, const error_tuning &t, const error_input &in)
+		{
+			float dt = in.dt;
+			if (!(dt > 0.0f)) // NaN·음수·0 방어
+				dt = 0.0f;
+			if (dt > kMaxErrorDt)
+				dt = kMaxErrorDt;
+
+			// ── 이동: WASD → 가짜 속도. 발로란트처럼 **시간 상수 없이 속도에서 즉시** 계산한다.
+			//    속도 자체에만 가감속을 두어 counter-strafe(A↔D) 때 0 을 통과하게 만든다 —
+			//    deadzoning 감각이 성립하는 근거가 그 즉시성이다(§4.1 #5).
+			const bool any_move = !in.paused && (in.fwd || in.back || in.left || in.right);
+			const bool opposed = (in.left && in.right) || (in.fwd && in.back);
+			const bool slow = t.walk_key_means_run ? !in.walk_key : in.walk_key;
+			const float target = (!any_move || opposed) ? 0.0f : (slow ? clamp01(t.walk_speed) : 1.0f);
+
+			const float rate = (target > s.vel) ? t.move_accel : t.move_decel;
+			float step = rate * dt;
+			if (!(step > 0.0f))
+				step = 0.0f;
+			float d = target - s.vel;
+			if (d > step)
+				d = step;
+			if (d < -step)
+				d = -step;
+			s.vel += d;
+			// ★ 잔류값이 남으면 안 된다 — 위 클램프는 |target − vel| < step 일 때 정확히
+			//   target 에 도달하므로 멈추면 vel 이 **정확히 0** 이 된다(부동소수 잔여 없음).
+			s.vel = clamp01(s.vel);
+
+			// ── 발사: 상승 엣지 = 1발. 누르고 있으면 fire_rate_rpm 으로 계속 쏜다고 가정한다.
+			//    엣지 판정은 일시정지와 무관하게 갱신한다 — 안 그러면 누른 채로 일시정지를
+			//    풀 때 없던 한 발이 생긴다.
+			const bool edge = in.fire && !s.fire_prev;
+			s.fire_prev = in.fire;
+
+			int shots = (edge && !in.paused) ? 1 : 0;
+			if (in.fire && !in.paused)
+			{
+				s.auto_accum += dt * (t.fire_rate_rpm / 60.0f);
+				if (!(s.auto_accum >= 0.0f)) // NaN 방어
+					s.auto_accum = 0.0f;
+				int guard = 0;
+				while (s.auto_accum >= 1.0f && guard < kMaxShotsPerFrame)
+				{
+					s.auto_accum -= 1.0f;
+					++shots;
+					++guard;
+				}
+				if (guard >= kMaxShotsPerFrame)
+					s.auto_accum = 0.0f; // 말도 안 되는 연사 속도/dt 가 들어와도 여기서 끊는다
+			}
+			else
+			{
+				s.auto_accum = 0.0f;
+			}
+
+			if (shots > 0)
+			{
+				s.fire_px += t.fire_per_shot_px * static_cast<float>(shots);
+				if (s.fire_px > t.fire_max_px)
+					s.fire_px = t.fire_max_px;
+				if (s.fire_px < 0.0f)
+					s.fire_px = 0.0f;
+				s.since_last_shot = 0.0f;
+			}
+			else
+			{
+				s.since_last_shot += dt;
+				if (s.since_last_shot > 1.0e6f)
+					s.since_last_shot = 1.0e6f;
+
+				// ── 회복 (§4.1 #7 · §4.4 #8) ────────────────────────────────────
+				// 공식 문구: "Inaccuracy is accrued any time the weapon is re-fired **prior to
+				// a complete duration** of a weapon's respective Gun Recovery Time."
+				// → 연사가 이어지는 동안에는 회복하지 않는다는 뜻이다.
+				//
+				// ⚠️ **설계 §4.3 의 의사코드를 글자 그대로 옮기면 조준점이 연사 중에 절대
+				//    벌어지지 않는다.** 그 코드는 발사 직후 프레임부터 곧바로 회복시키는데,
+				//    §4.3 의 기본값(회복 14/0.375 = 37.3px/s, 600rpm = 발 간격 0.1초)이면
+				//    발 사이에 3.73px 이 빠지고 한 발이 더하는 건 2px 뿐이라 합이 음수다.
+				//    실제로 2초를 갈겨도 2px 에서 멈춘다(상한 14px 은 영원히 못 간다).
+				//    발로란트 조준점은 스프레이 중에 눈에 띄게 벌어지므로 그건 확실히 틀렸다.
+				//
+				//    그래서 **마지막 발 이후 한 발 간격이 지나야** 회복을 시작한다:
+				//      탭     → 거의 안 벌어지고 금방 돌아온다
+				//      스프레이 → 상한까지 차오른다
+				//      멈추면  → recovery_time 에 걸쳐 선형으로 0 까지
+				//    구조는 그대로 두고 회복이 **언제** 시작되는지만 바꾼 것이다.
+				//    (곡선이 선형인지 지수인지는 여전히 미공개다 — §4.4 #8)
+				const float shot_interval = (t.fire_rate_rpm > 0.0f) ? (60.0f / t.fire_rate_rpm) : 0.0f;
+				if (s.since_last_shot > shot_interval && s.fire_px > 0.0f &&
+				    t.recovery_time > 0.0f && t.fire_max_px > 0.0f)
+				{
+					s.fire_px -= (t.fire_max_px / t.recovery_time) * dt;
+					if (s.fire_px < 0.0f)
+						s.fire_px = 0.0f; // ★ 정확히 0 으로 떨어진다(잔류 오프셋 없음)
+				}
+			}
+		}
+
+		// 이동 오차: 속도의 **즉시** 함수다 — 보간하지 않는다(§4.1 #5).
+		// deadzone 27.5% 는 공식 패치노트로 확인된 유일한 이동 관련 상수다.
+		inline float movement_error_px(const error_state &s, const error_tuning &t)
+		{
+			const float dz = clamp01(t.deadzone);
+			if (s.vel <= dz)
+				return 0.0f;
+			const float denom = 1.0f - dz;
+			if (denom <= 0.0f)
+				return t.run_err_px;
+			const float k = clamp01((s.vel - dz) / denom);
+			return (k < 0.5f) ? t.walk_err_px * (k / 0.5f)
+			                  : t.walk_err_px + (t.run_err_px - t.walk_err_px) * ((k - 0.5f) / 0.5f);
+		}
+
+		// 라인별 합산 — **덧셈이다(최댓값이 아니다).** 공식 위키가 "penalties will be applied
+		// additively" 라고 명시한다(§4.1 #3).
+		// ★ 두 토글이 다 꺼져 있으면 정확히 0.0f 를 돌려준다 — 오차를 끈 조준점은
+		//   태스크 2 의 정적 결과와 **바이트 단위로 같아야** 한다.
+		inline float line_error_px(const line &L, const error_state &s, const error_tuning &t)
+		{
+			float e = 0.0f;
+			if (L.show_movement_error)
+				e += movement_error_px(s, t) * L.movement_error_scale;
+			if (L.show_shooting_error)
+				e += s.fire_px * L.firing_error_scale;
+			return e > 0.0f ? e : 0.0f;
+		}
+
+		// f 옵션: 위쪽 팔의 알파 배수. 1.0 이면 아무 일도 없다.
+		inline float top_arm_fade(const layer &L, const error_state &s, const error_tuning &t)
+		{
+			if (!L.fade_with_firing_error || !(t.fire_max_px > 0.0f))
+				return 1.0f;
+			const float k = clamp01(s.fire_px / t.fire_max_px);
+			if (kFadeMode == fade_mode::binary)
+				return (k > 0.0f) ? 0.0f : 1.0f;
+			return 1.0f - clamp01(t.fade_depth) * k;
+		}
+
+		// 위 세 개를 묶어 build_crosshair() 인자로 바로 쓰는 형태. 렌더 쪽에 산술을 남기지 않는다.
+		inline void build_crosshair_animated(const layer &L, int cx, int cy, const error_state &s,
+		                                     const error_tuning &t, quad_list &out)
+		{
+			build_crosshair(L, cx, cy, line_error_px(L.inner, s, t), line_error_px(L.outer, s, t), out,
+				top_arm_fade(L, s, t));
 		}
 	}
 }

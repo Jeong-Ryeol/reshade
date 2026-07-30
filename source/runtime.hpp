@@ -387,6 +387,22 @@ namespace reshade
 		sherbet::crosshair::profile _sherbet_val_profile; // _sherbet_val_code 를 파싱한 결과
 		std::vector<sherbet::crosshair::quad> _sherbet_val_quads; // 매 프레임 재사용(할당 회피)
 
+		// SHERBET: 발로란트 조준점의 오차 애니메이션(설계 §4). 게임 메모리는 읽지 않고
+		// 이미 후킹 중인 입력(WASD·좌클릭)만 본다 — 그래서 **근사**이고, 그 한계는 §5 에 있다.
+		// 끄면(_sherbet_val_err_on = false) 정적 조준점과 완전히 같은 결과가 나온다.
+		bool _sherbet_val_err_on = false;
+		bool _sherbet_val_err_paused = false;  // 일시정지 핫키 토글(§4.4 #2 — 게임 내 채팅 방어)
+		bool _sherbet_val_pause_prev = false;  // 핫키 상승 엣지
+		sherbet::crosshair::error_tuning _sherbet_val_tune;
+		sherbet::crosshair::error_state _sherbet_val_err;
+		// 이동 키는 게임마다 다르므로 전부 재바인딩 가능하게 둔다(§4.4 #3).
+		unsigned int _sherbet_val_key_fwd[4] = { 'W', 0, 0, 0 };
+		unsigned int _sherbet_val_key_back[4] = { 'S', 0, 0, 0 };
+		unsigned int _sherbet_val_key_left[4] = { 'A', 0, 0, 0 };
+		unsigned int _sherbet_val_key_right[4] = { 'D', 0, 0, 0 };
+		unsigned int _sherbet_val_key_walk[4] = { 0x10, 0, 0, 0 }; // VK_SHIFT
+		unsigned int _sherbet_val_key_pause[4] = { 0, 0, 0, 0 };   // 기본 없음
+
 		// SHERBET: 커스텀 배경 이미지 — 오버레이 창 배경을 사용자 사진으로. 'custompicture' 기능 구매자 전용.
 		api::resource _sherbet_bg_tex = {};
 		api::resource_view _sherbet_bg_srv = {};
