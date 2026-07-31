@@ -1544,11 +1544,6 @@ void reshade::runtime::draw_gui()
 		mg->AddRect(ImVec2(mg_p0.x - 3.0f, mg_p0.y - 3.0f), ImVec2(mg_p1.x + 3.0f, mg_p1.y + 3.0f),
 			sherbet::with_alpha(mg_t.accent, static_cast<int>(230 * ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f))), 8.0f, 0, 2.0f);
 
-		// 확대창이 소스 위에 겹치는지 — **경고용으로만** 쓴다(캡처는 계속한다).
-		// 겹치면 이중 Present 프레임에서 거울 중첩이 보일 수 있지만, 그걸 막겠다고 캡처를
-		// 멈추면 확대창이 정지 화면이 된다. 실시간이 이 기능의 존재 이유다.
-		_sherbet_mag_overlap = sherbet::mag::overlaps(_sherbet_mag_rect, mg_x, mg_y, mg_w, mg_h,
-			static_cast<int>(mg_vp->Size.x), static_cast<int>(mg_vp->Size.y));
 	}
 
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
@@ -4880,7 +4875,7 @@ void reshade::runtime::draw_gui_settings()
 				ICON_FK_WARNING "  " "\xED\x95\xB4\xEC\x83\x81\xEB\x8F\x84\xEA\xB0\x80 \xEB\xB0\x94\xEB\x80\x8C\xEC\x97\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\x81\xEC\x97\xAD\xEC\x9D\x84 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x9E\xA1\xEC\x95\x84 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "해상도가 바뀌었어요 — 영역을 다시 잡아 주세요"
 
 		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
-		if (ImGui::SliderFloat("\xEB\xB0\xB0\xEC\x9C\xA8##mag", &_sherbet_mag_zoom, 1.5f, 6.0f, "%.1fx")) // "배율"
+		if (ImGui::SliderFloat("\xEB\xB0\xB0\xEC\x9C\xA8##mag", &_sherbet_mag_zoom, 1.0f, 10.0f, "%.1fx")) // "배율"
 			modified = true;
 		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
 		if (ImGui::SliderFloat("\xED\x88\xAC\xEB\xAA\x85\xEB\x8F\x84##mag", &_sherbet_mag_opacity, 0.2f, 1.0f, "%.2f")) // "투명도"
@@ -4896,9 +4891,6 @@ void reshade::runtime::draw_gui_settings()
 			if (_sherbet_mag_srv == 0)
 				ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s",
 					ICON_FK_CANCEL "  " "\xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x84 \xEA\xB0\x80\xEC\xA0\xB8\xEC\x98\xA4\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xED\x8C\x90\xEB\xA7\xA4\xEC\x9E\x90\xEC\x97\x90\xEA\xB2\x8C \xEC\x95\x8C\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "화면을 가져오지 못했어요 — 판매자에게 알려 주세요"
-			else if (_sherbet_mag_overlap)
-				ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s",
-					ICON_FK_WARNING "  " "\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98\xEA\xB0\x80 \xEC\x9B\x90\xEB\xB3\xB8\xEC\x9D\x84 \xEB\x8D\xAE\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9E\x94\xEC\x83\x81\xEC\x9D\xB4 \xEB\xB3\xB4\xEC\x9D\xB4\xEB\xA9\xB4 \xEB\x8B\xA4\xEB\xA5\xB8 \xEA\xB3\xB3\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xA8 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "표시 위치가 원본을 덮어요 — 잔상이 보이면 다른 곳으로 옮겨 주세요"
 			else
 				ImGui::TextDisabled("%s  %dx%d \xE2\x86\x92 %.0fx%.0f",
 					ICON_FK_OK, _sherbet_mag_tex_w, _sherbet_mag_tex_h,

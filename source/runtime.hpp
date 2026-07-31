@@ -491,7 +491,6 @@ namespace reshade
 		api::pipeline _sherbet_mag_pipeline = {};
 		api::pipeline_layout _sherbet_mag_pipeline_layout = {};
 		api::sampler _sherbet_mag_sampler = {};
-		bool _sherbet_mag_overlap = false; // 확대창이 소스 위에 겹쳤다 → 다음 캡처를 건너뛴다
 		float _sherbet_mag_pick_msg = 0.0f; // "너무 작아요" 안내 남은 시간(초)
 
 		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고

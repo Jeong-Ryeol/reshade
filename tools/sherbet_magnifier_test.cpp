@@ -122,8 +122,10 @@ static void test_anchor_is_center()
 
 static void test_clamp_zoom()
 {
-	assert(near_eq(clamp_zoom(0.1f), 1.5f));   // 축소는 의미 없다
-	assert(near_eq(clamp_zoom(100.0f), 6.0f)); // 화면을 다 덮으면 안 된다
+	assert(near_eq(clamp_zoom(0.1f), 1.0f));    // 축소는 의미 없다(1배가 하한)
+	assert(near_eq(clamp_zoom(100.0f), 10.0f)); // 슬라이더 상한과 같아야 값이 안 잘린다
+	assert(near_eq(clamp_zoom(1.0f), 1.0f));
+	assert(near_eq(clamp_zoom(10.0f), 10.0f));
 	assert(near_eq(clamp_zoom(3.0f), 3.0f));
 }
 
@@ -168,29 +170,6 @@ static void test_is_usable_rejects_accidental_click()
 	assert(is_usable(r, k4K_W, k4K_H));
 }
 
-// 확대창이 소스 위에 겹치면 이중 Present 프레임에서 중첩이 쌓인다 — 겹침을 정확히 판정해야 한다.
-static void test_overlap_detection()
-{
-	rect src; src.x = 0.80f; src.y = 0.90f; src.w = 0.15f; src.h = 0.06f;
-
-	for (int i = 0; i < 3; ++i)
-	{
-		const int W = (i == 0 ? kFHD_W : i == 1 ? k2K_W : k4K_W);
-		const int H = (i == 0 ? kFHD_H : i == 1 ? k2K_H : k4K_H);
-		const box b = source_box(src, W, H);
-		const float dw = box_w(b) * 3.0f, dh = box_h(b) * 3.0f;
-
-		// 기본 표시 위치(0.5, 0.30) — 화면 위쪽 가운데라 우하단 소스와 안 겹친다
-		float x = 0, y = 0;
-		dest_pos(0.5f, 0.30f, dw, dh, W, H, x, y);
-		assert(!overlaps(src, x, y, dw, dh, W, H));
-
-		// 소스 바로 위로 옮기면 겹친다
-		dest_pos(0.87f, 0.93f, dw, dh, W, H, x, y);
-		assert(overlaps(src, x, y, dw, dh, W, H));
-	}
-}
-
 int main()
 {
 	test_same_relative_position_across_resolutions();
@@ -203,7 +182,6 @@ int main()
 	test_clamp_zoom();
 	test_zero_resolution_is_safe();
 	test_is_usable_rejects_accidental_click();
-	test_overlap_detection();
 	std::puts("sherbet_magnifier_test: ALL PASS");
 	return 0;
 }

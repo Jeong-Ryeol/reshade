@@ -118,22 +118,11 @@ namespace sherbet
 				&& r.h * screen_h >= static_cast<float>(min_px);
 		}
 
-		// 소스 사각형과 확대창이 겹치는가.
-		// 겹치면 게임이 리렌더 없이 Present 를 두 번 하는 프레임에서 확대창이 다시 캡처되어
-		// 중첩이 쌓인다(효과 렌더 가드는 프레임당이 아니라 **Present 당**이다).
-		// dest 는 픽셀, src 는 정규화라 화면 크기로 같은 공간에 맞춘다.
-		inline bool overlaps(const rect &src, float dx, float dy, float dw, float dh,
-			int screen_w, int screen_h)
-		{
-			const float sx0 = src.x * screen_w, sy0 = src.y * screen_h;
-			const float sx1 = (src.x + src.w) * screen_w, sy1 = (src.y + src.h) * screen_h;
-			return !(dx >= sx1 || dx + dw <= sx0 || dy >= sy1 || dy + dh <= sy0);
-		}
-
-		// 배율 범위. 1 배는 확대가 아니므로 의미가 없고, 너무 크면 화면을 다 덮는다.
+		// 배율 범위. 슬라이더(runtime_gui.cpp)와 **반드시 같은 값**이어야 한다 —
+		// 다르면 슬라이더를 올려도 여기서 되돌려져 "슬라이더가 안 먹는다" 로 보인다.
 		inline float clamp_zoom(float z)
 		{
-			return z < 1.5f ? 1.5f : (z > 6.0f ? 6.0f : z);
+			return z < 1.0f ? 1.0f : (z > 10.0f ? 10.0f : z);
 		}
 	}
 }
