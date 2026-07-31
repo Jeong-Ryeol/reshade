@@ -841,9 +841,14 @@ void reshade::runtime::on_present()
 	//    실제로 MSAA 를 켠 사용자에게서 "돋보기가 안 보인다" 로 나타났다.
 	if (_sherbet_mag_on && !_sherbet_mag_overlap)
 	{
+		// ⚠️ 소스 선택을 **capture_screenshot() 과 글자 그대로 동일하게** 맞춘다
+		//    (runtime.hpp:83). 스크린샷은 모든 ReShade 사용자에게 동작하는 유일하게 검증된
+		//    "화면 그대로 가져오기" 경로다. _back_buffer_targets 를 거치지 않고 스왑체인에서
+		//    직접 받으므로, 애드온이 렌더 경로를 건드려도 흔들릴 여지가 줄어든다.
+		//    (업스케일러 애드온이 있는 PC 에서만 돋보기가 보인다는 신고가 있었다.)
 		const bool mag_resolved = _back_buffer_resolved != 0;
 		sherbet_magnifier_capture(cmd_list,
-			mag_resolved ? _back_buffer_resolved : back_buffer_resource,
+			mag_resolved ? _back_buffer_resolved : _swapchain->get_current_back_buffer(),
 			mag_resolved ? api::resource_usage::render_target : api::resource_usage::present);
 	}
 
