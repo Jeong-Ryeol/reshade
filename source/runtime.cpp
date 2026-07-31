@@ -647,6 +647,7 @@ exit_failure:
 	// SHERBET: 돋보기 텍스처도 디바이스 리셋 때 놓는다. 해상도가 바뀌면 잘라낸 크기도
 	// 달라지므로 어차피 다시 만든다(캡처 함수가 크기 불일치를 보고 재생성한다).
 	sherbet_magnifier_release();
+	sherbet_magnifier_release_pipeline();
 	_device->destroy_resource_view(_sherbet_before_srv);
 	_sherbet_before_srv = {};
 
@@ -726,6 +727,7 @@ void reshade::runtime::on_reset()
 
 	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
 	sherbet_magnifier_release(); // SHERBET: 돋보기 잘라내기 텍스처(해상도가 바뀌면 크기도 달라진다)
+	sherbet_magnifier_release_pipeline(); // 파이프라인도 디바이스 리셋 때 놓는다
 
 	_device->destroy_resource(_sherbet_crosshair_tex);
 	_sherbet_crosshair_tex = {};
@@ -4002,71 +4004,154 @@ void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, ap
 {
 	if (back_buffer == 0 || _width == 0 || _height == 0)
 		return;
+	if (!sherbet_magnifier_create_pipeline())
+	{
+		_sherbet_mag_on = false; // 파이프라인이 없으면 영영 안 보인다 — 조용히 켜둔 채 두지 않는다
+		return;
+	}
 
 	const sherbet::mag::box b = sherbet::mag::source_box(_sherbet_mag_rect, static_cast<int>(_width), static_cast<int>(_height));
 	const int bw = sherbet::mag::box_w(b), bh = sherbet::mag::box_h(b);
 	if (bw <= 0 || bh <= 0)
 		return;
 
-	// 영역 크기가 바뀌었으면(사용자가 다시 잡았거나 해상도가 변함) 텍스처를 다시 만든다.
 	if (_sherbet_mag_tex == 0 || _sherbet_mag_tex_w != bw || _sherbet_mag_tex_h != bh)
 	{
 		sherbet_magnifier_release();
-		// 포맷 규약은 반반 비교 스냅샷과 같다: 리소스는 typeless, 뷰는 default_typed.
-		const api::resource_desc desc(static_cast<uint32_t>(bw), static_cast<uint32_t>(bh), 1, 1,
-			api::format_to_typeless(_back_buffer_format), 1, api::memory_heap::default_,
-			api::resource_usage::copy_dest | api::resource_usage::shader_resource);
-		if (!_device->create_resource(desc, nullptr, api::resource_usage::shader_resource, &_sherbet_mag_tex))
+		const api::format fmt_typeless = api::format_to_typeless(_back_buffer_format);
+		const api::format fmt_typed = api::format_to_default_typed(_back_buffer_format, 0);
+		const uint32_t w = static_cast<uint32_t>(bw), h = static_cast<uint32_t>(bh);
+
+		const bool ok =
+			_device->create_resource(
+				api::resource_desc(w, h, 1, 1, fmt_typeless, 1, api::memory_heap::default_,
+					api::resource_usage::copy_dest | api::resource_usage::shader_resource),
+				nullptr, api::resource_usage::shader_resource, &_sherbet_mag_tex) &&
+			_device->create_resource_view(_sherbet_mag_tex, api::resource_usage::shader_resource,
+				api::resource_view_desc(fmt_typed), &_sherbet_mag_tex_srv) &&
+			// dst 는 렌더 타깃이어야 한다(블릿 대상) + ImGui 가 샘플링한다
+			_device->create_resource(
+				api::resource_desc(w, h, 1, 1, fmt_typeless, 1, api::memory_heap::default_,
+					api::resource_usage::render_target | api::resource_usage::shader_resource),
+				nullptr, api::resource_usage::shader_resource, &_sherbet_mag_out) &&
+			_device->create_resource_view(_sherbet_mag_out, api::resource_usage::render_target,
+				api::resource_view_desc(fmt_typed), &_sherbet_mag_out_rtv) &&
+			_device->create_resource_view(_sherbet_mag_out, api::resource_usage::shader_resource,
+				api::resource_view_desc(fmt_typed), &_sherbet_mag_srv);
+
+		if (!ok)
 		{
-			_sherbet_mag_tex = {};
-			// ⚠️ **조용히 넘어가지 않는다.** 실패가 무음이면 "켜도 아무 일이 안 일어남" 이 되고
-			//    사용자 화면만 보고는 원인을 알 길이 없다(실제로 그 신고를 받았다).
+			sherbet_magnifier_release();
 			log::message(log::level::error,
 				"[sherbet-mag] 텍스처 생성 실패 %dx%d (화면 %ux%u, 포맷 %u)",
 				bw, bh, _width, _height, static_cast<unsigned int>(_back_buffer_format));
 			return;
 		}
-		if (!_device->create_resource_view(_sherbet_mag_tex, api::resource_usage::shader_resource,
-				api::resource_view_desc(api::format_to_default_typed(_back_buffer_format, 0)), &_sherbet_mag_srv))
-		{
-			_device->destroy_resource(_sherbet_mag_tex);
-			_sherbet_mag_tex = {};
-			_sherbet_mag_srv = {};
-			return;
-		}
 		_sherbet_mag_tex_w = bw;
 		_sherbet_mag_tex_h = bh;
-		// 성공도 한 줄 남긴다 — 이 줄이 로그에 없으면 캡처 경로가 아예 안 돈 것이고,
-		// 있는데 화면에 안 보이면 그리기 쪽 문제다. 둘의 대응이 전혀 다르다.
 		log::message(log::level::info,
 			"[sherbet-mag] 잘라내기 %dx%d @(%d,%d) (화면 %ux%u, 포맷 %u, resolved=%d)",
 			bw, bh, b.x0, b.y0, _width, _height,
 			static_cast<unsigned int>(_back_buffer_format), _back_buffer_resolved != 0 ? 1 : 0);
 	}
 
+	// ── 1단계: 백버퍼에서 그 조각만 복사 ────────────────────────────────────
+	// ⚠️ 원래 상태(src_state)로 반드시 되돌린다 — on_present 뒤쪽(runtime.cpp:1004 부근)이
+	//    back_buffer_resource 의 상태를 전제로 배리어를 건다.
 	const api::subresource_box src_box = {
 		static_cast<uint32_t>(b.x0), static_cast<uint32_t>(b.y0), 0,
 		static_cast<uint32_t>(b.x1), static_cast<uint32_t>(b.y1), 1 };
 
-	// ⚠️ 원래 상태(src_state)로 **반드시 되돌린다.** on_present 뒤쪽(runtime.cpp:1004)이
-	//    back_buffer_resource 가 copy_source 인 것을 전제로 배리어를 걸기 때문에, 여기서
-	//    present 로 돌려놓으면 그 전이가 어긋난다.
 	cmd_list->barrier(back_buffer, src_state, api::resource_usage::copy_source);
 	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
 	cmd_list->copy_texture_region(back_buffer, 0, &src_box, _sherbet_mag_tex, 0, nullptr);
 	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
 	cmd_list->barrier(back_buffer, api::resource_usage::copy_source, src_state);
+
+	// ── 2단계: 알파를 채우며 블릿 ───────────────────────────────────────────
+	// ⚠️ **이 단계가 없으면 화면에 아무것도 안 보인다.** 게임 백버퍼는 알파가 0 인 경우가
+	//    흔하고(게임이 알파를 안 쓴다), ImGui 픽셀 셰이더는 tex*vcol 을 source_alpha 로
+	//    블렌드하므로 알파 0 = 완전 투명이다. copy_ps.hlsl 이 `col.a = 1.0` 으로 채워 준다.
+	//    (업스케일러 애드온이 깔린 PC 에서만 보이던 원인이 이것이다 — 그 애드온이 자체
+	//     합성을 하면서 알파를 채워 줬다.)
+	cmd_list->barrier(_sherbet_mag_out, api::resource_usage::shader_resource, api::resource_usage::render_target);
+	cmd_list->bind_pipeline(api::pipeline_stage::all_graphics, _sherbet_mag_pipeline);
+	cmd_list->push_descriptors(api::shader_stage::pixel, _sherbet_mag_pipeline_layout, 0,
+		api::descriptor_table_update { {}, 0, 0, 1, api::descriptor_type::sampler, &_sherbet_mag_sampler });
+	cmd_list->push_descriptors(api::shader_stage::pixel, _sherbet_mag_pipeline_layout, 1,
+		api::descriptor_table_update { {}, 0, 0, 1, api::descriptor_type::shader_resource_view, &_sherbet_mag_tex_srv });
+	const api::viewport vp = { 0.0f, 0.0f, static_cast<float>(bw), static_cast<float>(bh), 0.0f, 1.0f };
+	cmd_list->bind_viewports(0, 1, &vp);
+	const api::rect sc = { 0, 0, bw, bh };
+	cmd_list->bind_scissor_rects(0, 1, &sc);
+	cmd_list->bind_render_targets_and_depth_stencil(1, &_sherbet_mag_out_rtv);
+	cmd_list->draw(3, 1, 0, 0);
+	cmd_list->barrier(_sherbet_mag_out, api::resource_usage::render_target, api::resource_usage::shader_resource);
 }
 
 void reshade::runtime::sherbet_magnifier_release()
 {
-	if (_sherbet_mag_srv != 0)
-		_device->destroy_resource_view(_sherbet_mag_srv);
-	if (_sherbet_mag_tex != 0)
-		_device->destroy_resource(_sherbet_mag_tex);
+	if (_sherbet_mag_srv != 0)         _device->destroy_resource_view(_sherbet_mag_srv);
+	if (_sherbet_mag_out_rtv != 0)     _device->destroy_resource_view(_sherbet_mag_out_rtv);
+	if (_sherbet_mag_out != 0)         _device->destroy_resource(_sherbet_mag_out);
+	if (_sherbet_mag_tex_srv != 0)     _device->destroy_resource_view(_sherbet_mag_tex_srv);
+	if (_sherbet_mag_tex != 0)         _device->destroy_resource(_sherbet_mag_tex);
 	_sherbet_mag_srv = {};
+	_sherbet_mag_out_rtv = {};
+	_sherbet_mag_out = {};
+	_sherbet_mag_tex_srv = {};
 	_sherbet_mag_tex = {};
 	_sherbet_mag_tex_w = _sherbet_mag_tex_h = 0;
+	// 파이프라인은 크기와 무관하므로 여기서 놓지 않는다(on_reset 전용).
+}
+
+// 돋보기 블릿 파이프라인. ReShade 의 _copy_pipeline 과 **같은 셰이더**(IDR_FULLSCREEN_VS +
+// IDR_COPY_PS)를 쓴다 — copy_ps.hlsl 이 `col.a = 1.0` 으로 알파를 채워 주는 것이 핵심이다.
+// _copy_pipeline 자체를 쓸 수 없는 이유: 그건 _back_buffer_resolved 를 만들 때만 생성되는데
+// (runtime.cpp:396-480) 보통의 FiveM 환경(비MSAA·BGRA8)에서는 만들어지지 않는다.
+bool reshade::runtime::sherbet_magnifier_create_pipeline()
+{
+	if (_sherbet_mag_pipeline != 0)
+		return true;
+
+	api::sampler_desc sampler_desc = {};
+	sampler_desc.filter = api::filter_mode::min_mag_mip_point; // 확대는 또렷해야 한다(선형이면 뭉갠다)
+	sampler_desc.address_u = api::texture_address_mode::clamp;
+	sampler_desc.address_v = api::texture_address_mode::clamp;
+	sampler_desc.address_w = api::texture_address_mode::clamp;
+
+	api::pipeline_layout_param layout_params[2];
+	layout_params[0] = api::descriptor_range { 0, 0, 0, 1, api::shader_stage::all, 1, api::descriptor_type::sampler };
+	layout_params[1] = api::descriptor_range { 0, 0, 0, 1, api::shader_stage::all, 1, api::descriptor_type::shader_resource_view };
+
+	const resources::data_resource vs = resources::load_data_resource(IDR_FULLSCREEN_VS);
+	const resources::data_resource ps = resources::load_data_resource(IDR_COPY_PS);
+	api::shader_desc vs_desc = { vs.data, vs.data_size };
+	api::shader_desc ps_desc = { ps.data, ps.data_size };
+
+	std::vector<api::pipeline_subobject> subobjects;
+	subobjects.push_back({ api::pipeline_subobject_type::vertex_shader, 1, &vs_desc });
+	subobjects.push_back({ api::pipeline_subobject_type::pixel_shader, 1, &ps_desc });
+
+	if (!_device->create_pipeline_layout(2, layout_params, &_sherbet_mag_pipeline_layout) ||
+		!_device->create_pipeline(_sherbet_mag_pipeline_layout, static_cast<uint32_t>(subobjects.size()), subobjects.data(), &_sherbet_mag_pipeline) ||
+		!_device->create_sampler(sampler_desc, &_sherbet_mag_sampler))
+	{
+		log::message(log::level::error, "[sherbet-mag] 블릿 파이프라인 생성 실패 — 돋보기를 끕니다");
+		sherbet_magnifier_release_pipeline();
+		return false;
+	}
+	return true;
+}
+
+void reshade::runtime::sherbet_magnifier_release_pipeline()
+{
+	if (_sherbet_mag_sampler != 0)         _device->destroy_sampler(_sherbet_mag_sampler);
+	if (_sherbet_mag_pipeline != 0)        _device->destroy_pipeline(_sherbet_mag_pipeline);
+	if (_sherbet_mag_pipeline_layout != 0) _device->destroy_pipeline_layout(_sherbet_mag_pipeline_layout);
+	_sherbet_mag_sampler = {};
+	_sherbet_mag_pipeline = {};
+	_sherbet_mag_pipeline_layout = {};
 }
 
 void reshade::runtime::sherbet_motion_tick(api::command_list *cmd_list, api::resource_view rtv)

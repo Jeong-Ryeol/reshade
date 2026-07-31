@@ -259,6 +259,8 @@ namespace reshade
 		//    on_present 뒤쪽이 특정 상태를 전제로 배리어를 건다.
 		void sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer, api::resource_usage src_state);
 		void sherbet_magnifier_release();
+		bool sherbet_magnifier_create_pipeline();
+		void sherbet_magnifier_release_pipeline();
 		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
 
 		api::swapchain *const _swapchain;
@@ -472,9 +474,23 @@ namespace reshade
 		float _sherbet_mag_opacity = 1.0f;
 		int _sherbet_mag_cap_res[2] = { 0, 0 };  // 영역을 잡을 당시 해상도(바뀌면 안내)
 		// 잘라낸 영역을 담는 텍스처. 영역 크기가 바뀌면 다시 만든다.
-		api::resource _sherbet_mag_tex = {};
-		api::resource_view _sherbet_mag_srv = {};
+		// 2단계다. ⚠️ 게임 백버퍼는 **알파가 0** 인 경우가 흔한데(게임이 알파를 안 쓴다),
+		// ImGui 는 tex*vcol 을 source_alpha 로 블렌드하므로(imgui_ps_3_0.hlsl + runtime_gui.cpp:8283)
+		// 그대로 그리면 **완전히 투명**해 아무것도 안 보인다. 그래서 ReShade 자신이 쓰는
+		// copy_ps.hlsl(`col.a = 1.0; // Clear alpha channel`)로 한 번 블릿해 알파를 채운다.
+		//   src : 백버퍼에서 잘라낸 조각 (copy_dest | shader_resource)
+		//   dst : 알파를 채운 결과, ImGui 가 그린다 (render_target | shader_resource)
+		api::resource _sherbet_mag_tex = {};      // src
+		api::resource_view _sherbet_mag_tex_srv = {};
+		api::resource _sherbet_mag_out = {};      // dst
+		api::resource_view _sherbet_mag_out_rtv = {};
+		api::resource_view _sherbet_mag_srv = {}; // dst 의 SRV — ImGui 가 쓰는 것
 		int _sherbet_mag_tex_w = 0, _sherbet_mag_tex_h = 0;
+		// 돋보기 전용 블릿 파이프라인. _copy_pipeline 은 _back_buffer_resolved 를 만들 때만
+		// 생성되므로(runtime.cpp:396-480) 보통의 FiveM 환경에는 **없다** — 직접 만든다.
+		api::pipeline _sherbet_mag_pipeline = {};
+		api::pipeline_layout _sherbet_mag_pipeline_layout = {};
+		api::sampler _sherbet_mag_sampler = {};
 		bool _sherbet_mag_overlap = false; // 확대창이 소스 위에 겹쳤다 → 다음 캡처를 건너뛴다
 		float _sherbet_mag_pick_msg = 0.0f; // "너무 작아요" 안내 남은 시간(초)
 
