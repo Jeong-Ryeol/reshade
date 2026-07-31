@@ -1544,10 +1544,9 @@ void reshade::runtime::draw_gui()
 		mg->AddRect(ImVec2(mg_p0.x - 3.0f, mg_p0.y - 3.0f), ImVec2(mg_p1.x + 3.0f, mg_p1.y + 3.0f),
 			sherbet::with_alpha(mg_t.accent, static_cast<int>(230 * ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f))), 8.0f, 0, 2.0f);
 
-		// ⚠️ 확대창이 소스 위에 겹치면 다음 캡처를 건너뛴다. 효과 렌더 가드는 프레임당이 아니라
-		//    **Present 당**이라(게임이 리렌더 없이 Present 를 두 번 하는 프레임이 실재한다)
-		//    겹친 상태로 두면 확대창이 다시 캡처돼 중첩이 쌓인다(거울 속 거울).
-		//    기본 배치는 안 겹치지만 「표시 위치」 슬라이더로 사용자가 겹치게 만들 수 있다.
+		// 확대창이 소스 위에 겹치는지 — **경고용으로만** 쓴다(캡처는 계속한다).
+		// 겹치면 이중 Present 프레임에서 거울 중첩이 보일 수 있지만, 그걸 막겠다고 캡처를
+		// 멈추면 확대창이 정지 화면이 된다. 실시간이 이 기능의 존재 이유다.
 		_sherbet_mag_overlap = sherbet::mag::overlaps(_sherbet_mag_rect, mg_x, mg_y, mg_w, mg_h,
 			static_cast<int>(mg_vp->Size.x), static_cast<int>(mg_vp->Size.y));
 	}
@@ -4899,7 +4898,7 @@ void reshade::runtime::draw_gui_settings()
 					ICON_FK_CANCEL "  " "\xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x84 \xEA\xB0\x80\xEC\xA0\xB8\xEC\x98\xA4\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xED\x8C\x90\xEB\xA7\xA4\xEC\x9E\x90\xEC\x97\x90\xEA\xB2\x8C \xEC\x95\x8C\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "화면을 가져오지 못했어요 — 판매자에게 알려 주세요"
 			else if (_sherbet_mag_overlap)
 				ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s",
-					ICON_FK_WARNING "  " "\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98\xEA\xB0\x80 \xEC\x9B\x90\xEB\xB3\xB8\xEA\xB3\xBC \xEA\xB2\xB9\xEC\xB3\x90\xEC\x9A\x94 \xE2\x80\x94 \xEB\x8B\xA4\xEB\xA5\xB8 \xEA\xB3\xB3\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xA8 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "표시 위치가 원본과 겹쳐요 — 다른 곳으로 옮겨 주세요"
+					ICON_FK_WARNING "  " "\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98\xEA\xB0\x80 \xEC\x9B\x90\xEB\xB3\xB8\xEC\x9D\x84 \xEB\x8D\xAE\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9E\x94\xEC\x83\x81\xEC\x9D\xB4 \xEB\xB3\xB4\xEC\x9D\xB4\xEB\xA9\xB4 \xEB\x8B\xA4\xEB\xA5\xB8 \xEA\xB3\xB3\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xA8 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "표시 위치가 원본을 덮어요 — 잔상이 보이면 다른 곳으로 옮겨 주세요"
 			else
 				ImGui::TextDisabled("%s  %dx%d \xE2\x86\x92 %.0fx%.0f",
 					ICON_FK_OK, _sherbet_mag_tex_w, _sherbet_mag_tex_h,

@@ -841,7 +841,12 @@ void reshade::runtime::on_present()
 	//    무조건 back_buffer_resource 를 뜨면 (1) 없는 전이(present→copy_source)를 걸고
 	//    (2) 효과 전 그림을 뜨며 (3) 1004행이 기대하는 상태를 깨뜨린다.
 	//    실제로 MSAA 를 켠 사용자에게서 "돋보기가 안 보인다" 로 나타났다.
-	if (_sherbet_mag_on && !_sherbet_mag_overlap)
+	// ⚠️ **겹침을 이유로 캡처를 멈추지 않는다.** 예전엔 !_sherbet_mag_overlap 을 걸었는데,
+	//    겹치는 순간 캡처가 끊겨 확대창이 **그 프레임에 멈춘 정지 화면**이 됐다(체력이 줄어도
+	//    그대로였다). 막으려던 것은 이중 Present 프레임의 거울 중첩 — 가끔 생기는 시각적
+	//    잔상일 뿐인데, 그 대가로 기능의 존재 이유(실시간)를 없앴다. 병보다 약이 나빴다.
+	//    겹침은 설정 탭 경고로만 알리고 사용자가 위치를 옮기게 한다.
+	if (_sherbet_mag_on)
 	{
 		// ⚠️ 소스 선택을 **capture_screenshot() 과 글자 그대로 동일하게** 맞춘다
 		//    (runtime.hpp:83). 스크린샷은 모든 ReShade 사용자에게 동작하는 유일하게 검증된
