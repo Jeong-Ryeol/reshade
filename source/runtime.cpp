@@ -832,8 +832,20 @@ void reshade::runtime::on_present()
 	// ⚠️ draw_gui() 는 857행, 즉 **이 복사보다 뒤**다. 그래서 확대해 그린 그림이 다음 복사본에
 	//    들어가지 않는다 — 거울 속 거울(무한 중첩)이 구조적으로 불가능하다.
 	// 전체 화면이 아니라 **잡은 영역만** 복사하므로 4K 에서도 비용이 작다.
+	// ⚠️ **어느 리소스에 화면이 들어 있는지는 경우에 따라 다르다.**
+	//    _back_buffer_resolved != 0 이면(MSAA, OpenGL, 또는 백버퍼 포맷에 알파가 없을 때 —
+	//    runtime.cpp:396-400) 화면 내용은 그쪽에 있고, back_buffer_resource 는 784행에서
+	//    이미 copy_source/resolve_source 로 전이된 채 **효과 적용 전** 그림만 들고 있다.
+	//    무조건 back_buffer_resource 를 뜨면 (1) 없는 전이(present→copy_source)를 걸고
+	//    (2) 효과 전 그림을 뜨며 (3) 1004행이 기대하는 상태를 깨뜨린다.
+	//    실제로 MSAA 를 켠 사용자에게서 "돋보기가 안 보인다" 로 나타났다.
 	if (_sherbet_mag_on && !_sherbet_mag_overlap)
-		sherbet_magnifier_capture(cmd_list, back_buffer_resource);
+	{
+		const bool mag_resolved = _back_buffer_resolved != 0;
+		sherbet_magnifier_capture(cmd_list,
+			mag_resolved ? _back_buffer_resolved : back_buffer_resource,
+			mag_resolved ? api::resource_usage::render_target : api::resource_usage::present);
+	}
 
 	if (_should_save_screenshot)
 		save_screenshot(_screenshot_save_before ? "After" : nullptr);
@@ -3981,7 +3993,7 @@ void reshade::runtime::sherbet_motion_release()
 //
 // 좌표 계산은 전부 sherbet_magnifier.hpp(맥에서 단위테스트됨)가 한다 — 여기는 픽셀을
 // 옮기기만 한다. 해상도 무관성이 그 테스트로 못 박혀 있다.
-void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer)
+void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer, api::resource_usage src_state)
 {
 	if (back_buffer == 0 || _width == 0 || _height == 0)
 		return;
@@ -4020,11 +4032,14 @@ void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, ap
 		static_cast<uint32_t>(b.x0), static_cast<uint32_t>(b.y0), 0,
 		static_cast<uint32_t>(b.x1), static_cast<uint32_t>(b.y1), 1 };
 
-	cmd_list->barrier(back_buffer, api::resource_usage::present, api::resource_usage::copy_source);
+	// ⚠️ 원래 상태(src_state)로 **반드시 되돌린다.** on_present 뒤쪽(runtime.cpp:1004)이
+	//    back_buffer_resource 가 copy_source 인 것을 전제로 배리어를 걸기 때문에, 여기서
+	//    present 로 돌려놓으면 그 전이가 어긋난다.
+	cmd_list->barrier(back_buffer, src_state, api::resource_usage::copy_source);
 	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
 	cmd_list->copy_texture_region(back_buffer, 0, &src_box, _sherbet_mag_tex, 0, nullptr);
 	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
-	cmd_list->barrier(back_buffer, api::resource_usage::copy_source, api::resource_usage::present);
+	cmd_list->barrier(back_buffer, api::resource_usage::copy_source, src_state);
 }
 
 void reshade::runtime::sherbet_magnifier_release()

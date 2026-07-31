@@ -255,7 +255,9 @@ namespace reshade
 		// SHERBET: HUD 돋보기 — 잡은 영역만 작은 텍스처로 복사한다(on_present 에서 매 프레임).
 		// ⚠️ render_effects 안이 아니라 on_present 본문에서 부른다 — 효과를 안 쓰는 구매자도
 		//    동작해야 하기 때문이다. 자세한 이유는 호출부 주석 참고.
-		void sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer);
+		// ⚠️ src_state 는 **그 리소스의 현재 상태**다. 복사 후 반드시 그 상태로 되돌린다 —
+		//    on_present 뒤쪽이 특정 상태를 전제로 배리어를 건다.
+		void sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer, api::resource_usage src_state);
 		void sherbet_magnifier_release();
 		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
 
