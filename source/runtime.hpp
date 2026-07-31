@@ -473,6 +473,7 @@ namespace reshade
 		api::resource _sherbet_mag_tex = {};
 		api::resource_view _sherbet_mag_srv = {};
 		int _sherbet_mag_tex_w = 0, _sherbet_mag_tex_h = 0;
+		bool _sherbet_mag_overlap = false; // 확대창이 소스 위에 겹쳤다 → 다음 캡처를 건너뛴다
 
 		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고
 		// 이미 후킹 중인 입력만 관찰한다. 오버레이가 열려 있는 동안은 세지 않는다 —

@@ -135,6 +135,40 @@ static void test_zero_resolution_is_safe()
 	assert(box_w(b) == 0 && box_h(b) == 0); // 호출부가 0 을 보고 건너뛴다
 }
 
+// 실수로 클릭만 한 경우를 확정하면 안 된다(sanitize 가 최소 크기를 만들어 주므로 그냥 통과한다).
+static void test_is_usable_rejects_accidental_click()
+{
+	assert(!is_usable(from_drag(0.5f, 0.5f, 0.5f, 0.5f)));      // 클릭만
+	assert(!is_usable(from_drag(0.5f, 0.5f, 0.505f, 0.6f)));    // 폭이 너무 얇다
+	assert(is_usable(from_drag(0.80f, 0.95f, 0.95f, 0.99f)));   // 정상적인 HUD 크기
+	// 판정은 정규화 기준이라 해상도에 안 흔들린다 — 같은 사각형이면 FHD 든 4K 든 같은 답
+	rect r; r.x = 0.80f; r.y = 0.90f; r.w = 0.15f; r.h = 0.06f;
+	assert(is_usable(r));
+}
+
+// 확대창이 소스 위에 겹치면 이중 Present 프레임에서 중첩이 쌓인다 — 겹침을 정확히 판정해야 한다.
+static void test_overlap_detection()
+{
+	rect src; src.x = 0.80f; src.y = 0.90f; src.w = 0.15f; src.h = 0.06f;
+
+	for (int i = 0; i < 3; ++i)
+	{
+		const int W = (i == 0 ? kFHD_W : i == 1 ? k2K_W : k4K_W);
+		const int H = (i == 0 ? kFHD_H : i == 1 ? k2K_H : k4K_H);
+		const box b = source_box(src, W, H);
+		const float dw = box_w(b) * 3.0f, dh = box_h(b) * 3.0f;
+
+		// 기본 표시 위치(0.5, 0.30) — 화면 위쪽 가운데라 우하단 소스와 안 겹친다
+		float x = 0, y = 0;
+		dest_pos(0.5f, 0.30f, dw, dh, W, H, x, y);
+		assert(!overlaps(src, x, y, dw, dh, W, H));
+
+		// 소스 바로 위로 옮기면 겹친다
+		dest_pos(0.87f, 0.93f, dw, dh, W, H, x, y);
+		assert(overlaps(src, x, y, dw, dh, W, H));
+	}
+}
+
 int main()
 {
 	test_same_relative_position_across_resolutions();
@@ -146,6 +180,8 @@ int main()
 	test_anchor_is_center();
 	test_clamp_zoom();
 	test_zero_resolution_is_safe();
+	test_is_usable_rejects_accidental_click();
+	test_overlap_detection();
 	std::puts("sherbet_magnifier_test: ALL PASS");
 	return 0;
 }

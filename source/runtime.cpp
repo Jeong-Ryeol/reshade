@@ -725,6 +725,7 @@ void reshade::runtime::on_reset()
 	_sherbet_before_srv = {};
 
 	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
+	sherbet_magnifier_release(); // SHERBET: 돋보기 잘라내기 텍스처(해상도가 바뀌면 크기도 달라진다)
 
 	_device->destroy_resource(_sherbet_crosshair_tex);
 	_sherbet_crosshair_tex = {};
@@ -831,7 +832,7 @@ void reshade::runtime::on_present()
 	// ⚠️ draw_gui() 는 857행, 즉 **이 복사보다 뒤**다. 그래서 확대해 그린 그림이 다음 복사본에
 	//    들어가지 않는다 — 거울 속 거울(무한 중첩)이 구조적으로 불가능하다.
 	// 전체 화면이 아니라 **잡은 영역만** 복사하므로 4K 에서도 비용이 작다.
-	if (_sherbet_mag_on)
+	if (_sherbet_mag_on && !_sherbet_mag_overlap)
 		sherbet_magnifier_capture(cmd_list, back_buffer_resource);
 
 	if (_should_save_screenshot)

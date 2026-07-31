@@ -1436,10 +1436,18 @@ void reshade::runtime::draw_gui()
 	}
 
 	// SHERBET: HUD 돋보기 영역 잡기 — 화면 위에서 직접 드래그해 사각형을 정한다.
-	// ⚠️ 오버레이를 **닫은 채로** 잡는다. HUD 는 게임 화면에 있는데 오버레이 창이 그 위를
-	//    덮으면 무엇을 잡는지 볼 수 없다. 그래서 설정에서 「영역 잡기」를 누르고 Home 으로
-	//    오버레이를 닫은 뒤 드래그하는 흐름이다.
-	if (_sherbet_mag_picking && _input != nullptr)
+	//
+	// ⚠️ **반드시 오버레이가 열려 있어야 한다.** 처음엔 "닫고 드래그" 로 만들었는데 셋 다 어긋난다:
+	//    1) `imgui_io.MouseDrawCursor = _show_overlay && …` (이 파일 1142행) → 닫으면 **커서가 안 그려진다.**
+	//       어디를 잡는지 보이지 않는다.
+	//    2) `block_input = _input_processing_mode != 0 && (_show_overlay || …)` (2490행) → 닫으면 좌클릭이
+	//       **게임으로 간다. 영역 잡다가 실제로 총이 나간다.**
+	//    3) FiveM 마우스룩이 커서를 화면 중앙에 고정하므로 IO.MousePos 가 아예 안 움직인다.
+	//    이 저장소의 기존 화면 드래그(비교 분할선 1335행, OSD)도 전부 show_overlay 게이트다.
+	// 오버레이가 열려 있으면 입력 처리 기본값(_input_processing_mode = 2)이 게임 입력을 통째로
+	// 막아 주므로 오발 위험도 없다. 잡는 동안에는 아래 draw_gui 본문이 Sherbet 창을 그리지 않아
+	// 화면 전체가 보인다(창이 HUD 를 가리지 않게).
+	if (_sherbet_mag_picking && _input != nullptr && _show_overlay)
 	{
 		const ImGuiViewport *const pk_vp = ImGui::GetMainViewport();
 		const ImVec2 pk_m = _imgui_context->IO.MousePos;
@@ -1464,13 +1472,35 @@ void reshade::runtime::draw_gui()
 		}
 		if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !_imgui_context->IO.WantCaptureMouse)
 		{
-			_sherbet_mag_rect = sherbet::mag::sanitize(
-				sherbet::mag::from_drag(_sherbet_mag_drag[0], _sherbet_mag_drag[1], pk_nx, pk_ny));
-			_sherbet_mag_cap_res[0] = static_cast<int>(_width);
-			_sherbet_mag_cap_res[1] = static_cast<int>(_height);
+			const sherbet::mag::rect pk_done =
+				sherbet::mag::from_drag(_sherbet_mag_drag[0], _sherbet_mag_drag[1], pk_nx, pk_ny);
+			// ⚠️ 실수로 클릭만 한 경우를 확정하지 않는다. sanitize 가 최소 크기를 만들어 주므로
+			//    크래시는 없지만, 사용자는 "엉뚱한 데가 확대됨" 을 보게 된다. 다시 끌게 한다.
+			if (sherbet::mag::is_usable(pk_done))
+			{
+				_sherbet_mag_rect = sherbet::mag::sanitize(pk_done);
+				_sherbet_mag_cap_res[0] = static_cast<int>(_width);
+				_sherbet_mag_cap_res[1] = static_cast<int>(_height);
+				_sherbet_mag_picking = false;
+				_sherbet_mag_on = true; // 잡았으면 바로 보여 준다
+				save_config();
+			}
+		}
+		// 취소 — 우클릭이나 Esc. (잡는 동안 Sherbet 창을 안 그리므로 버튼으로 나갈 길이 없다.)
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape))
 			_sherbet_mag_picking = false;
-			_sherbet_mag_on = true; // 잡았으면 바로 보여 준다
-			save_config();
+
+		// 안내 — 창이 없으니 화면에 직접 띄운다.
+		{
+			static const char *const kPickHint =
+				"\xED\x99\x95\xEB\x8C\x80\xED\x95\x98\xEA\xB3\xA0 \xEC\x8B\xB6\xEC\x9D\x80 \xEA\xB3\xB3\xEC\x9D\x84 \xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94" " \xC2\xB7 " "\xEC\xB7\xA8\xEC\x86\x8C\xEB\x8A\x94 \xEC\x9A\xB0\xED\x81\xB4\xEB\xA6\xAD/Esc"; // "확대하고 싶은 곳을 드래그하세요 · 취소는 우클릭/Esc"
+			ImDrawList *const hint = ImGui::GetForegroundDrawList();
+			const float hs = _imgui_context->Style.FontSizeBase * 1.2f;
+			const ImVec2 hts = _sherbet_title_font->CalcTextSizeA(hs, FLT_MAX, 0.0f, kPickHint);
+			const ImVec2 hp(pk_vp->Pos.x + (pk_vp->Size.x - hts.x) * 0.5f, pk_vp->Pos.y + pk_vp->Size.y * 0.06f);
+			hint->AddRectFilled(ImVec2(hp.x - 16.0f, hp.y - 9.0f), ImVec2(hp.x + hts.x + 16.0f, hp.y + hts.y + 9.0f),
+				IM_COL32(20, 22, 28, 225), 12.0f);
+			hint->AddText(_sherbet_title_font, hs, hp, IM_COL32(235, 240, 250, 255), kPickHint);
 		}
 	}
 
@@ -1491,6 +1521,13 @@ void reshade::runtime::draw_gui()
 		ImDrawList *const mg = ImGui::GetForegroundDrawList();
 		mg->AddImage(_sherbet_mag_srv.handle, mg_p0, mg_p1, ImVec2(0, 0), ImVec2(1, 1),
 			IM_COL32(255, 255, 255, mg_a));
+
+		// ⚠️ 확대창이 소스 위에 겹치면 다음 캡처를 건너뛴다. 효과 렌더 가드는 프레임당이 아니라
+		//    **Present 당**이라(게임이 리렌더 없이 Present 를 두 번 하는 프레임이 실재한다)
+		//    겹친 상태로 두면 확대창이 다시 캡처돼 중첩이 쌓인다(거울 속 거울).
+		//    기본 배치는 안 겹치지만 「표시 위치」 슬라이더로 사용자가 겹치게 만들 수 있다.
+		_sherbet_mag_overlap = sherbet::mag::overlaps(_sherbet_mag_rect, mg_x, mg_y, mg_w, mg_h,
+			static_cast<int>(mg_vp->Size.x), static_cast<int>(mg_vp->Size.y));
 	}
 
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
@@ -2004,7 +2041,11 @@ void reshade::runtime::draw_gui()
 		ImGui::PopStyleColor();
 	}
 
-	if (_show_overlay)
+	// ⚠️ 영역을 잡는 동안에는 Sherbet 창을 그리지 않는다. HUD 는 게임 화면에 있으므로
+	//    창이 그 위를 덮으면 무엇을 잡는지 볼 수 없다. 창이 없으면 IO.WantCaptureMouse 가
+	//    false 라 드래그가 그대로 들어오고, _show_overlay 는 여전히 true 라 게임 입력은
+	//    계속 막힌다(오발 없음). 나가는 길은 우클릭/Esc 이며 안내를 화면에 띄운다.
+	if (_show_overlay && !_sherbet_mag_picking)
 	{
 		const ImGuiViewport *const viewport = ImGui::GetMainViewport();
 
@@ -4808,7 +4849,7 @@ void reshade::runtime::draw_gui_settings()
 
 		if (_sherbet_mag_picking)
 			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s",
-				ICON_FK_WARNING "  " "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0(Home) \xED\x99\x95\xEB\x8C\x80\xED\x95\xA0 \xEA\xB3\xB3\xEC\x9D\x84 \xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94"); // "오버레이를 닫고(Home) 확대할 곳을 드래그하세요"
+				ICON_FK_WARNING "  " "\xED\x99\x95\xEB\x8C\x80\xED\x95\xA0 \xEA\xB3\xB3\xEC\x9D\x84 \xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94 \xC2\xB7 \xEC\xB7\xA8\xEC\x86\x8C\xEB\x8A\x94 \xEC\x9A\xB0\xED\x81\xB4\xEB\xA6\xAD/Esc"); // "확대할 곳을 드래그하세요 · 취소는 우클릭/Esc"
 
 		// 해상도가 바뀌면 잡아 둔 영역이 어긋날 수 있다 — 서버 HUD 가 픽셀 고정이면 특히 그렇다.
 		// 우리가 자동으로 고칠 수 없는 문제이므로(서버 구현에 달렸다) 정직하게 알리고 다시 잡게 한다.

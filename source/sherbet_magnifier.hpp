@@ -104,6 +104,26 @@ namespace sherbet
 			if (out_y < 0.0f) out_y = 0.0f;
 		}
 
+		// 확정해도 되는 크기인가. sanitize 는 최소 크기를 **만들어 주므로** 클릭 한 번(폭 0)도
+		// 통과해 버린다 — 크래시는 없지만 사용자는 "엉뚱한 데가 확대됨" 을 본다.
+		// 확정 시점에서만 이 판정을 써서 다시 끌게 한다. 정규화 기준이라 해상도에 안 흔들린다.
+		inline bool is_usable(const rect &r, float min_size = 0.02f)
+		{
+			return r.w >= min_size && r.h >= min_size;
+		}
+
+		// 소스 사각형과 확대창이 겹치는가.
+		// 겹치면 게임이 리렌더 없이 Present 를 두 번 하는 프레임에서 확대창이 다시 캡처되어
+		// 중첩이 쌓인다(효과 렌더 가드는 프레임당이 아니라 **Present 당**이다).
+		// dest 는 픽셀, src 는 정규화라 화면 크기로 같은 공간에 맞춘다.
+		inline bool overlaps(const rect &src, float dx, float dy, float dw, float dh,
+			int screen_w, int screen_h)
+		{
+			const float sx0 = src.x * screen_w, sy0 = src.y * screen_h;
+			const float sx1 = (src.x + src.w) * screen_w, sy1 = (src.y + src.h) * screen_h;
+			return !(dx >= sx1 || dx + dw <= sx0 || dy >= sy1 || dy + dh <= sy0);
+		}
+
 		// 배율 범위. 1 배는 확대가 아니므로 의미가 없고, 너무 크면 화면을 다 덮는다.
 		inline float clamp_zoom(float z)
 		{
