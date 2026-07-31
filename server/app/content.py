@@ -72,6 +72,37 @@ def items_with_lock(items: list[dict], role_ids: list[str]) -> list[dict]:
     return out
 
 
+def file_items_with_lock(items: list[dict], role_ids: list[str]) -> list[dict]:
+    """파일형 아이템(프리셋)을 **잠긴 것까지 진열**한다. 파일 자체는 계속 막는다.
+
+    왜 필요한가: entitled_items 로 내리면 안 산 사람 화면에는 그 상품이 **존재하지 않는다**.
+    팔고 있는 물건을 아무도 모르는 상태였다. 테마·조준점은 이미 진열형인데 프리셋만 아니었다.
+
+    ⚠️ **잠긴 항목에는 id 를 싣지 않는다.** 두 가지 이유가 모두 중요하다.
+      1. id 는 GET /content/file/<id> 의 다운로드 키다. (파일 라우트가 역할을 라이브 재확인하므로
+         id 를 알아도 파일은 못 받지만, 굳이 줄 이유가 없다.)
+      2. **하위호환 장치다.** 구버전 클라의 parse_content_items 는 id 가 없는 항목을 건너뛴다
+         → 아직 업데이트 안 한 구매자에게는 지금과 **완전히 똑같이** 동작하고, 잠긴 항목을
+         받으려고 시도(=전부 403)하지도 않는다. id 를 실으면 구버전 클라가 잠긴 프리셋 수만큼
+         쓸데없는 요청을 보내고 그때마다 서버가 디스코드에 역할을 물어본다.
+
+    ⚠️ effects 에는 쓰지 마라. 이펙트는 상품이 아니라 프리셋이 쓰는 셰이더 파일(의존성)이다.
+       (라이브 실측: Pretty 1상품 = 프리셋 1개 + 이펙트 17개.) 낱개로 진열하면 구매자는
+       상품명 대신 AdaptiveSharpen.fx 같은 카드를 17장 보게 된다.
+
+    unlocked 는 **진짜 JSON 불리언**이다(클라는 json_bool 로 읽는다). crosshair_items 와 같다.
+    """
+    out = []
+    for it in items:
+        unlocked = is_entitled(it, role_ids)
+        entry = {k: v for k, v in it.items() if k not in ("role", "id")}
+        if unlocked:
+            entry["id"] = it.get("id")
+        entry["unlocked"] = unlocked
+        out.append(entry)
+    return out
+
+
 # 조준점 항목에서 클라에 실어 보내는 키. 이 목록 밖의 키(role, 메모 등)는 나가지 않는다.
 CROSSHAIR_TEXT_KEYS = ("id", "display_name", "author", "tag", "code")
 

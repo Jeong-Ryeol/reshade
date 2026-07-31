@@ -12,7 +12,9 @@
 
 namespace sherbet
 {
-	struct content_item { std::string id, filename, display_name; };
+	// unlocked=false 인 항목은 **진열 전용**이다 — 서버가 id(다운로드 키)를 빼고 내려보내므로
+	// 이름만 있고 받을 수 없다. 마켓에 '잠김' 카드로 보여 주기 위해 목록에는 남긴다.
+	struct content_item { std::string id, filename, display_name; bool unlocked = true; };
 
 	inline std::vector<content_item> parse_content_items(const std::string &body, const char *key)
 	{
@@ -24,7 +26,11 @@ namespace sherbet
 			detail::json_str(obj, "filename", it.filename);
 			if (!detail::json_str(obj, "display_name", it.display_name))
 				it.display_name = it.filename;
-			if (it.id.empty()) continue;
+			it.unlocked = detail::json_bool(obj, "unlocked", true); // 미표기(구버전 서버)면 열림
+			// 열린 항목인데 id 가 없으면 받을 방법이 없다 — 버린다(기존 동작).
+			// 잠긴 항목은 id 가 없는 것이 정상이므로 진열용으로 남기되, 이름조차 없으면 버린다.
+			if (it.unlocked ? it.id.empty() : (it.display_name.empty() && it.filename.empty()))
+				continue;
 			out.push_back(std::move(it));
 		}
 		return out;
@@ -49,6 +55,10 @@ namespace sherbet
 		auto add = [&out](const std::vector<content_item> &items, const std::string &dir) {
 			for (const content_item &it : items)
 			{
+				// ⚠️ 잠긴 항목은 **절대 받지 않는다.** 서버가 id 를 안 주므로 아래 id.empty() 로도
+				//    걸리지만, 의도를 코드에 남긴다 — 이게 뚫리면 잠긴 상품마다 403 요청이 나가고
+				//    그때마다 서버가 디스코드에 역할을 물어본다(요청 폭증).
+				if (!it.unlocked) continue;
 				const std::string base = safe_basename(it.filename);
 				if (it.id.empty() || base.empty()) continue;
 				out.push_back({ it.id, dir + "/" + base });

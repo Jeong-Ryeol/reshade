@@ -392,6 +392,13 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
 	config.get("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
 	config.get("OVERLAY", "SherbetSprayOverlay5", _sherbet_spray_overlay5);
+	config.get("OVERLAY", "SherbetAlarmOn", _sherbet_alarm_on);
+	config.get("OVERLAY", "SherbetAlarmHour", _sherbet_alarm_hour);
+	config.get("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
+	config.get("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
+	config.get("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	// 손으로 고친 ini 가 23:99 여도 '절대 안 울리는' 상태가 되지 않게 여기서 자른다.
+	sherbet::alarm::clamp_time(_sherbet_alarm_hour, _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.get("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	// 손으로 고친 ini 방어 — 배율 0 이면 궤적이 한 점으로 뭉치고, 간격이 0 이면 매 프레임
@@ -574,6 +581,11 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
 	config.set("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
 	config.set("OVERLAY", "SherbetSprayOverlay5", _sherbet_spray_overlay5);
+	config.set("OVERLAY", "SherbetAlarmOn", _sherbet_alarm_on);
+	config.set("OVERLAY", "SherbetAlarmHour", _sherbet_alarm_hour);
+	config.set("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
+	config.set("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
+	config.set("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	config.set("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
@@ -1070,6 +1082,12 @@ void reshade::runtime::draw_gui()
 		// 이동 링이 한 번도 채워지지 않아, 리드백은 도는데 짝지을 마우스 값이 영영 0 이 된다
 		// (= "화면은 움직이는데 마우스는 0" 이라는 완전히 틀린 그래프가 나온다).
 		&& !_sherbet_motion_on
+		// SHERBET: 일일 알림. **이 조건이 없으면 기능이 통째로 죽는다** — 알림이 떠야 하는
+		// 밤 11시 50분은 정확히 오버레이가 닫혀 있는 시각이라, 여기서 early-out 하면
+		// 판정 코드가 한 프레임도 돌지 않는다. CI 도 호스트 테스트도 전부 초록불인 채로
+		// 아무 일도 안 일어난다(1.2.0 스프레이 트레이너에서 실제로 겪은 사고와 같은 함정).
+		// 옵션이 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되어 프레임 비용이 0 이다.
+		&& !_sherbet_alarm_on
 #if RESHADE_ADDON
 		&& !has_addon_event<addon_event::reshade_overlay>()
 #endif
@@ -1356,6 +1374,40 @@ void reshade::runtime::draw_gui()
 
 		if (_sherbet_spray_fade > 0.0f)
 			_sherbet_spray_fade = ImMax(0.0f, _sherbet_spray_fade - imgui_io.DeltaTime);
+	}
+
+	// SHERBET: 일일 알림 — 정한 시각이 되면 몇 초만 떴다 사라진다. 상시 표시가 아니다.
+	// (평소에는 remaining 이 0 이라 아무것도 그리지 않는다.)
+	// 시각 조회는 1초에 한 번이면 충분하다(분 단위 판정). 매 프레임 localtime 을 부르지 않는다.
+	if (_sherbet_alarm_on && sherbet::alarm::due_for_check(_sherbet_alarm, imgui_io.DeltaTime))
+	{
+		const std::time_t alarm_now = std::time(nullptr);
+		struct tm alarm_tm; localtime_s(&alarm_tm, &alarm_now);
+		if (sherbet::alarm::should_fire(_sherbet_alarm,
+				sherbet::alarm::minute_of_day(alarm_tm.tm_hour, alarm_tm.tm_min),
+				sherbet::alarm::minute_of_day(_sherbet_alarm_hour, _sherbet_alarm_min), true))
+			_sherbet_alarm.remaining = ImMax(1.0f, _sherbet_alarm_secs); // 여기서만 켜진다
+	}
+	// 남은 시간이 있을 때만 그린다. 설정 탭의 「테스트」 버튼도 remaining 을 올려 같은 길로 온다.
+	if (sherbet::alarm::tick_visible(_sherbet_alarm, imgui_io.DeltaTime))
+	{
+		static const char *const kAlarmDefault =
+			"\xEC\x9D\xBC\xEC\x9D\xBC\xEB\xB3\xB4\xEC\x83\x81\xEC\x9D\x84 \xEB\xB0\x9B\xEC\x95\x84\xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94!"; // "일일보상을 받아주세요!"
+		const char *const al_text = _sherbet_alarm_text.empty() ? kAlarmDefault : _sherbet_alarm_text.c_str();
+		const float al_a = sherbet::alarm::fade_alpha(_sherbet_alarm);
+		const sherbet::theme &al_t = sherbet::active_theme();
+		const ImGuiViewport *const al_vp = ImGui::GetMainViewport();
+		ImDrawList *const al = ImGui::GetForegroundDrawList();
+		const float al_sz = _imgui_context->Style.FontSizeBase * 1.5f;
+		const ImVec2 al_ts = _sherbet_title_font->CalcTextSizeA(al_sz, FLT_MAX, 0.0f, al_text);
+		// 화면 위쪽 가운데 — 조준점(중앙)·OSD(모서리)와 안 겹치는 자리.
+		const ImVec2 al_p(al_vp->Pos.x + (al_vp->Size.x - al_ts.x) * 0.5f, al_vp->Pos.y + al_vp->Size.y * 0.12f);
+		const float al_pad = 18.0f;
+		al->AddRectFilled(ImVec2(al_p.x - al_pad, al_p.y - al_pad * 0.5f),
+			ImVec2(al_p.x + al_ts.x + al_pad, al_p.y + al_ts.y + al_pad * 0.5f),
+			sherbet::with_alpha(al_t.panel, static_cast<int>(220 * al_a)), 14.0f);
+		al->AddText(_sherbet_title_font, al_sz, al_p,
+			sherbet::with_alpha(al_t.text, static_cast<int>(255 * al_a)), al_text);
 	}
 
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
@@ -4649,6 +4701,43 @@ void reshade::runtime::draw_gui_settings()
 	ImGui::TextDisabled("%s", ICON_FK_CROSSHAIRS " \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEC\x99\xBC\xEC\xAA\xBD \xEC\x97\x90\xEC\x9E\x84 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xBC\xEC\x96\xB4\xEC\x9A\x94"); // "조준점 설정은 왼쪽 에임 탭으로 옮겼어요"
 	ImGui::Spacing();
 
+	// SHERBET: 일일 알림 — 정한 시각에 화면에 한 줄 띄운다(상시 표시 아님, 몇 초 뒤 사라진다).
+	// FiveM RP 는 알트탭이 곧 죽음이라 게임 밖 알림은 아무도 못 본다.
+	if (ImGui::CollapsingHeader(ICON_FK_BELL "  " "\xEC\x9D\xBC\xEC\x9D\xBC \xEC\x95\x8C\xEB\xA6\xBC")) // "일일 알림"
+	{
+		if (ImGui::Checkbox("\xEC\x95\x8C\xEB\xA6\xBC \xEC\x82\xAC\xEC\x9A\xA9##alarm", &_sherbet_alarm_on)) // "알림 사용"
+			modified = true;
+
+		ImGui::SetNextItemWidth(ImMax(90.0f, 4.0f * ImGui::GetFontSize()));
+		if (ImGui::DragInt("##alarmh", &_sherbet_alarm_hour, 0.1f, 0, 23, "%02d\xEC\x8B\x9C")) // "..시"
+			modified = true;
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ImMax(90.0f, 4.0f * ImGui::GetFontSize()));
+		if (ImGui::DragInt("##alarmm", &_sherbet_alarm_min, 0.1f, 0, 59, "%02d\xEB\xB6\x84")) // "..분"
+			modified = true;
+		sherbet::alarm::clamp_time(_sherbet_alarm_hour, _sherbet_alarm_min);
+
+		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
+		char alarm_buf[128];
+		std::snprintf(alarm_buf, sizeof(alarm_buf), "%s", _sherbet_alarm_text.c_str());
+		if (ImGui::InputTextWithHint("##alarmtext",
+				"\xEC\x9D\xBC\xEC\x9D\xBC\xEB\xB3\xB4\xEC\x83\x81\xEC\x9D\x84 \xEB\xB0\x9B\xEC\x95\x84\xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94!", // 기본 문구를 힌트로
+				alarm_buf, sizeof(alarm_buf)))
+		{
+			_sherbet_alarm_text = alarm_buf;
+			modified = true;
+		}
+
+		// ⚠️ 테스트 버튼 — 이게 없으면 판매자도 구매자도 **밤 11시 50분까지 기다려야만**
+		//    알림이 어떻게 생겼는지 볼 수 있다. 실제 발화와 **같은 길**(remaining)로 띄운다.
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_BELL "  " "\xED\x85\x8C\xEC\x8A\xA4\xED\x8A\xB8", false)) // "테스트"
+			_sherbet_alarm.remaining = ImMax(1.0f, _sherbet_alarm_secs);
+
+		sherbet_hint("\xEC\xA0\x95\xED\x95\x9C \xEC\x8B\x9C\xEA\xB0\x81\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD\xEC\x97\x90 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x9C\xB0\xEB\x8B\xA4\xEA\xB0\x80 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA0\xB8\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x95\x84 \xEB\x91\x94 \xEC\xA4\x91\xEC\x97\x90\xEB\x8F\x84 \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94."); // "정한 시각에 화면 위쪽에 잠시 떴다가 사라져요. 오버레이를 닫아 둔 중에도 보여요."
+	}
+	ImGui::Spacing();
+
 	// SHERBET: 잠금 화면 미리보기 — 유료 기능이 잠겼을 때의 판매 화면을 눈으로 확인하는 스위치.
 	// ⚠️ 이게 없으면 판매자는 **제일 중요한 화면을 한 번도 볼 수 없다.** sherbet::has_feature()
 	//    는 auth 가 꺼진 개발/데모 빌드에서 무조건 true 이고, 온라인 인증 빌드라도 판매자
@@ -6385,21 +6474,36 @@ void reshade::runtime::draw_gui_market()
 		for (std::size_t i = 0; i < presets.size(); ++i)
 		{
 			const sherbet::content_item &it = presets[i];
-			// 다운로드 경로와 동일하게 basename 만 사용(경로탈출/서브경로 파일명 거부).
-			// 워커는 safe_basename 으로 기록하므로 UI 도 같은 규칙이어야 카드가 실제 파일을 가리킨다.
-			const std::string base = sherbet::safe_basename(it.filename);
-			if (base.empty())
-				continue;
 			ImGui::PushID((int)i);
 			sherbet::begin_card("##preset_card");
 			ImGui::Text("%s", it.display_name.c_str());
-			const std::filesystem::path preset_path = _config_path.parent_path() / L"Sherbet-Presets" /
-				std::filesystem::u8path(base);
-			const bool active = _current_preset_path == preset_path;
-			if (active)
-				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
-			else if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
-				set_current_preset_path(preset_path.u8string().c_str());
+
+			// ⚠️ 잠긴 상품도 **진열한다.** 예전엔 서버가 권한 있는 것만 내려보내서, 안 산 사람
+			//    화면에는 그 상품이 아예 존재하지 않았다 — 팔고 있는 물건을 아무도 몰랐다.
+			//    잠긴 항목은 서버가 id(다운로드 키)를 빼고 보내므로 파일은 여전히 못 받는다.
+			if (!it.unlocked)
+			{
+				// (sherbet_draw_lock_footer 의 kLockBuy 는 그 함수의 지역 static 이라 여기서 못 쓴다.
+				//  같은 문구를 쓰되 문자열은 이 자리에 둔다.)
+				ImGui::TextDisabled("%s", ICON_FK_LOCK "  \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
+				ImGui::TextLinkOpenURL(ICON_FK_SHOPPING_CART "  " "\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEC\x84\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEA\xB8\xB0", SHERBET_DISCORD_URL); // "디스코드에서 구매하기"
+			}
+			else
+			{
+				// 다운로드 경로와 동일하게 basename 만 사용(경로탈출/서브경로 파일명 거부).
+				// 워커는 safe_basename 으로 기록하므로 UI 도 같은 규칙이어야 카드가 실제 파일을 가리킨다.
+				const std::string base = sherbet::safe_basename(it.filename);
+				if (!base.empty())
+				{
+					const std::filesystem::path preset_path = _config_path.parent_path() / L"Sherbet-Presets" /
+						std::filesystem::u8path(base);
+					const bool active = _current_preset_path == preset_path;
+					if (active)
+						ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+					else if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
+						set_current_preset_path(preset_path.u8string().c_str());
+				}
+			}
 			sherbet::end_card();
 			ImGui::PopID();
 		}

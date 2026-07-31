@@ -9,6 +9,7 @@
 #include "state_block.hpp"
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
+#include "sherbet_alarm.hpp"
 #include "sherbet_spray.hpp"
 #include "sherbet_crosshair.hpp"
 #include "sherbet_xhmarket.hpp"
@@ -438,6 +439,17 @@ namespace reshade
 		float _sherbet_bg_dim = 0.5f;            // 가독성용 어두운 스크림 강도 0..1
 		bool _sherbet_bg_dirty = false;          // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
 		int _sherbet_bg_load = 0;                // 0=미시도 1=성공 2=실패 (위와 같은 이유)
+
+		// SHERBET: 일일 알림(기본 밤 11:50). 게임 안에서 보여야 의미가 있다 — RP 는 알트탭이
+		// 곧 죽음이라 창 밖 알림은 아무도 못 본다.
+		// ⚠️ _sherbet_alarm_on 은 draw_gui() 의 early-out 조건에도 들어간다. 빼먹으면
+		//    오버레이가 닫힌 시각(=알림이 떠야 할 바로 그 시각)에 판정이 한 번도 안 돈다.
+		bool _sherbet_alarm_on = false;
+		int  _sherbet_alarm_hour = 23;
+		int  _sherbet_alarm_min = 50;
+		float _sherbet_alarm_secs = 8.0f;      // 화면에 띄워 두는 시간
+		std::string _sherbet_alarm_text;       // 비우면 기본 문구
+		sherbet::alarm::state _sherbet_alarm;  // 세션 상태(디스크에 안 남긴다)
 
 		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고
 		// 이미 후킹 중인 입력만 관찰한다. 오버레이가 열려 있는 동안은 세지 않는다 —

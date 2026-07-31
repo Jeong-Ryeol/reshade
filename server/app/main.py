@@ -10,6 +10,7 @@ from app.config import Settings, get_settings
 from app.content import (
     crosshair_items,
     entitled_items,
+    file_items_with_lock,
     find_item,
     is_entitled,
     items_with_lock,
@@ -126,10 +127,12 @@ async def content_me(
     except (httpx.HTTPError, KeyError, ValueError):
         return JSONResponse(status_code=503, content={"error": "upstream_unavailable"})
     roles = role_ids or []
-    # 테마는 파일 다운로드가 없어 잠긴 것도 '진열'로 내려준다(unlocked=false). 프리셋/fx 는
-    # 파일 다운로드를 유발하므로 권한 있는 것만(entitled) 내려 게이트를 유지한다.
+    # 테마는 파일 다운로드가 없어 잠긴 것도 '진열'로 내려준다(unlocked=false).
     themes = items_with_lock(load_manifest(THEMES_PATH, THEMES_CACHE), roles)
-    presets = entitled_items(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
+    # 프리셋 = 판매 상품이다. 잠긴 것도 진열하되 id(다운로드 키)는 빼서 파일은 계속 막는다.
+    presets = file_items_with_lock(load_manifest(PRESETS_PATH, PRESETS_CACHE), roles)
+    # ⚠️ 이펙트는 상품이 아니라 프리셋이 쓰는 셰이더 파일이다(1상품 = 프리셋1 + 이펙트 1~17).
+    #    진열 대상이 아니므로 권한 있는 것만 내려 게이트를 유지한다.
     effects = entitled_items(load_manifest(EFFECTS_PATH, EFFECTS_CACHE), roles)
     # 기능 잠금: 권한 있는 기능의 id 만 문자열 배열로 내려준다(예: ["custompicture"]).
     features = [it["id"] for it in load_manifest(FEATURES_PATH, FEATURES_CACHE)

@@ -375,8 +375,18 @@ def test_content_me_includes_presets_and_effects(settings, tmp_path, monkeypatch
         r = client.get("/content/me", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200
         body = r.json()
-        assert [p["id"] for p in body["presets"]] == ["free-p", "gold-p"]
+        # 프리셋 = 판매 상품이므로 **잠긴 것도 진열**한다(안 산 사람 화면에 상품이 존재해야 한다).
+        assert [p["display_name"] for p in body["presets"]] == ["F", "G", "P"]
+        assert [p["unlocked"] for p in body["presets"]] == [True, True, False]
+        # ⚠️ 계약의 핵심: **잠긴 항목에는 id 가 없다.** id 는 /content/file/<id> 다운로드 키이고,
+        #    구버전 클라(id 없으면 건너뜀)가 잠긴 상품을 받으려 시도하지 않게 하는 하위호환 장치다.
+        assert [p["id"] for p in body["presets"] if "id" in p] == ["free-p", "gold-p"]
+        assert "id" not in [p for p in body["presets"] if p["display_name"] == "P"][0]
+        # ⚠️ unlocked 는 진짜 JSON 불리언이어야 한다(클라는 json_bool 로 읽는다).
+        assert all(isinstance(p["unlocked"], bool) for p in body["presets"])
+        # 이펙트는 상품이 아니라 프리셋이 쓰는 셰이더 파일이다 — 진열하지 않고 게이트를 유지한다.
         assert [e["id"] for e in body["effects"]] == ["gold-fx"]
+        assert all("unlocked" not in e for e in body["effects"])
         assert all("role" not in p for p in body["presets"])
         assert all("role" not in e for e in body["effects"])
     finally:
