@@ -397,6 +397,17 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.get("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.get("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
+	config.get("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
+	config.get("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
+	{
+		float mr[4] = { _sherbet_mag_rect.x, _sherbet_mag_rect.y, _sherbet_mag_rect.w, _sherbet_mag_rect.h };
+		config.get("OVERLAY", "SherbetMagRect", mr);
+		// 손으로 고친 ini 여도 화면 밖/0크기가 되지 않게 자른다.
+		_sherbet_mag_rect = sherbet::mag::sanitize(sherbet::mag::rect{ mr[0], mr[1], mr[2], mr[3] });
+	}
+	config.get("OVERLAY", "SherbetMagAnchor", _sherbet_mag_anchor);
+	config.get("OVERLAY", "SherbetMagCapRes", _sherbet_mag_cap_res);
 	// 손으로 고친 ini 가 23:99 여도 '절대 안 울리는' 상태가 되지 않게 여기서 자른다.
 	sherbet::alarm::clamp_time(_sherbet_alarm_hour, _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
@@ -586,6 +597,15 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.set("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.set("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.set("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
+	config.set("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
+	config.set("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
+	{
+		const float mr[4] = { _sherbet_mag_rect.x, _sherbet_mag_rect.y, _sherbet_mag_rect.w, _sherbet_mag_rect.h };
+		config.set("OVERLAY", "SherbetMagRect", mr);
+	}
+	config.set("OVERLAY", "SherbetMagAnchor", _sherbet_mag_anchor);
+	config.set("OVERLAY", "SherbetMagCapRes", _sherbet_mag_cap_res);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	config.set("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
@@ -1088,6 +1108,11 @@ void reshade::runtime::draw_gui()
 		// 아무 일도 안 일어난다(1.2.0 스프레이 트레이너에서 실제로 겪은 사고와 같은 함정).
 		// 옵션이 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되어 프레임 비용이 0 이다.
 		&& !_sherbet_alarm_on
+		// SHERBET: HUD 돋보기도 오버레이가 닫힌 채로 그려야 한다 — 게임하면서 보는 것이 목적이다.
+		// ⚠️ **영역 잡는 중**도 반드시 면제한다. 잡을 땐 오버레이를 닫아야 HUD 가 보이는데,
+		//    돋보기가 아직 꺼져 있는 상태(처음 잡는 경우)라 _sherbet_mag_on 만으로는 여기서
+		//    early-out 되어 드래그가 한 프레임도 처리되지 않는다.
+		&& !_sherbet_mag_on && !_sherbet_mag_picking
 #if RESHADE_ADDON
 		&& !has_addon_event<addon_event::reshade_overlay>()
 #endif
@@ -1408,6 +1433,64 @@ void reshade::runtime::draw_gui()
 			sherbet::with_alpha(al_t.panel, static_cast<int>(220 * al_a)), 14.0f);
 		al->AddText(_sherbet_title_font, al_sz, al_p,
 			sherbet::with_alpha(al_t.text, static_cast<int>(255 * al_a)), al_text);
+	}
+
+	// SHERBET: HUD 돋보기 영역 잡기 — 화면 위에서 직접 드래그해 사각형을 정한다.
+	// ⚠️ 오버레이를 **닫은 채로** 잡는다. HUD 는 게임 화면에 있는데 오버레이 창이 그 위를
+	//    덮으면 무엇을 잡는지 볼 수 없다. 그래서 설정에서 「영역 잡기」를 누르고 Home 으로
+	//    오버레이를 닫은 뒤 드래그하는 흐름이다.
+	if (_sherbet_mag_picking && _input != nullptr)
+	{
+		const ImGuiViewport *const pk_vp = ImGui::GetMainViewport();
+		const ImVec2 pk_m = _imgui_context->IO.MousePos;
+		const float pk_nx = pk_vp->Size.x > 1.0f ? (pk_m.x - pk_vp->Pos.x) / pk_vp->Size.x : 0.0f;
+		const float pk_ny = pk_vp->Size.y > 1.0f ? (pk_m.y - pk_vp->Pos.y) / pk_vp->Size.y : 0.0f;
+
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !_imgui_context->IO.WantCaptureMouse)
+		{
+			_sherbet_mag_drag[0] = pk_nx;
+			_sherbet_mag_drag[1] = pk_ny;
+		}
+		if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !_imgui_context->IO.WantCaptureMouse)
+		{
+			// 끄는 동안 실시간으로 보여 준다(뒤집어 끌어도 from_drag 가 바로잡는다).
+			const sherbet::mag::rect pk_r =
+				sherbet::mag::from_drag(_sherbet_mag_drag[0], _sherbet_mag_drag[1], pk_nx, pk_ny);
+			ImDrawList *const pk = ImGui::GetForegroundDrawList();
+			const ImVec2 a(pk_vp->Pos.x + pk_r.x * pk_vp->Size.x, pk_vp->Pos.y + pk_r.y * pk_vp->Size.y);
+			const ImVec2 b(a.x + pk_r.w * pk_vp->Size.x, a.y + pk_r.h * pk_vp->Size.y);
+			pk->AddRectFilled(a, b, IM_COL32(120, 200, 255, 60));
+			pk->AddRect(a, b, IM_COL32(120, 200, 255, 255), 0.0f, 0, 2.0f);
+		}
+		if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !_imgui_context->IO.WantCaptureMouse)
+		{
+			_sherbet_mag_rect = sherbet::mag::sanitize(
+				sherbet::mag::from_drag(_sherbet_mag_drag[0], _sherbet_mag_drag[1], pk_nx, pk_ny));
+			_sherbet_mag_cap_res[0] = static_cast<int>(_width);
+			_sherbet_mag_cap_res[1] = static_cast<int>(_height);
+			_sherbet_mag_picking = false;
+			_sherbet_mag_on = true; // 잡았으면 바로 보여 준다
+			save_config();
+		}
+	}
+
+	// SHERBET: HUD 돋보기 — 지난 프레임에 잘라 둔 조각을 확대해 그린다.
+	// 좌표 계산은 sherbet_magnifier.hpp(맥에서 해상도별 단위테스트됨)가 한다.
+	if (_sherbet_mag_on && _sherbet_mag_srv != 0 && _sherbet_mag_tex_w > 0)
+	{
+		const ImGuiViewport *const mg_vp = ImGui::GetMainViewport();
+		const float mg_zoom = sherbet::mag::clamp_zoom(_sherbet_mag_zoom);
+		const float mg_w = _sherbet_mag_tex_w * mg_zoom;
+		const float mg_h = _sherbet_mag_tex_h * mg_zoom;
+		float mg_x = 0.0f, mg_y = 0.0f;
+		sherbet::mag::dest_pos(_sherbet_mag_anchor[0], _sherbet_mag_anchor[1], mg_w, mg_h,
+			static_cast<int>(mg_vp->Size.x), static_cast<int>(mg_vp->Size.y), mg_x, mg_y);
+		const ImVec2 mg_p0(mg_vp->Pos.x + mg_x, mg_vp->Pos.y + mg_y);
+		const ImVec2 mg_p1(mg_p0.x + mg_w, mg_p0.y + mg_h);
+		const int mg_a = static_cast<int>(ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f) * 255.0f);
+		ImDrawList *const mg = ImGui::GetForegroundDrawList();
+		mg->AddImage(_sherbet_mag_srv.handle, mg_p0, mg_p1, ImVec2(0, 0), ImVec2(1, 1),
+			IM_COL32(255, 255, 255, mg_a));
 	}
 
 	// SHERBET: 커스텀 조준점 — 화면 중앙(+오프셋)에 커스텀 이미지 또는 내장 도형을 그린다.
@@ -4699,6 +4782,53 @@ void reshade::runtime::draw_gui_settings()
 	// SHERBET: 커스텀 조준점 설정은 「에임」 탭으로 옮겼다(에임 관련 설정을 한 곳에 모으기 위해).
 	// 기존 사용자가 "설정이 사라졌다"고 느끼지 않도록 원래 자리에 안내 한 줄을 남긴다.
 	ImGui::TextDisabled("%s", ICON_FK_CROSSHAIRS " \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEC\x99\xBC\xEC\xAA\xBD \xEC\x97\x90\xEC\x9E\x84 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xBC\xEC\x96\xB4\xEC\x9A\x94"); // "조준점 설정은 왼쪽 에임 탭으로 옮겼어요"
+	ImGui::Spacing();
+
+	// SHERBET: HUD 돋보기 — 화면의 한 조각(체력·방어구 막대 등)을 확대해 크게 보여준다.
+	// 게임 상태를 읽지 않는다 — 그 자리 픽셀을 확대할 뿐이다.
+	if (ImGui::CollapsingHeader(ICON_FK_SEARCH "  " "\xED\x99\x94\xEB\xA9\xB4 \xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0")) // "화면 돋보기"
+	{
+		if (ImGui::Checkbox("\xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0 \xEC\x82\xAC\xEC\x9A\xA9##mag", &_sherbet_mag_on)) // "돋보기 사용"
+			modified = true;
+
+		// ⚠️ 영역은 **사용자가 직접 잡는다.** 우리가 좌표를 박으면 서버마다·해상도마다 어긋난다
+		//    (FiveM HUD 는 서버 리소스가 그리고, 서버가 HUD 를 바꾸면 그날로 깨진다).
+		if (sherbet::pill_button(_sherbet_mag_picking
+				? ICON_FK_CANCEL "  " "\xEC\x98\x81\xEC\x97\xAD \xEC\x9E\xA1\xEA\xB8\xB0 \xEC\xB7\xA8\xEC\x86\x8C"  // "영역 잡기 취소"
+				: ICON_FK_SEARCH "  " "\xEC\x98\x81\xEC\x97\xAD \xEC\x9E\xA1\xEA\xB8\xB0", _sherbet_mag_picking)) // "영역 잡기"
+			_sherbet_mag_picking = !_sherbet_mag_picking;
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_UNDO "  " "\xEC\xB4\x88\xEA\xB8\xB0\xED\x99\x94", false)) // "초기화"
+		{
+			_sherbet_mag_rect = sherbet::mag::rect(); // 기본값(우하단 근처)
+			_sherbet_mag_anchor[0] = 0.5f; _sherbet_mag_anchor[1] = 0.30f;
+			_sherbet_mag_cap_res[0] = _sherbet_mag_cap_res[1] = 0;
+			modified = true;
+		}
+
+		if (_sherbet_mag_picking)
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s",
+				ICON_FK_WARNING "  " "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0(Home) \xED\x99\x95\xEB\x8C\x80\xED\x95\xA0 \xEA\xB3\xB3\xEC\x9D\x84 \xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94"); // "오버레이를 닫고(Home) 확대할 곳을 드래그하세요"
+
+		// 해상도가 바뀌면 잡아 둔 영역이 어긋날 수 있다 — 서버 HUD 가 픽셀 고정이면 특히 그렇다.
+		// 우리가 자동으로 고칠 수 없는 문제이므로(서버 구현에 달렸다) 정직하게 알리고 다시 잡게 한다.
+		if (_sherbet_mag_cap_res[0] != 0 &&
+			(_sherbet_mag_cap_res[0] != static_cast<int>(_width) || _sherbet_mag_cap_res[1] != static_cast<int>(_height)))
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s",
+				ICON_FK_WARNING "  " "\xED\x95\xB4\xEC\x83\x81\xEB\x8F\x84\xEA\xB0\x80 \xEB\xB0\x94\xEB\x80\x8C\xEC\x97\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\x81\xEC\x97\xAD\xEC\x9D\x84 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x9E\xA1\xEC\x95\x84 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "해상도가 바뀌었어요 — 영역을 다시 잡아 주세요"
+
+		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
+		if (ImGui::SliderFloat("\xEB\xB0\xB0\xEC\x9C\xA8##mag", &_sherbet_mag_zoom, 1.5f, 6.0f, "%.1fx")) // "배율"
+			modified = true;
+		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
+		if (ImGui::SliderFloat("\xED\x88\xAC\xEB\xAA\x85\xEB\x8F\x84##mag", &_sherbet_mag_opacity, 0.2f, 1.0f, "%.2f")) // "투명도"
+			modified = true;
+		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
+		if (ImGui::SliderFloat2("\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98##mag", _sherbet_mag_anchor, 0.0f, 1.0f, "%.2f")) // "표시 위치"
+			modified = true;
+
+		sherbet_hint("\xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xED\x95\x9C \xEA\xB3\xB3\xEC\x9D\x84 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xED\x81\xAC\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA4\x8D\xEB\x8B\x88\xEB\x8B\xA4. \xEC\xB2\xB4\xEB\xA0\xA5\xC2\xB7\xEB\xB0\xA9\xEC\x96\xB4\xEA\xB5\xAC \xEB\xA7\x89\xEB\x8C\x80\xEC\xB2\x98\xEB\xB0\x8D \xEC\x9E\x91\xEC\x95\x84\xEC\x84\x9C \xEC\x95\x88 \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94 \xEA\xB2\x83\xEC\x9D\x84 \xED\x81\xAC\xEA\xB2\x8C \xEB\x9D\x84\xEC\x9A\xB8 \xEB\x95\x8C \xEC\x93\xB0\xEC\x84\xB8\xEC\x9A\x94."); // "화면의 한 곳을 그대로 크게 보여줍니다. 체력·방어구 막대처럼 작아서 안 보이는 것을 크게 띄울 때 쓰세요."
+	}
 	ImGui::Spacing();
 
 	// SHERBET: 일일 알림 — 정한 시각에 화면에 한 줄 띄운다(상시 표시 아님, 몇 초 뒤 사라진다).

@@ -644,6 +644,9 @@ exit_failure:
 
 	_device->destroy_resource(_sherbet_before_tex);
 	_sherbet_before_tex = {};
+	// SHERBET: 돋보기 텍스처도 디바이스 리셋 때 놓는다. 해상도가 바뀌면 잘라낸 크기도
+	// 달라지므로 어차피 다시 만든다(캡처 함수가 크기 불일치를 보고 재생성한다).
+	sherbet_magnifier_release();
 	_device->destroy_resource_view(_sherbet_before_srv);
 	_sherbet_before_srv = {};
 
@@ -818,6 +821,18 @@ void reshade::runtime::on_present()
 			cmd_list->barrier(back_buffer_resource, api::resource_usage::render_target, api::resource_usage::present);
 		}
 	}
+
+	// SHERBET: HUD 돋보기 — 화면의 한 사각형만 작은 텍스처로 잘라 둔다(다음 프레임에 확대해 그린다).
+	//
+	// ⚠️ **여기가 자리다.** render_effects 안(반반 비교 스냅샷 옆)에 붙이면 안 된다:
+	//    그 함수는 808행 `!is_loading() && !_techniques.empty()` 와 함수 안의 조기 반환들
+	//    (효과 없음/비활성) 때문에 **효과를 안 쓰는 구매자에게는 아예 호출되지 않는다.**
+	//    거기 붙이면 "켰는데 검은 화면" 이 CI 전부 초록불인 채로 출고된다.
+	// ⚠️ draw_gui() 는 857행, 즉 **이 복사보다 뒤**다. 그래서 확대해 그린 그림이 다음 복사본에
+	//    들어가지 않는다 — 거울 속 거울(무한 중첩)이 구조적으로 불가능하다.
+	// 전체 화면이 아니라 **잡은 영역만** 복사하므로 4K 에서도 비용이 작다.
+	if (_sherbet_mag_on)
+		sherbet_magnifier_capture(cmd_list, back_buffer_resource);
 
 	if (_should_save_screenshot)
 		save_screenshot(_screenshot_save_before ? "After" : nullptr);
@@ -3957,6 +3972,71 @@ void reshade::runtime::sherbet_motion_release()
 //     그 시점이면 GPU 는 이미 끝냈으므로 Map 이 기다리지 않는다
 //   · 진단이므로 늦어도 된다 — 두 프레임 늦은 값을 두 프레임 전 마우스 값과 짝지으면
 //     빼기(화면−마우스)는 그대로 성립한다
+// SHERBET: HUD 돋보기 캡처 — 잡은 사각형만 작은 텍스처로 복사한다.
+//
+// 왜 전체 화면이 아니라 부분인가: 반반 비교는 화면 전체를 뜨는데(4K 면 프레임마다 ~33MB),
+// 돋보기는 체력 막대 같은 작은 조각만 필요하다. subresource_box 로 그 영역만 뜨면
+// 4K 에서도 비용이 사실상 없다. 부분 복사 선례는 sherbet_motion_tick 에 있다.
+//
+// 좌표 계산은 전부 sherbet_magnifier.hpp(맥에서 단위테스트됨)가 한다 — 여기는 픽셀을
+// 옮기기만 한다. 해상도 무관성이 그 테스트로 못 박혀 있다.
+void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer)
+{
+	if (back_buffer == 0 || _width == 0 || _height == 0)
+		return;
+
+	const sherbet::mag::box b = sherbet::mag::source_box(_sherbet_mag_rect, static_cast<int>(_width), static_cast<int>(_height));
+	const int bw = sherbet::mag::box_w(b), bh = sherbet::mag::box_h(b);
+	if (bw <= 0 || bh <= 0)
+		return;
+
+	// 영역 크기가 바뀌었으면(사용자가 다시 잡았거나 해상도가 변함) 텍스처를 다시 만든다.
+	if (_sherbet_mag_tex == 0 || _sherbet_mag_tex_w != bw || _sherbet_mag_tex_h != bh)
+	{
+		sherbet_magnifier_release();
+		// 포맷 규약은 반반 비교 스냅샷과 같다: 리소스는 typeless, 뷰는 default_typed.
+		const api::resource_desc desc(static_cast<uint32_t>(bw), static_cast<uint32_t>(bh), 1, 1,
+			api::format_to_typeless(_back_buffer_format), 1, api::memory_heap::default_,
+			api::resource_usage::copy_dest | api::resource_usage::shader_resource);
+		if (!_device->create_resource(desc, nullptr, api::resource_usage::shader_resource, &_sherbet_mag_tex))
+		{
+			_sherbet_mag_tex = {};
+			return; // 실패해도 조용히 넘어간다 — 게임을 망가뜨리지 않는다
+		}
+		if (!_device->create_resource_view(_sherbet_mag_tex, api::resource_usage::shader_resource,
+				api::resource_view_desc(api::format_to_default_typed(_back_buffer_format, 0)), &_sherbet_mag_srv))
+		{
+			_device->destroy_resource(_sherbet_mag_tex);
+			_sherbet_mag_tex = {};
+			_sherbet_mag_srv = {};
+			return;
+		}
+		_sherbet_mag_tex_w = bw;
+		_sherbet_mag_tex_h = bh;
+	}
+
+	const api::subresource_box src_box = {
+		static_cast<uint32_t>(b.x0), static_cast<uint32_t>(b.y0), 0,
+		static_cast<uint32_t>(b.x1), static_cast<uint32_t>(b.y1), 1 };
+
+	cmd_list->barrier(back_buffer, api::resource_usage::present, api::resource_usage::copy_source);
+	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::shader_resource, api::resource_usage::copy_dest);
+	cmd_list->copy_texture_region(back_buffer, 0, &src_box, _sherbet_mag_tex, 0, nullptr);
+	cmd_list->barrier(_sherbet_mag_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
+	cmd_list->barrier(back_buffer, api::resource_usage::copy_source, api::resource_usage::present);
+}
+
+void reshade::runtime::sherbet_magnifier_release()
+{
+	if (_sherbet_mag_srv != 0)
+		_device->destroy_resource_view(_sherbet_mag_srv);
+	if (_sherbet_mag_tex != 0)
+		_device->destroy_resource(_sherbet_mag_tex);
+	_sherbet_mag_srv = {};
+	_sherbet_mag_tex = {};
+	_sherbet_mag_tex_w = _sherbet_mag_tex_h = 0;
+}
+
 void reshade::runtime::sherbet_motion_tick(api::command_list *cmd_list, api::resource_view rtv)
 {
 	// ⚠️ 기본 경로. 꺼져 있으면 리소스도 없고 복사도 매핑도 없다 — 렌더 경로가 그대로다.

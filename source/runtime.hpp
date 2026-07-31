@@ -10,6 +10,7 @@
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
 #include "sherbet_alarm.hpp"
+#include "sherbet_magnifier.hpp"
 #include "sherbet_spray.hpp"
 #include "sherbet_crosshair.hpp"
 #include "sherbet_xhmarket.hpp"
@@ -251,6 +252,11 @@ namespace reshade
 		// 렌더 타깃에서 가운데를 잘라 리드백 링에 복사하고, 두 프레임 전 것을 매핑해 계산한다.
 		// _sherbet_motion_on 이 꺼져 있으면 즉시 반환하며 리소스도 만들지 않는다.
 		void sherbet_motion_tick(api::command_list *cmd_list, api::resource_view rtv);
+		// SHERBET: HUD 돋보기 — 잡은 영역만 작은 텍스처로 복사한다(on_present 에서 매 프레임).
+		// ⚠️ render_effects 안이 아니라 on_present 본문에서 부른다 — 효과를 안 쓰는 구매자도
+		//    동작해야 하기 때문이다. 자세한 이유는 호출부 주석 참고.
+		void sherbet_magnifier_capture(api::command_list *cmd_list, api::resource back_buffer);
+		void sherbet_magnifier_release();
 		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
 
 		api::swapchain *const _swapchain;
@@ -450,6 +456,23 @@ namespace reshade
 		float _sherbet_alarm_secs = 8.0f;      // 화면에 띄워 두는 시간
 		std::string _sherbet_alarm_text;       // 비우면 기본 문구
 		sherbet::alarm::state _sherbet_alarm;  // 세션 상태(디스크에 안 남긴다)
+
+		// SHERBET: HUD 돋보기 — 화면의 한 사각형(체력·방어구 막대 등)을 확대해 크게 그린다.
+		// **게임 상태를 읽지 않는다.** 픽셀을 확대할 뿐이다(메모리 접근 0, 상태 판정 0).
+		// ⚠️ 좌표는 전부 **화면 대비 정규화(0~1)** — 반반 비교 분할선과 같은 관례.
+		//    OSD 의 정규화는 '화면-위젯' 대비라 관례가 다르니 베끼지 말 것.
+		bool _sherbet_mag_on = false;
+		bool _sherbet_mag_picking = false;      // 영역 잡는 중
+		float _sherbet_mag_drag[2] = { 0, 0 };  // 드래그 시작점(정규화)
+		sherbet::mag::rect _sherbet_mag_rect;   // 잡은 영역(정규화)
+		float _sherbet_mag_anchor[2] = { 0.5f, 0.30f }; // 확대창 **중심** 위치(정규화)
+		float _sherbet_mag_zoom = 3.0f;
+		float _sherbet_mag_opacity = 1.0f;
+		int _sherbet_mag_cap_res[2] = { 0, 0 };  // 영역을 잡을 당시 해상도(바뀌면 안내)
+		// 잘라낸 영역을 담는 텍스처. 영역 크기가 바뀌면 다시 만든다.
+		api::resource _sherbet_mag_tex = {};
+		api::resource_view _sherbet_mag_srv = {};
+		int _sherbet_mag_tex_w = 0, _sherbet_mag_tex_h = 0;
 
 		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고
 		// 이미 후킹 중인 입력만 관찰한다. 오버레이가 열려 있는 동안은 세지 않는다 —
