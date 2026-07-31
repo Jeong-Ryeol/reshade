@@ -3310,10 +3310,13 @@ void reshade::runtime::sherbet_draw_lock_footer(const sherbet::paid::feature &f)
 		{
 			_sherbet_auth.begin_fetch_content();
 		}
+		// ⚠️ 원래 중괄호 없는 한 줄 if 였다 — 여러 줄로 늘릴 때 중괄호를 반드시 같이 넣는다.
 		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
+		{
 			ImVec4 done_col = sherbet::status_color(sherbet::status::good); // 테마 명도에 맞는 초록
 			done_col.w = ImMin(1.0f, _sherbet_content_done_timer);         // 마지막 1초 페이드
 			ImGui::TextColored(done_col, ICON_FK_OK "  %s", kLockDone);
+		}
 		ImGui::TextDisabled("%s", kLockFetchHint);
 	}
 	else
