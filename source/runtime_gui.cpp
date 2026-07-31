@@ -1475,8 +1475,11 @@ void reshade::runtime::draw_gui()
 			const sherbet::mag::rect pk_done =
 				sherbet::mag::from_drag(_sherbet_mag_drag[0], _sherbet_mag_drag[1], pk_nx, pk_ny);
 			// ⚠️ 실수로 클릭만 한 경우를 확정하지 않는다. sanitize 가 최소 크기를 만들어 주므로
-			//    크래시는 없지만, 사용자는 "엉뚱한 데가 확대됨" 을 보게 된다. 다시 끌게 한다.
-			if (sherbet::mag::is_usable(pk_done))
+			//    크래시는 없지만, 사용자는 "엉뚱한 데가 확대됨" 을 보게 된다.
+			// ⚠️⚠️ **거부하면 반드시 알린다.** 처음엔 else 없이 그냥 무시했는데, 사용자에게는
+			//      "드래그해도 아무 일이 안 일어남" 으로 보였다 — 실제 신고가 그것이었다.
+			//      조용한 거부는 고장과 구분되지 않는다.
+			if (sherbet::mag::is_usable(pk_done, static_cast<int>(_width), static_cast<int>(_height)))
 			{
 				_sherbet_mag_rect = sherbet::mag::sanitize(pk_done);
 				_sherbet_mag_cap_res[0] = static_cast<int>(_width);
@@ -1485,22 +1488,33 @@ void reshade::runtime::draw_gui()
 				_sherbet_mag_on = true; // 잡았으면 바로 보여 준다
 				save_config();
 			}
+			else
+			{
+				_sherbet_mag_pick_msg = 3.0f; // 잡기 모드를 유지한 채 안내만 띄운다
+			}
 		}
+		if (_sherbet_mag_pick_msg > 0.0f)
+			_sherbet_mag_pick_msg -= _imgui_context->IO.DeltaTime;
 		// 취소 — 우클릭이나 Esc. (잡는 동안 Sherbet 창을 안 그리므로 버튼으로 나갈 길이 없다.)
 		if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape))
 			_sherbet_mag_picking = false;
 
 		// 안내 — 창이 없으니 화면에 직접 띄운다.
 		{
+			// 너무 작게 끌어 거부됐으면 그 이유를 대신 띄운다 — 조용히 무시하면 고장으로 보인다.
+			static const char *const kPickTooSmall =
+				"\xEB\x84\x88\xEB\xAC\xB4 \xEC\x9E\x91\xEC\x95\x84\xEC\x9A\x94 \xE2\x80\x94 \xEC\xA1\xB0\xEA\xB8\x88 \xEB\x8D\x94 \xED\x81\xAC\xEA\xB2\x8C \xEB\x81\x8C\xEC\x96\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "너무 작아요 — 조금 더 크게 끌어 주세요"
 			static const char *const kPickHint =
 				"\xED\x99\x95\xEB\x8C\x80\xED\x95\x98\xEA\xB3\xA0 \xEC\x8B\xB6\xEC\x9D\x80 \xEA\xB3\xB3\xEC\x9D\x84 \xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94" " \xC2\xB7 " "\xEC\xB7\xA8\xEC\x86\x8C\xEB\x8A\x94 \xEC\x9A\xB0\xED\x81\xB4\xEB\xA6\xAD/Esc"; // "확대하고 싶은 곳을 드래그하세요 · 취소는 우클릭/Esc"
 			ImDrawList *const hint = ImGui::GetForegroundDrawList();
 			const float hs = _imgui_context->Style.FontSizeBase * 1.2f;
-			const ImVec2 hts = _sherbet_title_font->CalcTextSizeA(hs, FLT_MAX, 0.0f, kPickHint);
+			const char *const pk_msg = (_sherbet_mag_pick_msg > 0.0f) ? kPickTooSmall : kPickHint;
+			const ImVec2 hts = _sherbet_title_font->CalcTextSizeA(hs, FLT_MAX, 0.0f, pk_msg);
 			const ImVec2 hp(pk_vp->Pos.x + (pk_vp->Size.x - hts.x) * 0.5f, pk_vp->Pos.y + pk_vp->Size.y * 0.06f);
 			hint->AddRectFilled(ImVec2(hp.x - 16.0f, hp.y - 9.0f), ImVec2(hp.x + hts.x + 16.0f, hp.y + hts.y + 9.0f),
 				IM_COL32(20, 22, 28, 225), 12.0f);
-			hint->AddText(_sherbet_title_font, hs, hp, IM_COL32(235, 240, 250, 255), kPickHint);
+			hint->AddText(_sherbet_title_font, hs, hp, (_sherbet_mag_pick_msg > 0.0f)
+				? IM_COL32(255, 180, 90, 255) : IM_COL32(235, 240, 250, 255), pk_msg);
 		}
 	}
 
@@ -1519,8 +1533,16 @@ void reshade::runtime::draw_gui()
 		const ImVec2 mg_p1(mg_p0.x + mg_w, mg_p0.y + mg_h);
 		const int mg_a = static_cast<int>(ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f) * 255.0f);
 		ImDrawList *const mg = ImGui::GetForegroundDrawList();
+		// ⚠️ **테두리를 먼저 그린다.** 확대한 내용이 어두우면(기본 영역이 어두운 화면 구석이면
+		//    흔하다) 그림만으로는 켜졌는지조차 알 수 없다 — 실제로 "켜도 아무것도 안 뜬다" 는
+		//    신고로 나타났다. 틀이 보이면 최소한 "켜졌고 여기를 보고 있다" 는 것이 전달된다.
+		const sherbet::theme &mg_t = sherbet::active_theme();
+		mg->AddRectFilled(ImVec2(mg_p0.x - 3.0f, mg_p0.y - 3.0f), ImVec2(mg_p1.x + 3.0f, mg_p1.y + 3.0f),
+			sherbet::with_alpha(mg_t.panel, static_cast<int>(200 * ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f))), 8.0f);
 		mg->AddImage(_sherbet_mag_srv.handle, mg_p0, mg_p1, ImVec2(0, 0), ImVec2(1, 1),
 			IM_COL32(255, 255, 255, mg_a));
+		mg->AddRect(ImVec2(mg_p0.x - 3.0f, mg_p0.y - 3.0f), ImVec2(mg_p1.x + 3.0f, mg_p1.y + 3.0f),
+			sherbet::with_alpha(mg_t.accent, static_cast<int>(230 * ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f))), 8.0f, 0, 2.0f);
 
 		// ⚠️ 확대창이 소스 위에 겹치면 다음 캡처를 건너뛴다. 효과 렌더 가드는 프레임당이 아니라
 		//    **Present 당**이라(게임이 리렌더 없이 Present 를 두 번 하는 프레임이 실재한다)

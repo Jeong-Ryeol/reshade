@@ -106,10 +106,16 @@ namespace sherbet
 
 		// 확정해도 되는 크기인가. sanitize 는 최소 크기를 **만들어 주므로** 클릭 한 번(폭 0)도
 		// 통과해 버린다 — 크래시는 없지만 사용자는 "엉뚱한 데가 확대됨" 을 본다.
-		// 확정 시점에서만 이 판정을 써서 다시 끌게 한다. 정규화 기준이라 해상도에 안 흔들린다.
-		inline bool is_usable(const rect &r, float min_size = 0.02f)
+		//
+		// ⚠️ **판정은 픽셀 기준이어야 한다.** 처음엔 정규화 0.02 로 잡았는데, 그건 세로로
+		//    FHD 22px / 2K 29px / 4K 43px 을 요구한다. 이 기능의 **주 용도인 체력 막대는
+		//    높이가 10px 안팎의 얇은 가로 막대**라, 막대만 딱 감싸면 어느 해상도에서도
+		//    거부됐다. 실제로 "드래그해도 아무것도 안 뜬다" 는 신고로 나타났다.
+		//    "실수로 클릭했다"(0px)와 "얇지만 일부러 끌었다"를 가르면 충분하다.
+		inline bool is_usable(const rect &r, int screen_w, int screen_h, int min_px = 6)
 		{
-			return r.w >= min_size && r.h >= min_size;
+			return r.w * screen_w >= static_cast<float>(min_px)
+				&& r.h * screen_h >= static_cast<float>(min_px);
 		}
 
 		// 소스 사각형과 확대창이 겹치는가.

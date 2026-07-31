@@ -4014,7 +4014,12 @@ void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, ap
 		if (!_device->create_resource(desc, nullptr, api::resource_usage::shader_resource, &_sherbet_mag_tex))
 		{
 			_sherbet_mag_tex = {};
-			return; // 실패해도 조용히 넘어간다 — 게임을 망가뜨리지 않는다
+			// ⚠️ **조용히 넘어가지 않는다.** 실패가 무음이면 "켜도 아무 일이 안 일어남" 이 되고
+			//    사용자 화면만 보고는 원인을 알 길이 없다(실제로 그 신고를 받았다).
+			log::message(log::level::error,
+				"[sherbet-mag] 텍스처 생성 실패 %dx%d (화면 %ux%u, 포맷 %u)",
+				bw, bh, _width, _height, static_cast<unsigned int>(_back_buffer_format));
+			return;
 		}
 		if (!_device->create_resource_view(_sherbet_mag_tex, api::resource_usage::shader_resource,
 				api::resource_view_desc(api::format_to_default_typed(_back_buffer_format, 0)), &_sherbet_mag_srv))
@@ -4026,6 +4031,12 @@ void reshade::runtime::sherbet_magnifier_capture(api::command_list *cmd_list, ap
 		}
 		_sherbet_mag_tex_w = bw;
 		_sherbet_mag_tex_h = bh;
+		// 성공도 한 줄 남긴다 — 이 줄이 로그에 없으면 캡처 경로가 아예 안 돈 것이고,
+		// 있는데 화면에 안 보이면 그리기 쪽 문제다. 둘의 대응이 전혀 다르다.
+		log::message(log::level::info,
+			"[sherbet-mag] 잘라내기 %dx%d @(%d,%d) (화면 %ux%u, 포맷 %u, resolved=%d)",
+			bw, bh, b.x0, b.y0, _width, _height,
+			static_cast<unsigned int>(_back_buffer_format), _back_buffer_resolved != 0 ? 1 : 0);
 	}
 
 	const api::subresource_box src_box = {

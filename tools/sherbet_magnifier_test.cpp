@@ -138,12 +138,34 @@ static void test_zero_resolution_is_safe()
 // 실수로 클릭만 한 경우를 확정하면 안 된다(sanitize 가 최소 크기를 만들어 주므로 그냥 통과한다).
 static void test_is_usable_rejects_accidental_click()
 {
-	assert(!is_usable(from_drag(0.5f, 0.5f, 0.5f, 0.5f)));      // 클릭만
-	assert(!is_usable(from_drag(0.5f, 0.5f, 0.505f, 0.6f)));    // 폭이 너무 얇다
-	assert(is_usable(from_drag(0.80f, 0.95f, 0.95f, 0.99f)));   // 정상적인 HUD 크기
-	// 판정은 정규화 기준이라 해상도에 안 흔들린다 — 같은 사각형이면 FHD 든 4K 든 같은 답
+	// 클릭만 한 경우는 어느 해상도에서도 거부
+	assert(!is_usable(from_drag(0.5f, 0.5f, 0.5f, 0.5f), kFHD_W, kFHD_H));
+	assert(!is_usable(from_drag(0.5f, 0.5f, 0.5f, 0.5f), k4K_W, k4K_H));
+
+	// ⚠️ 이 기능의 **주 용도**: 얇은 가로 막대(체력바). 높이 10px 안팎이어도 통과해야 한다.
+	//    예전 정규화 0.02 기준은 세로 FHD 22px / 4K 43px 을 요구해 이걸 전부 거부했고,
+	//    그게 "드래그해도 아무것도 안 뜬다" 신고의 원인이었다.
+	{
+		// FHD 에서 폭 210px, 높이 10px 짜리 막대
+		const float w = 210.0f / kFHD_W, h = 10.0f / kFHD_H;
+		rect bar; bar.x = 0.80f; bar.y = 0.95f; bar.w = w; bar.h = h;
+		assert(is_usable(bar, kFHD_W, kFHD_H));
+	}
+	{
+		// 4K 에서 같은 물리 크기(픽셀 고정 HUD) — 20px 높이
+		const float w = 420.0f / k4K_W, h = 20.0f / k4K_H;
+		rect bar; bar.x = 0.80f; bar.y = 0.95f; bar.w = w; bar.h = h;
+		assert(is_usable(bar, k4K_W, k4K_H));
+	}
+	// 5px 미만은 실수로 본다
+	{
+		rect tiny; tiny.x = 0.5f; tiny.y = 0.5f; tiny.w = 200.0f / kFHD_W; tiny.h = 3.0f / kFHD_H;
+		assert(!is_usable(tiny, kFHD_W, kFHD_H));
+	}
 	rect r; r.x = 0.80f; r.y = 0.90f; r.w = 0.15f; r.h = 0.06f;
-	assert(is_usable(r));
+	assert(is_usable(r, kFHD_W, kFHD_H));
+	assert(is_usable(r, k2K_W, k2K_H));
+	assert(is_usable(r, k4K_W, k4K_H));
 }
 
 // 확대창이 소스 위에 겹치면 이중 Present 프레임에서 중첩이 쌓인다 — 겹침을 정확히 판정해야 한다.
