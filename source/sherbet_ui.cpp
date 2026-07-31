@@ -233,7 +233,7 @@ namespace sherbet
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::ColorConvertU32ToFloat4(t.accent));
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(fg));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(14, 7));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, pill_padding);
 		const bool pressed = ImGui::Button(label);
 		ImGui::PopStyleVar(2);
 		ImGui::PopStyleColor(4);
@@ -261,7 +261,26 @@ namespace sherbet
 		dl->PopClipRect();
 	}
 
-	bool rail_button(const char *id, const char *icon, bool active)
+	ImVec4 status_color(status s)
+	{
+		const theme &t = active_theme();
+		// t.text 는 언제나 카드 위에서 읽히는 색이므로 배경 명도의 신뢰 가능한 대리값이다.
+		// (7개 정적 테마 실측: mint 0.980 / peach 0.958 / pink 0.950 / rainbow 0.954 /
+		//  lavender 0.938 / noir 0.939 / strawberry 0.218 — 딸기만 라이트다.)
+		// 서버가 내려주는 동적 테마(add_dynamic_theme)도 같은 식으로 자동 처리된다.
+		const float r = ((t.text >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f;
+		const float g = ((t.text >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f;
+		const float b = ((t.text >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f;
+		const bool light_bg = (0.2126f * r + 0.7152f * g + 0.0722f * b) < 0.5f; // 본문이 어둡다 = 배경이 밝다
+		switch (s)
+		{
+		case status::bad:  return light_bg ? ImVec4(0.62f, 0.10f, 0.16f, 1.0f) : ImVec4(0.95f, 0.42f, 0.42f, 1.0f);
+		case status::warn: return light_bg ? ImVec4(0.55f, 0.33f, 0.02f, 1.0f) : ImVec4(0.95f, 0.75f, 0.35f, 1.0f);
+		default:           return light_bg ? ImVec4(0.06f, 0.42f, 0.19f, 1.0f) : ImVec4(0.36f, 0.86f, 0.45f, 1.0f);
+		}
+	}
+
+	bool rail_button(const char *id, const char *icon, bool active, ImU32 idle_col)
 	{
 		const theme &t = active_theme();
 		const float sz = rail_button_size;
@@ -278,7 +297,8 @@ namespace sherbet
 		{
 			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), t.panel_alt, 14.0f);
 		}
-		const ImU32 col = active ? IM_COL32(20, 20, 20, 255) : (hovered ? t.text : t.text_dim);
+		const ImU32 col = active ? IM_COL32(20, 20, 20, 255)
+			: (hovered ? t.text : (idle_col != 0 ? idle_col : t.text_dim));
 		const ImVec2 ts = ImGui::CalcTextSize(icon);
 		dl->AddText(ImVec2(p.x + (sz - ts.x) * 0.5f, p.y + (sz - ts.y) * 0.5f), col, icon);
 		return clicked;

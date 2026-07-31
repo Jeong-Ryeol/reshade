@@ -391,6 +391,7 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	// SHERBET: 스프레이 트레이너. 두 토글은 독립이고 기본은 둘 다 꺼짐.
 	config.get("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
 	config.get("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
+	config.get("OVERLAY", "SherbetSprayOverlay5", _sherbet_spray_overlay5);
 	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.get("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	// 손으로 고친 ini 방어 — 배율 0 이면 궤적이 한 점으로 뭉치고, 간격이 0 이면 매 프레임
@@ -572,6 +573,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetOsdHorizontal", _sherbet_osd_horizontal);
 	config.set("OVERLAY", "SherbetSprayLive", _sherbet_spray_live);
 	config.set("OVERLAY", "SherbetSprayChart", _sherbet_spray_chart);
+	config.set("OVERLAY", "SherbetSprayOverlay5", _sherbet_spray_overlay5);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	config.set("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
@@ -2165,7 +2167,11 @@ void reshade::runtime::draw_gui()
 			ImGui::Dummy(ImVec2(0, 8));
 			// 로고 (클릭 시 홈으로 — 반응 없던 문제 해결)
 			ImGui::SetCursorPosX((sherbet::rail_width - sherbet::rail_button_size) * 0.5f);
-			if (sherbet::rail_button("##logo", ICON_FK_MAGIC, _sherbet_tab == 0))
+			// ⚠️ 로고는 **선택 표시를 하지 않는다**(active=false). 예전엔 홈 탭 조건을 그대로
+			//    넘겨서, 오버레이를 열면 기본이 홈이라 로고와 홈 아이콘이 **둘 다** 액센트 알약 +
+			//    글로우로 켜졌다 — 어느 쪽이 지금 탭인지 알 수 없는 첫 화면이었다.
+			//    대신 idle_col 로 브랜드 색은 살린다(안 그러면 로고가 text_dim 으로 죽는다).
+			if (sherbet::rail_button("##logo", ICON_FK_MAGIC, false, sherbet::active_theme().accent))
 				_sherbet_tab = 0;
 			ImGui::SetItemTooltip("Sherbet \xED\x99\x88"); // "Sherbet 홈"
 			ImGui::Dummy(ImVec2(0, 10));
@@ -2461,10 +2467,15 @@ void reshade::runtime::draw_sherbet_update_card(bool compact)
 		if (!st.empty())
 			ImGui::TextUnformatted(st.c_str());
 		// 폭이 좁을 때 음수가 되지 않게 자른다(ImGui 는 음수를 '남은 폭에서 빼기' 로 해석한다).
-		const float bar_w = ImMax(60.0f, ImGui::GetContentRegionAvail().x - 110.0f);
+		// ⚠️ 취소 버튼 자리는 **실측한다**. 고정 110px 이었을 땐 폰트를 21 이상으로 올리면
+		//    버튼이 카드 밖으로 잘려 나갔다 — 다운로드를 멈출 수 있는 유일한 버튼이다.
+		static const char *const kUpdCancel = ICON_FK_CANCEL "  \xEC\xB7\xA8\xEC\x86\x8C"; // "취소"
+		const float cancel_w = ImGui::CalcTextSize(kUpdCancel).x + sherbet::pill_padding.x * 2.0f;
+		const float bar_w = ImMax(60.0f,
+			ImGui::GetContentRegionAvail().x - cancel_w - _imgui_context->Style.ItemSpacing.x);
 		ImGui::ProgressBar(uc.progress(), ImVec2(bar_w, 0.0f));
 		ImGui::SameLine();
-		if (sherbet::pill_button(ICON_FK_CANCEL "  \xEC\xB7\xA8\xEC\x86\x8C", false)) // "취소"
+		if (sherbet::pill_button(kUpdCancel, false))
 			uc.cancel();
 	}
 	else if (offer)
@@ -3053,32 +3064,47 @@ void reshade::runtime::draw_gui_home()
 }
 // 선택된 커스텀 조준점 PNG 를 텍스처로 로딩한다. 내장 도형 모드거나 파일이 없으면 텍스처를 해제만 한다.
 // 렌더 스레드(draw_gui)에서만 호출 — _device 사용이 안전한 시점.
+// SHERBET: 긴 한 줄 안내문. TextDisabled 는 DC.TextWrapPos < 0 이면 줄바꿈하지 않고,
+// 컨테이너에 가로 스크롤바가 없어 넘친 글자는 말줄임표도 없이 잘려 나간다.
+// 기본 폰트(13)에서는 안 넘치지만 폰트를 16 이상으로 올리면 잘린다.
+// ⚠️ BulletText 에는 쓰지 마라 — 접힌 둘째 줄이 불릿 아래가 아니라 왼쪽 끝으로 흐른다.
+static void sherbet_hint(const char *text)
+{
+	ImGui::PushTextWrapPos(0.0f);
+	ImGui::TextDisabled("%s", text);
+	ImGui::PopTextWrapPos();
+}
+
 void reshade::runtime::sherbet_load_crosshair()
 {
 	_sherbet_crosshair_dirty = false;
+	// ⚠️ 배경 로더와 같은 이유로 실패를 기록한다. 클래식 조준점은 오버레이 안에 미리보기가
+	//    없어서, 실패하면 **게임 화면에 조준점이 아예 안 그려지는데 이유를 알 길이 없다.**
+	//    '내장 도형/미선택' 은 실패가 아니라 미시도(0)다.
+	_sherbet_crosshair_load = 0;
 	if (_sherbet_crosshair_srv != 0) { _device->destroy_resource_view(_sherbet_crosshair_srv); _sherbet_crosshair_srv = {}; }
 	if (_sherbet_crosshair_tex != 0) { _device->destroy_resource(_sherbet_crosshair_tex); _sherbet_crosshair_tex = {}; }
 	_sherbet_crosshair_w = _sherbet_crosshair_h = 0;
 
 	if (_sherbet_crosshair_builtin != 0 || _sherbet_crosshair_file.empty())
-		return; // 내장 도형 모드거나 선택 파일 없음 → 이미지 불필요
+		return; // 내장 도형 모드거나 선택 파일 없음 → 이미지 불필요(미시도 0 으로 남긴다)
 
 	const std::filesystem::path path = _config_path.parent_path() / L"Sherbet-Crosshairs" / std::filesystem::u8path(_sherbet_crosshair_file);
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec))
-		return;
+		{ _sherbet_crosshair_load = 2; return; }
 
 	std::ifstream file(path, std::ios::binary);
 	if (!file)
-		return;
+		{ _sherbet_crosshair_load = 2; return; }
 	const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 	if (data.empty())
-		return;
+		{ _sherbet_crosshair_load = 2; return; }
 
 	int w = 0, h = 0, ch = 0;
 	stbi_uc *const pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(data.data()), static_cast<int>(data.size()), &w, &h, &ch, STBI_rgb_alpha);
 	if (pixels == nullptr)
-		return;
+		{ _sherbet_crosshair_load = 2; return; }
 
 	const api::subresource_data initial = { pixels, static_cast<uint32_t>(w * 4), static_cast<uint32_t>(w * 4 * h) };
 	if (_device->create_resource(
@@ -3089,16 +3115,19 @@ void reshade::runtime::sherbet_load_crosshair()
 		{
 			_sherbet_crosshair_w = w;
 			_sherbet_crosshair_h = h;
+			_sherbet_crosshair_load = 1;
 		}
 		else
 		{
 			_device->destroy_resource(_sherbet_crosshair_tex);
 			_sherbet_crosshair_tex = {};
+			_sherbet_crosshair_load = 2;
 		}
 	}
 	else
 	{
 		_sherbet_crosshair_tex = {};
+		_sherbet_crosshair_load = 2;
 	}
 
 	stbi_image_free(pixels);
@@ -3108,29 +3137,36 @@ void reshade::runtime::sherbet_load_crosshair()
 void reshade::runtime::sherbet_load_background()
 {
 	_sherbet_bg_dirty = false;
+	// ⚠️ 실패를 **조용히 넘기지 않는다.** 예전엔 모든 실패 경로가 그냥 return 이라, 콤보는
+	//    파일명만 보고 '선택됨' 처럼 그리는데 화면엔 아무것도 안 나오고 이유가 어디에도
+	//    없었다. stb_image 는 프로그레시브/CMYK JPEG 를 못 푸는데 콤보는 .jpg 를 그대로
+	//    목록에 올리므로 발생률이 낮지 않다.
+	// ⚠️ '끔/미선택' 은 실패가 아니라 **미시도(0)** 다. 2 로 두면 배경을 꺼 놓은 사람에게
+	//    빨간 에러가 뜬다.
+	_sherbet_bg_load = 0;
 	if (_sherbet_bg_srv != 0) { _device->destroy_resource_view(_sherbet_bg_srv); _sherbet_bg_srv = {}; }
 	if (_sherbet_bg_tex != 0) { _device->destroy_resource(_sherbet_bg_tex); _sherbet_bg_tex = {}; }
 	_sherbet_bg_w = _sherbet_bg_h = 0;
 
 	if (!_sherbet_bg_on || _sherbet_bg_file.empty())
-		return; // 끔이거나 선택 파일 없음 → 이미지 불필요
+		return; // 끔이거나 선택 파일 없음 → 이미지 불필요(미시도 0 으로 남긴다)
 
 	const std::filesystem::path path = _config_path.parent_path() / L"Sherbet-Backgrounds" / std::filesystem::u8path(_sherbet_bg_file);
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec))
-		return;
+		{ _sherbet_bg_load = 2; return; }
 
 	std::ifstream file(path, std::ios::binary);
 	if (!file)
-		return;
+		{ _sherbet_bg_load = 2; return; }
 	const std::string data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 	if (data.empty())
-		return;
+		{ _sherbet_bg_load = 2; return; }
 
 	int w = 0, h = 0, ch = 0;
 	stbi_uc *const pixels = stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(data.data()), static_cast<int>(data.size()), &w, &h, &ch, STBI_rgb_alpha);
 	if (pixels == nullptr)
-		return;
+		{ _sherbet_bg_load = 2; return; }
 
 	const api::subresource_data initial = { pixels, static_cast<uint32_t>(w * 4), static_cast<uint32_t>(w * 4 * h) };
 	if (_device->create_resource(
@@ -3141,16 +3177,19 @@ void reshade::runtime::sherbet_load_background()
 		{
 			_sherbet_bg_w = w;
 			_sherbet_bg_h = h;
+			_sherbet_bg_load = 1;
 		}
 		else
 		{
 			_device->destroy_resource(_sherbet_bg_tex);
 			_sherbet_bg_tex = {};
+			_sherbet_bg_load = 2;
 		}
 	}
 	else
 	{
 		_sherbet_bg_tex = {};
+		_sherbet_bg_load = 2;
 	}
 
 	stbi_image_free(pixels);
@@ -3272,7 +3311,9 @@ void reshade::runtime::sherbet_draw_lock_footer(const sherbet::paid::feature &f)
 			_sherbet_auth.begin_fetch_content();
 		}
 		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
-			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, ImMin(1.0f, _sherbet_content_done_timer)), ICON_FK_OK "  %s", kLockDone);
+			ImVec4 done_col = sherbet::status_color(sherbet::status::good); // 테마 명도에 맞는 초록
+			done_col.w = ImMin(1.0f, _sherbet_content_done_timer);         // 마지막 1초 페이드
+			ImGui::TextColored(done_col, ICON_FK_OK "  %s", kLockDone);
 		ImGui::TextDisabled("%s", kLockFetchHint);
 	}
 	else
@@ -3455,13 +3496,13 @@ bool reshade::runtime::draw_gui_spray_trainer()
 		const bool raw_ok = _input != nullptr && _input->raw_mouse_available();
 		if (raw_ok)
 		{
-			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, 1.0f), "%s", ICON_FK_OK "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99 \xEC\x9D\xBD\xEA\xB8\xB0 \xEA\xB0\x80\xEB\x8A\xA5"); // "마우스 이동 읽기 가능"
+			ImGui::TextColored(sherbet::status_color(sherbet::status::good), "%s", ICON_FK_OK "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99 \xEC\x9D\xBD\xEA\xB8\xB0 \xEA\xB0\x80\xEB\x8A\xA5"); // "마우스 이동 읽기 가능"
 			ImGui::SameLine();
 			ImGui::TextDisabled("\xEB\x88\x84\xEC\xA0\x81 %llu", _sherbet_spray_move_total); // "누적 %llu"
 		}
 		else
 		{
-			ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99"); // "마우스 이동"
+			ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s", ICON_FK_CANCEL "  \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99"); // "마우스 이동"
 			ImGui::TextWrapped("%s", "\xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB6\xA4\xEC\xA0\x81 \xEB\x8C\x80\xEC\x8B\xA0 \xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "이 게임에서는 마우스 이동을 읽을 수 없어요 — 궤적 대신 발사 기록만 표시됩니다"
 		}
 
@@ -3469,8 +3510,8 @@ bool reshade::runtime::draw_gui_spray_trainer()
 		// 두 토글이 모두 꺼져 있으면 기록 자체가 돌지 않는다. 숫자가 0 에서 멈춰 있는 이유를
 		// 사용자가 추측하게 두지 않는다.
 		if (!_sherbet_spray_live && !_sherbet_spray_chart)
-			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\x8A\xA4\xED\x94\x84\xEB\xA0\x88\xEC\x9D\xB4 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEA\xBA\xBC\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x95\x84\xEB\x9E\x98\xEC\x97\x90\xEC\x84\x9C \xEC\xBC\x9C\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x91\xEB\x8B\x88\xEB\x8B\xA4"); // "스프레이 기록이 꺼져 있어요 — 아래에서 켜면 이 숫자가 올라갑니다"
-		ImGui::TextDisabled("%s", "\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C \xEC\x8F\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEB\xA9\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9D\x84 \xEC\xA0\x9C\xEB\x8C\x80\xEB\xA1\x9C \xEB\xB3\xB4\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94 \xEA\xB1\xB0\xEC\x98\x88\xEC\x9A\x94"); // 안내
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  \xEC\x8A\xA4\xED\x94\x84\xEB\xA0\x88\xEC\x9D\xB4 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEA\xBA\xBC\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x95\x84\xEB\x9E\x98\xEC\x97\x90\xEC\x84\x9C \xEC\xBC\x9C\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x91\xEB\x8B\x88\xEB\x8B\xA4"); // "스프레이 기록이 꺼져 있어요 — 아래에서 켜면 이 숫자가 올라갑니다"
+		sherbet_hint("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C \xEC\x8F\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEC\x88\xAB\xEC\x9E\x90\xEA\xB0\x80 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEB\xA9\xB4 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9D\x84 \xEC\xA0\x9C\xEB\x8C\x80\xEB\xA1\x9C \xEB\xB3\xB4\xEA\xB3\xA0 \xEC\x9E\x88\xEB\x8A\x94 \xEA\xB1\xB0\xEC\x98\x88\xEC\x9A\x94"); // 안내
 		ImGui::TextDisabled("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\xA9\x94\xEB\xAA\xA8\xEB\xA6\xAC\xEB\x82\x98 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x84 \xEC\x9D\xBD\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94. \xEC\x9D\xB4\xEB\xAF\xB8 \xED\x9B\x84\xED\x82\xB9 \xEC\xA4\x91\xEC\x9D\xB8 \xEC\x9E\x85\xEB\xA0\xA5\xEB\xA7\x8C \xEA\xB4\x80\xEC\xB0\xB0\xED\x95\xA9\xEB\x8B\x88\xEB\x8B\xA4."); // 안전 안내
 	}
 	sherbet::end_card();
@@ -3494,9 +3535,8 @@ bool reshade::runtime::draw_gui_spray_trainer()
 			const sherbet::spray::segment *const cur = _sherbet_spray.current();
 			const bool raw_ok2 = _input != nullptr && _input->raw_mouse_available();
 
-			static bool spray_overlay5 = false; // 최근 5개 겹쳐보기
 			static int spray_sel = -1;          // 목록에서 고른 구간(history 인덱스). -1 = 최신
-			ImGui::Checkbox("\xEC\xB5\x9C\xEA\xB7\xBC 5\xEA\xB0\x9C \xEA\xB2\xB9\xEC\xB3\x90\xEB\xB3\xB4\xEA\xB8\xB0##spray", &spray_overlay5); // "최근 5개 겹쳐보기"
+			modified |= ImGui::Checkbox("\xEC\xB5\x9C\xEA\xB7\xBC 5\xEA\xB0\x9C \xEA\xB2\xB9\xEC\xB3\x90\xEB\xB3\xB4\xEA\xB8\xB0##spray", &_sherbet_spray_overlay5); // "최근 5개 겹쳐보기"
 			ImGui::SameLine();
 			if (sherbet::pill_button(ICON_FK_TRASH "  \xEA\xB8\xB0\xEB\xA1\x9D \xEC\xA7\x80\xEC\x9A\xB0\xEA\xB8\xB0", false)) // "기록 지우기"
 			{
@@ -3531,7 +3571,7 @@ bool reshade::runtime::draw_gui_spray_trainer()
 			// 이동을 못 읽는 게임이면 점이 전부 원점에 겹친다 — 구간을 아예 넘기지 않고
 			// (배경·격자·십자만 그리게) 그 자리에 안내만 낸다.
 			const ImVec2 org = sherbet_draw_spray_canvas(dl, c0, c1, ct, hist,
-				raw_ok2 ? focus : nullptr, raw_ok2 && spray_overlay5, _sherbet_spray_scale);
+				raw_ok2 ? focus : nullptr, raw_ok2 && _sherbet_spray_overlay5, _sherbet_spray_scale);
 			if (!raw_ok2)
 			{
 				const ImVec2 tsz = ImGui::CalcTextSize("\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"); // "발사 기록만 표시 중 — 이 게임에서는 이동을 읽을 수 없어요"
@@ -3641,7 +3681,7 @@ void reshade::runtime::draw_gui_aim()
 			// 안 그러면 해상도만 바꾸고 다시 켠 사용자가 영영 같은 에러를 본다.
 			_sherbet_motion_state = 0;
 		}
-		ImGui::TextDisabled("%s", "\xED\x99\x94\xEB\xA9\xB4 \xEA\xB0\x80\xEC\x9A\xB4\xEB\x8D\xB0\xEB\xA5\xBC \xEC\xA1\xB0\xEA\xB8\x88 \xEB\x96\xBC\xEC\x96\xB4 CPU \xEB\xA1\x9C \xEA\xB0\x80\xEC\xA0\xB8\xEC\x99\x80, \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x82\xAC\xEC\x9D\xB4\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4 \xEC\x96\xBC\xEB\xA7\x88\xEB\x82\x98 \xEB\xB0\x80\xEB\xA0\xB8\xEB\x8A\x94\xEC\xA7\x80 \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4. \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\x8F\x84 \xEA\xB3\x84\xEC\x82\xB0\xEB\x8F\x84 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94."); // 설명
+		sherbet_hint("\xED\x99\x94\xEB\xA9\xB4 \xEA\xB0\x80\xEC\x9A\xB4\xEB\x8D\xB0\xEB\xA5\xBC \xEC\xA1\xB0\xEA\xB8\x88 \xEB\x96\xBC\xEC\x96\xB4 CPU \xEB\xA1\x9C \xEA\xB0\x80\xEC\xA0\xB8\xEC\x99\x80, \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x82\xAC\xEC\x9D\xB4\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\xB4 \xEC\x96\xBC\xEB\xA7\x88\xEB\x82\x98 \xEB\xB0\x80\xEB\xA0\xB8\xEB\x8A\x94\xEC\xA7\x80 \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4. \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\x8F\x84 \xEA\xB3\x84\xEC\x82\xB0\xEB\x8F\x84 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94."); // 설명
 
 		if (_sherbet_motion_on)
 		{
@@ -3652,13 +3692,13 @@ void reshade::runtime::draw_gui_aim()
 
 			// ── 상태 ──
 			if (_sherbet_motion_state == 2)
-				ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x98 \xEB\xB0\xB1\xEB\xB2\x84\xED\x8D\xBC \xED\x98\x95\xEC\x8B\x9D\xEC\x9D\x80 \xEC\x95\x84\xEC\xA7\x81 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 (8\xEB\xB9\x84\xED\x8A\xB8/10\xEB\xB9\x84\xED\x8A\xB8 \xEC\x83\x89\xEC\x83\x81\xEB\xA7\x8C \xEC\xA7\x80\xEC\x9B\x90)"); // 포맷 미지원
+				ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s", ICON_FK_CANCEL "  \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\x98 \xEB\xB0\xB1\xEB\xB2\x84\xED\x8D\xBC \xED\x98\x95\xEC\x8B\x9D\xEC\x9D\x80 \xEC\x95\x84\xEC\xA7\x81 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 (8\xEB\xB9\x84\xED\x8A\xB8/10\xEB\xB9\x84\xED\x8A\xB8 \xEC\x83\x89\xEC\x83\x81\xEB\xA7\x8C \xEC\xA7\x80\xEC\x9B\x90)"); // 포맷 미지원
 			else if (_sherbet_motion_state == 3)
-				ImGui::TextColored(ImVec4(0.95f, 0.42f, 0.42f, 1.0f), "%s", ICON_FK_CANCEL "  \xEB\xA6\xAC\xEB\x93\x9C\xEB\xB0\xB1 \xED\x85\x8D\xEC\x8A\xA4\xEC\xB2\x98\xEB\xA5\xBC \xEB\xA7\x8C\xEB\x93\xA4\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9E\xB4 \xEC\x88\x98 \xEC\x97\x86\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // 리소스 실패
+				ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s", ICON_FK_CANCEL "  \xEB\xA6\xAC\xEB\x93\x9C\xEB\xB0\xB1 \xED\x85\x8D\xEC\x8A\xA4\xEC\xB2\x98\xEB\xA5\xBC \xEB\xA7\x8C\xEB\x93\xA4\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9E\xB4 \xEC\x88\x98 \xEC\x97\x86\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4"); // 리소스 실패
 			else if (_sherbet_motion_state == 0)
 				// ⚠️ 캡처 지점이 render_effects() 안이라 **이펙트가 실제로 도는 프레임**에서만 뜬다
 				//    (반반 비교 스냅샷과 같은 자리다). 이펙트를 전부 끈 상태로는 한 장도 못 받는다.
-				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\x95\x84\xEC\xA7\x81 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\x84 \xEB\xAA\xBB \xEB\xB0\x9B\xEC\x95\x98\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0, \xEC\x9D\xB4\xED\x8E\x99\xED\x8A\xB8\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEB\x8A\x94 \xEC\x83\x81\xED\x83\x9C\xEC\x97\xAC\xEC\x95\xBC \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // 아직 프레임 없음
+				ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  \xEC\x95\x84\xEC\xA7\x81 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\x84 \xEB\xAA\xBB \xEB\xB0\x9B\xEC\x95\x98\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0, \xED\x9A\xA8\xEA\xB3\xBC\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEB\x8A\x94 \xEC\x83\x81\xED\x83\x9C\xEC\x97\xAC\xEC\x95\xBC \xEC\x9E\xBD\xEB\x8B\x88\xEB\x8B\xA4"); // 아직 프레임 없음
 			else
 				ImGui::TextDisabled("\xED\x81\xAC\xEB\xA1\xAD %ux%u \xC2\xB7 CPU %.2fms/\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xC2\xB7 \xEC\xB6\x94\xEC\xA0\x95 %u\xED\x9A\x8C", _sherbet_motion_w, _sherbet_motion_h, _sherbet_motion_cpu_ms, _sherbet_motion_samples); // "크롭 … · CPU … · 추정 …회"
 
@@ -3671,17 +3711,22 @@ void reshade::runtime::draw_gui_aim()
 			if (_sherbet_motion.count() > 0)
 			{
 				const sherbet::motion::sample &s = _sherbet_motion.last();
+				// ⚠️ 값 열은 **폰트 상대값**이어야 한다(sherbet_stat_row 와 같은 규약).
+				//    SameLine(offset) 은 커서를 window->Pos.x + offset 으로 절대 이동시키고
+				//    직전 아이템 끝으로 클램프하지 않는다 — 고정 110px 이었을 땐 폰트 21 부터
+				//    값이 라벨 **위에 겹쳐** 찍혔다(폰트 슬라이더 상한이 32 라 도달 가능하다).
+				const float mv_col = _imgui_context->Style.WindowPadding.x + 7.0f * ImGui::GetFontSize();
 				ImGui::Text("%s", "\xED\x99\x94\xEB\xA9\xB4"); // "화면"
-				ImGui::SameLine(110.0f);
+				ImGui::SameLine(mv_col);
 				ImGui::Text("dx %+7.2f   dy %+7.2f", s.screen_dx, s.screen_dy);
 				ImGui::Text("%s", "\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4"); // "마우스"
-				ImGui::SameLine(110.0f);
+				ImGui::SameLine(mv_col);
 				ImGui::Text("dx %+7.2f   dy %+7.2f", s.mouse_dx, s.mouse_dy);
 				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "%s", "\xEB\xB0\x98\xEB\x8F\x99"); // "반동"
-				ImGui::SameLine(110.0f);
+				ImGui::SameLine(mv_col);
 				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "dx %+7.2f   dy %+7.2f", s.recoil_dx(), s.recoil_dy());
 				ImGui::Text("%s", "\xEC\x8B\xA0\xEB\xA2\xB0\xEB\x8F\x84"); // "신뢰도"
-				ImGui::SameLine(110.0f);
+				ImGui::SameLine(mv_col);
 				ImGui::Text("x %3.0f%%   y %3.0f%%", s.conf_x * 100.0f, s.conf_y * 100.0f);
 			}
 
@@ -3765,7 +3810,8 @@ void reshade::runtime::draw_gui_aim()
 					up_max = -s.recoil_dy();
 			}
 			ImGui::Text("%s", "\xEC\x9C\x84\xEB\xA1\x9C \xED\x8A\x84 \xEC\xB5\x9C\xEB\x8C\x80\xEA\xB0\x92"); // "위로 튄 최대값"
-			ImGui::SameLine(130.0f);
+			// 이 라벨은 6자라 값 열이 더 오른쪽이다. 위와 같은 이유로 폰트 상대값을 쓴다.
+			ImGui::SameLine(_imgui_context->Style.WindowPadding.x + 9.0f * ImGui::GetFontSize());
 			if (up_max > 0.0f)
 				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(mt.accent), "%.1f px", up_max);
 			else
@@ -3826,7 +3872,8 @@ void reshade::runtime::draw_gui_aim()
 		// 코드로 다시 채워 준다(= 무엇이 해석됐는지 눈으로 확인할 수 있다).
 		static char val_code_buf[1024] = "0";
 		static bool val_code_fresh = false;
-		static int val_msg_kind = 0; // 0=없음 1=성공 2=실패 3=경고
+		static int val_msg_kind = 0;       // 0=없음 1=성공 2=실패 3=경고
+		static float val_msg_timer = 0.0f; // 없으면 메시지가 영영 안 사라진다(아래 주석 참고)
 		static std::string val_msg;
 
 		// _sherbet_val_code_dirty 는 마켓에서 조준점을 적용했다는 신호다. 이걸 안 보면
@@ -3862,19 +3909,19 @@ void reshade::runtime::draw_gui_aim()
 					val_changed = true;
 					if (rep.unknown_items > 0 || rep.bad_values > 0)
 					{
-						val_msg_kind = 3;
+						val_msg_kind = 3; val_msg_timer = 4.0f;
 						val_msg = "\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEB\xB6\x88\xEB\x9F\xAC\xEC\x99\x94\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEB\x8B\xA4\xEB\xA7\x8C Sherbet \xEC\x9D\xB4 \xEB\xAA\xA8\xEB\xA5\xB4\xEB\x8A\x94 \xED\x95\xAD\xEB\xAA\xA9\xEC\x9D\xB4 \xEC\x9E\x88\xEC\x96\xB4 \xEA\xB7\xB8 \xEB\xB6\x80\xEB\xB6\x84\xEC\x9D\x80 \xEA\xB8\xB0\xEB\xB3\xB8\xEA\xB0\x92\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4" /* 코드를 불러왔어요 — 다만 Sherbet 이 모르는 항목이 있어 그 부분은 기본값입니다 */;
 					}
 					else
 					{
-						val_msg_kind = 1;
+						val_msg_kind = 1; val_msg_timer = 4.0f;
 						val_msg = "\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xEB\xB6\x88\xEB\x9F\xAC\xEC\x99\x94\xEC\x96\xB4\xEC\x9A\x94" /* 코드를 불러왔어요 */;
 					}
 				}
 				else
 				{
 					// ⚠️ 실패해도 지금 조준점은 **한 글자도 안 바뀐다.** 이유를 그대로 보여준다.
-					val_msg_kind = 2;
+					val_msg_kind = 2; val_msg_timer = 4.0f;
 					switch (rep.error)
 					{
 					case xhr::parse_error::ok:
@@ -3904,7 +3951,7 @@ void reshade::runtime::draw_gui_aim()
 			if (ImGui::Button(ICON_FK_FLOPPY "  " "\xEC\xBD\x94\xEB\x93\x9C \xEB\xB3\xB5\xEC\x82\xAC" /* 코드 복사 */))
 			{
 				ImGui::SetClipboardText(_sherbet_val_code.c_str());
-				val_msg_kind = 1;
+				val_msg_kind = 1; val_msg_timer = 4.0f;
 				val_msg = "\xEC\xBD\x94\xEB\x93\x9C\xEB\xA5\xBC \xED\x81\xB4\xEB\xA6\xBD\xEB\xB3\xB4\xEB\x93\x9C\xEC\x97\x90 \xEB\xB3\xB5\xEC\x82\xAC\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94" /* 코드를 클립보드에 복사했어요 */;
 			}
 			ImGui::SameLine();
@@ -3912,7 +3959,7 @@ void reshade::runtime::draw_gui_aim()
 			{
 				_sherbet_val_profile = xhr::profile();
 				val_changed = true;
-				val_msg_kind = 1;
+				val_msg_kind = 1; val_msg_timer = 4.0f;
 				val_msg = "\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEA\xB8\xB0\xEB\xB3\xB8 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x90\x98\xEB\x8F\x8C\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94" /* 발로란트 기본 조준점으로 되돌렸어요 */;
 			}
 			// 코드를 직접 구할 필요 없이 진열대에서 고르는 길. 여기서 안내하지 않으면
@@ -3925,11 +3972,15 @@ void reshade::runtime::draw_gui_aim()
 			}
 			ImGui::TextDisabled("%s", "'\xEB\xA7\x88\xEC\xBC\x93' \xED\x83\xAD > \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA8\xEB\x9D\xBC \xEC\x93\xB0\xEA\xB1\xB0\xEB\x82\x98, \xEC\xA7\x80\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4 \xEB\x91\x98 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94" /* 「마켓」 탭 > 조준점 에서 골라 쓰거나, 지금 조준점을 저장해 둘 수 있어요 */);
 
+			val_msg_timer -= _imgui_context->IO.DeltaTime;
+			if (val_msg_timer <= 0.0f)
+				{ val_msg_kind = 0; val_msg.clear(); }
 			if (val_msg_kind != 0 && !val_msg.empty())
 			{
-				const ImVec4 c = (val_msg_kind == 2) ? ImVec4(0.95f, 0.42f, 0.42f, 1.0f)
-				               : (val_msg_kind == 3) ? ImVec4(0.95f, 0.75f, 0.35f, 1.0f)
-				                                     : ImVec4(0.36f, 0.86f, 0.45f, 1.0f);
+				ImVec4 c = (val_msg_kind == 2) ? sherbet::status_color(sherbet::status::bad)
+				         : (val_msg_kind == 3) ? sherbet::status_color(sherbet::status::warn)
+				                               : sherbet::status_color(sherbet::status::good);
+				c.w = ImMin(1.0f, val_msg_timer); // 마지막 1초 페이드
 				const char *const icon = (val_msg_kind == 2) ? ICON_FK_CANCEL : (val_msg_kind == 3) ? ICON_FK_WARNING : ICON_FK_OK;
 				ImGui::PushStyleColor(ImGuiCol_Text, c);
 				ImGui::TextWrapped("%s  %s", icon, val_msg.c_str());
@@ -3973,7 +4024,7 @@ void reshade::runtime::draw_gui_aim()
 		ImGui::Spacing();
 
 		if (xhr::exceeds_ui_range(VL))
-			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  " "\xEC\x9D\xB4 \xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEB\x8A\x94 \xEC\x8A\xAC\xEB\x9D\xBC\xEC\x9D\xB4\xEB\x8D\x94 \xEB\xB2\x94\xEC\x9C\x84\xEB\xA5\xBC \xEB\x84\x98\xEB\x8A\x94 \xEA\xB0\x92\xEC\x9D\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEA\xB7\xB8\xEB\xA0\xA4\xEC\xA7\x80\xEC\xA7\x80\xEB\xA7\x8C, \xED\x95\xB4\xEB\x8B\xB9 \xEC\x8A\xAC\xEB\x9D\xBC\xEC\x9D\xB4\xEB\x8D\x94\xEB\xA5\xBC \xEA\xB1\xB4\xEB\x93\x9C\xEB\xA6\xAC\xEB\xA9\xB4 \xEB\xB2\x94\xEC\x9C\x84 \xEC\x95\x88\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x9E\x98\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4" /* 이 코드에는 슬라이더 범위를 넘는 값이 있어요 — 그대로 그려지지만, 해당 슬라이더를 건드리면 범위 안으로 잘립니다 */);
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  " "\xEC\x9D\xB4 \xEC\xBD\x94\xEB\x93\x9C\xEC\x97\x90\xEB\x8A\x94 \xEC\x8A\xAC\xEB\x9D\xBC\xEC\x9D\xB4\xEB\x8D\x94 \xEB\xB2\x94\xEC\x9C\x84\xEB\xA5\xBC \xEB\x84\x98\xEB\x8A\x94 \xEA\xB0\x92\xEC\x9D\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEA\xB7\xB8\xEB\xA0\xA4\xEC\xA7\x80\xEC\xA7\x80\xEB\xA7\x8C, \xED\x95\xB4\xEB\x8B\xB9 \xEC\x8A\xAC\xEB\x9D\xBC\xEC\x9D\xB4\xEB\x8D\x94\xEB\xA5\xBC \xEA\xB1\xB4\xEB\x93\x9C\xEB\xA6\xAC\xEB\xA9\xB4 \xEB\xB2\x94\xEC\x9C\x84 \xEC\x95\x88\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x9E\x98\xEB\xA6\xBD\xEB\x8B\x88\xEB\x8B\xA4" /* 이 코드에는 슬라이더 범위를 넘는 값이 있어요 — 그대로 그려지지만, 해당 슬라이더를 건드리면 범위 안으로 잘립니다 */);
 
 		// ── 조준점 (색 · 윤곽선 · 중앙 점 · 오차 토글) ────────────────────
 		if (ImGui::TreeNodeEx("##val_general", ImGuiTreeNodeFlags_DefaultOpen, "%s", "\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90" /* 조준점 */))
@@ -4090,7 +4141,7 @@ void reshade::runtime::draw_gui_aim()
 			{
 				// ⚠️ 감추지 않는다(설계 §5). 이동 오차는 *캐릭터 속도*의 함수인데 우리가 가진 건
 				//    *키 입력*이라 물리량 자체가 다르다. 이걸 숨기면 "왜 안 벌어지죠?" 문의가 온다.
-				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  " "\xEC\x9D\xB4\xEB\x8F\x99 \xEC\x98\xA4\xEC\xB0\xA8\xEB\x8A\x94 \xED\x82\xA4 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9C\xBC\xEB\xA1\x9C \xED\x9D\x89\xEB\x82\xB4 \xEB\x82\xB8 \xEA\xB0\x92\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94" /* 이동 오차는 키 입력으로 흉내 낸 값이에요 */);
+				ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  " "\xEC\x9D\xB4\xEB\x8F\x99 \xEC\x98\xA4\xEC\xB0\xA8\xEB\x8A\x94 \xED\x82\xA4 \xEC\x9E\x85\xEB\xA0\xA5\xEC\x9C\xBC\xEB\xA1\x9C \xED\x9D\x89\xEB\x82\xB4 \xEB\x82\xB8 \xEA\xB0\x92\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94" /* 이동 오차는 키 입력으로 흉내 낸 값이에요 */);
 				ImGui::TextWrapped("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\xA9\x94\xEB\xAA\xA8\xEB\xA6\xAC\xEB\xA5\xBC \xEC\x9D\xBD\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB8\xB0 \xEB\x95\x8C\xEB\xAC\xB8\xEC\x97\x90 \xEC\x8B\xA4\xEC\xA0\x9C \xEC\xBA\x90\xEB\xA6\xAD\xED\x84\xB0 \xEC\x86\x8D\xEB\x8F\x84\xEB\xA5\xBC \xEC\x95\x8C \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEB\x84\x89\xEB\xB0\xB1\xC2\xB7\xEC\x8A\xAC\xEB\xA1\x9C\xEC\x9A\xB0\xC2\xB7\xEA\xB2\xBD\xEC\x82\xAC\xC2\xB7\xEC\xB0\xA8\xEB\x9F\x89\xC2\xB7\xEB\xAC\xBC\xEC\x86\x8D\xC2\xB7\xEC\x95\x89\xEA\xB8\xB0\xEB\x8A\x94 \xEB\xB0\x98\xEC\x98\x81\xEB\x90\x98\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB3\xA0, \xED\x82\xA4\xEB\xA5\xBC \xEC\x95\x88 \xEB\x88\x8C\xEB\x9F\xAC\xEB\x8F\x84 \xEB\xB0\x80\xEB\xA0\xA4\xEB\x82\x98\xEB\x8A\x94 \xEC\x83\x81\xED\x99\xA9\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x98\xA4\xEC\xB0\xA8\xEA\xB0\x80 0 \xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB3\xB4\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4. \xEC\x82\xAC\xEA\xB2\xA9 \xEC\x98\xA4\xEC\xB0\xA8\xEB\x8A\x94 \xED\x81\xB4\xEB\xA6\xAD\xEC\x9D\x84 \xEC\xA0\x95\xED\x99\x95\xED\x9E\x88 \xEA\xB0\x90\xEC\xA7\x80\xED\x95\x98\xEB\xAF\x80\xEB\xA1\x9C \xED\x9B\xA8\xEC\x94\xAC \xEC\x9E\x98 \xEB\xA7\x9E\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4." /* 게임 메모리를 읽지 않기 때문에 실제 캐릭터 속도를 알 수 없어요. 넉백·슬로우·경사·차량·물속·앉기는 반영되지 않고, 키를 안 눌러도 밀려나는 상황에서는 오차가 0 으로 보입니다. 사격 오차는 클릭을 정확히 감지하므로 훨씬 잘 맞습니다. */);
 				ImGui::Spacing();
 
@@ -4124,7 +4175,7 @@ void reshade::runtime::draw_gui_aim()
 				modified |= imgui::key_input_box("\xEC\x9D\xBC\xEC\x8B\x9C\xEC\xA0\x95\xEC\xA7\x80 \xED\x95\xAB\xED\x82\xA4" /* 일시정지 핫키 */, _sherbet_val_key_pause, *_input);
 				ImGui::TextDisabled("%s", "\xEA\xB2\x8C\xEC\x9E\x84 \xEB\x82\xB4 \xEC\xB1\x84\xED\x8C\x85 \xEC\xA4\x91\xEC\x97\x90\xEB\x8A\x94 WASD \xEA\xB0\x80 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x9E\xA1\xED\x98\x80\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB7\xB8\xEB\x95\x8C \xEC\x9D\xB4 \xED\x82\xA4\xEB\xA1\x9C \xEC\x9E\xA0\xEC\x8B\x9C \xEB\xA9\x88\xEC\xB6\x94\xEC\x84\xB8\xEC\x9A\x94" /* 게임 내 채팅 중에는 WASD 가 이동으로 잡혀요 — 그때 이 키로 잠시 멈추세요 */);
 				if (_sherbet_val_err_paused)
-					ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  " "\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9D\xBC\xEC\x8B\x9C\xEC\xA0\x95\xEC\xA7\x80 \xEC\x83\x81\xED\x83\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4" /* 지금 일시정지 상태입니다 */);
+					ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  " "\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9D\xBC\xEC\x8B\x9C\xEC\xA0\x95\xEC\xA7\x80 \xEC\x83\x81\xED\x83\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4" /* 지금 일시정지 상태입니다 */);
 
 				ImGui::Spacing();
 				ImGui::TextDisabled("\xED\x98\x84\xEC\x9E\xAC \xED\x99\x95\xEC\x9E\xA5: \xEC\x82\xAC\xEA\xB2\xA9 %.1fpx \xC2\xB7 \xEC\x9D\xB4\xEB\x8F\x99 %.1fpx" /* 현재 확장: 사격 %.1fpx · 이동 %.1fpx */,
@@ -4161,7 +4212,7 @@ void reshade::runtime::draw_gui_aim()
 				cc.color[i] = _sherbet_crosshair_col[i];
 			VL = xhr::layer_from_classic(cc);
 			val_changed = true;
-			val_msg_kind = 3;
+			val_msg_kind = 3; val_msg_timer = 4.0f;
 			val_msg = "\xED\x81\xB4\xEB\x9E\x98\xEC\x8B\x9D \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x84 \xEA\xB0\x80\xEC\xA0\xB8\xEC\x99\x94\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x98\xA4\xEC\xB0\xA8 \xEC\x95\xA0\xEB\x8B\x88\xEB\xA9\x94\xEC\x9D\xB4\xEC\x85\x98\xEC\x9D\x80 \xEA\xBA\xBC\xEC\xA7\x84 \xEC\xB1\x84\xEB\xA1\x9C \xEB\x93\xA4\xEC\x96\xB4\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4(\xEC\x9B\x90\xEB\x9E\x98 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\xB4 \xEC\x9B\x80\xEC\xA7\x81\xEC\x9D\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x98\xEC\x9C\xBC\xEB\xAF\x80\xEB\xA1\x9C). \xED\x95\x84\xEC\x9A\x94\xED\x95\x98\xEB\xA9\xB4 \xEC\x95\x84\xEB\x9E\x98\xEC\x97\x90\xEC\x84\x9C \xEC\xBC\x9C\xEC\x84\xB8\xEC\x9A\x94" /* 클래식 설정을 가져왔어요 — 오차 애니메이션은 꺼진 채로 들어옵니다(원래 조준점이 움직이지 않았으므로). 필요하면 아래에서 켜세요 */;
 		}
 		if (!can_migrate)
@@ -4239,7 +4290,12 @@ void reshade::runtime::draw_gui_aim()
 					{ _sherbet_crosshair_file = f; _sherbet_crosshair_dirty = true; xh_changed = true; }
 				ImGui::EndCombo();
 			}
-			if (xh_files.empty())
+			// ⚠️ 세 안내는 **배타적**이다. 로딩 실패가 '폴더에 PNG 없음' 안내와 같이 뜨면
+			//    무엇이 문제인지 더 헷갈린다.
+			if (_sherbet_crosshair_load == 2)
+				ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s",
+					ICON_FK_CANCEL "  " "\xEC\x9D\xB4 \xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80\xEB\xA5\xBC \xEC\x9D\xBD\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEB\x8B\xA4\xEB\xA5\xB8 PNG \xEB\xA1\x9C \xEB\x8B\xA4\xEC\x8B\x9C \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94"); // "이 이미지를 읽지 못했어요 — 다른 PNG 로 다시 저장해 보세요"
+			else if (xh_files.empty())
 				ImGui::TextDisabled("%s", "\xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 PNG \xEC\x97\x86\xEC\x9D\x8C \xE2\x80\x94 '\xED\x8F\xB4\xEB\x8D\x94 \xEC\x97\xB4\xEA\xB8\xB0'\xEB\xA1\x9C \xEC\x9D\xB4\xEB\xAF\xB8\xEC\xA7\x80\xEB\xA5\xBC \xEB\x84\xA3\xEC\x9C\xBC\xEC\x84\xB8\xEC\x9A\x94"); // 없음 안내
 			else
 				ImGui::TextDisabled("%s", "PNG(\xED\x88\xAC\xEB\xAA\x85 \xEB\xB0\xB0\xEA\xB2\xBD)\xEB\xA5\xBC \xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEB\x84\xA3\xEA\xB3\xA0 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEC\x84\xB8\xEC\x9A\x94"); // 안내
@@ -4370,9 +4426,10 @@ void reshade::runtime::draw_gui_optimize()
 	ImGui::Spacing();
 
 	// 기존 탭들이 쓰는 상태색 그대로
-	const ImVec4 col_ok(0.36f, 0.86f, 0.45f, 1.0f);
-	const ImVec4 col_bad(0.95f, 0.42f, 0.42f, 1.0f);
-	const ImVec4 col_warn(0.95f, 0.75f, 0.35f, 1.0f);
+	// 고정 파스텔이었다 — 라이트 테마(딸기)의 흰 카드 위에서 대비가 무너진다.
+	const ImVec4 col_ok   = sherbet::status_color(sherbet::status::good);
+	const ImVec4 col_bad  = sherbet::status_color(sherbet::status::bad);
+	const ImVec4 col_warn = sherbet::status_color(sherbet::status::warn);
 	const ImVec4 col_val = ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text);
 
 	// 라벨 폭에 맞춘 고정 정렬 위치(카드 폭이 달라져도 흔들리지 않는다)
@@ -4599,9 +4656,9 @@ void reshade::runtime::draw_gui_settings()
 	{
 		if (ImGui::Checkbox("\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0##lockpreview", &_sherbet_lock_preview)) // "잠금 화면 미리보기"
 			modified = true;
-		ImGui::TextDisabled("%s", "\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x96\xB4\xEB\x96\xBB\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94\xEC\xA7\x80 \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEC\x8A\xA4\xEC\x9C\x84\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94. \xEC\xBC\x9C\xEB\x8F\x84 \xEA\xB5\xAC\xEB\xA7\xA4 \xEB\x82\xB4\xEC\x97\xAD\xEC\x97\x90\xEB\x8A\x94 \xEC\x98\x81\xED\x96\xA5\xEC\x9D\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "유료 기능이 잠겨 있을 때 어떻게 보이는지 확인하는 스위치예요. 켜도 구매 내역에는 영향이 없고, 끄면 바로 원래대로 돌아옵니다."
+		sherbet_hint("\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x96\xB4\xEB\x96\xBB\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94\xEC\xA7\x80 \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEC\x8A\xA4\xEC\x9C\x84\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94. \xEC\xBC\x9C\xEB\x8F\x84 \xEA\xB5\xAC\xEB\xA7\xA4 \xEB\x82\xB4\xEC\x97\xAD\xEC\x97\x90\xEB\x8A\x94 \xEC\x98\x81\xED\x96\xA5\xEC\x9D\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "유료 기능이 잠겨 있을 때 어떻게 보이는지 확인하는 스위치예요. 켜도 구매 내역에는 영향이 없고, 끄면 바로 원래대로 돌아옵니다."
 		if (_sherbet_lock_preview)
-			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%s", ICON_FK_WARNING "  \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB8\xB4 \xEA\xB2\x83\xEC\xB2\x98\xEB\x9F\xBC \xEB\xB3\xB4\xEC\x9D\xB4\xEA\xB3\xA0 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\x8F\x99\xEC\x9E\x91\xED\x95\x98\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "지금 잠금 화면 미리보기가 켜져 있어요 — 유료 기능이 잠긴 것처럼 보이고 실제로 동작하지 않습니다."
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB8\xB4 \xEA\xB2\x83\xEC\xB2\x98\xEB\x9F\xBC \xEB\xB3\xB4\xEC\x9D\xB4\xEA\xB3\xA0 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\x8F\x99\xEC\x9E\x91\xED\x95\x98\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "지금 잠금 화면 미리보기가 켜져 있어요 — 유료 기능이 잠긴 것처럼 보이고 실제로 동작하지 않습니다."
 		ImGui::Spacing();
 	}
 
@@ -4640,7 +4697,13 @@ void reshade::runtime::draw_gui_settings()
 				{ _sherbet_bg_file = f; _sherbet_bg_dirty = true; bg_changed = true; }
 			ImGui::EndCombo();
 		}
-		ImGui::TextDisabled("%s", "\xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\x84 \xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEB\x84\xA3\xEA\xB3\xA0 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEC\x84\xB8\xEC\x9A\x94"); // 안내
+		// 실패했으면 안내 대신 이유를 말한다 — 예전엔 사진을 골라도 아무 일이 안 일어나고
+		// 이유가 어디에도 없었다(stb_image 는 프로그레시브 JPEG 를 못 푼다).
+		if (_sherbet_bg_load == 2)
+			ImGui::TextColored(sherbet::status_color(sherbet::status::bad), "%s",
+				ICON_FK_CANCEL "  " "\xEC\x9D\xB4 \xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\x84 \xEC\x9D\xBD\xEC\xA7\x80 \xEB\xAA\xBB\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 PNG \xEB\x82\x98 \xEC\x9D\xBC\xEB\xB0\x98 JPG \xEB\xA1\x9C \xEB\x8B\xA4\xEC\x8B\x9C \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94"); // "이 사진을 읽지 못했어요 — PNG 나 일반 JPG 로 다시 저장해 보세요"
+		else
+			ImGui::TextDisabled("%s", "\xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\x84 \xED\x8F\xB4\xEB\x8D\x94\xEC\x97\x90 \xEB\x84\xA3\xEA\xB3\xA0 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x97\x90\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEC\x84\xB8\xEC\x9A\x94"); // 안내
 
 		if (ImGui::Button("\xED\x8F\xB4\xEB\x8D\x94 \xEC\x97\xB4\xEA\xB8\xB0##bg")) // "폴더 열기"
 		{
@@ -4893,6 +4956,15 @@ void reshade::runtime::draw_gui_settings()
 		modified |= ImGui::Checkbox(_("Group effect files with tabs instead of a tree"), &_variable_editor_tabs);
 
 		#pragma region Style
+		// SHERBET: 스타일은 **테마가 소유한다.** draw_gui() 가 매 프레임 오버레이를 그리기 전에
+		// sherbet::apply_style() 로 style.Colors 전체와 라운딩 7종을 덮어쓰므로, 아래 컨트롤들은
+		// 값을 써도 다음 프레임 시작에 되돌려진다 — 콤보를 골라도 색이 안 바뀌고, 커스텀 색상
+		// 편집기도 매 프레임 테마 색으로 리셋된다. **안 먹는 컨트롤을 노출하지 않는다.**
+		// ⚠️ 아래 #endif 는 「Text editor style」 리전(#pragma region Editor Style) **앞**에서 닫는다.
+		//    그쪽은 _editor_palette 를 채우는 살아 있는 코드고, load_custom_style() 정의도
+		//    남겨 둬야 한다(_style_index 3/4 가 에디터 팔레트에 쓰인다).
+		//    테마를 고르는 곳은 「마켓」 탭이다.
+#if 0
 		if (ImGui::Combo(_("Global style"), &_style_index, "Dark\0Light\0Default\0Custom Simple\0Custom Advanced\0Solarized Dark\0Solarized Light\0"))
 		{
 			modified = true;
@@ -4982,6 +5054,7 @@ void reshade::runtime::draw_gui_settings()
 			}
 			ImGui::EndChild();
 		}
+#endif // SHERBET: 위 스타일 컨트롤은 apply_style() 이 매 프레임 덮어써서 동작하지 않는다
 		#pragma endregion
 
 		#pragma region Editor Style
@@ -5048,6 +5121,10 @@ void reshade::runtime::draw_gui_settings()
 				modified = true;
 		}
 
+		// SHERBET: 「Frame rounding」 슬라이더 제거. apply_style() 이 매 프레임 style.FrameRounding
+		// 을 10 으로 되돌려 놓기 때문에, 손잡이를 끌면 그 자리에서 즉시 되튀었다(값이 저장조차
+		// 되지 않는다). 라운딩은 테마가 정한다. 위 「Global style」 리전과 같은 이유다.
+#if 0
 		if (float &rounding = _imgui_context->Style.FrameRounding; ImGui::SliderFloat(_("Frame rounding"), &rounding, 0.0f, 12.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
 		{
 			// Apply the same rounding to everything
@@ -5059,6 +5136,7 @@ void reshade::runtime::draw_gui_settings()
 			_imgui_context->Style.TabRounding = rounding;
 			modified = true;
 		}
+#endif
 
 		if (!_is_vr)
 		{
@@ -5746,14 +5824,14 @@ void reshade::runtime::draw_gui_about()
 	if (!about_owner.empty())
 	{
 		ImGui::Spacing();
-		ImGui::Text(ICON_FK_OK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90 : %s", about_owner.c_str()); // "등록 소유자 :"
+		ImGui::Text(ICON_FK_OK "  \xEB\x93\xB1\xEB\xA1\x9D \xEC\x86\x8C\xEC\x9C\xA0\xEC\x9E\x90: %s", about_owner.c_str()); // "등록 소유자 :"
 		if (SHERBET_ORDER_NO[0] != '\0')
 			ImGui::Text("   \xEC\xA3\xBC\xEB\xAC\xB8 #%s", SHERBET_ORDER_NO); // "주문 #"
 	}
 	sherbet::end_card();
 
 	sherbet::begin_card("##about_warn");
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.7f, 1.0f));
+	ImGui::PushStyleColor(ImGuiCol_Text, sherbet::status_color(sherbet::status::bad));
 	ImGui::TextWrapped(ICON_FK_WARNING " \xEC\x9D\xB4 \xEB\xB9\x8C\xEB\x93\x9C\xEB\x8A\x94 \xEC\xA0\x95\xEB\xA0\xAC\xEC\x9D\xB4 \xEC\xA0\x9C\xEC\x9E\x91\xED\x95\x9C \xEA\xB5\xAC\xEB\xA7\xA4\xEC\x9E\x90 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB9\x8C\xEB\x93\x9C\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4. \xEB\xAC\xB4\xEB\x8B\xA8 \xEB\xB0\xB0\xED\x8F\xAC\xC2\xB7\xEA\xB3\xB5\xEC\x9C\xA0 \xEC\x8B\x9C \xEB\xB8\x94\xEB\x9E\x99\xEB\xA6\xAC\xEC\x8A\xA4\xED\x8A\xB8 \xEC\xB6\x94\xEA\xB0\x80 \xEB\xB0\x8F \xED\x8C\x8C\xEC\x9D\xBC \xEC\x9E\xA0\xEA\xB8\x88 \xEC\xA1\xB0\xEC\xB9\x98\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4.");
 	ImGui::PopStyleColor();
 	sherbet::end_card();
@@ -5950,6 +6028,10 @@ void reshade::runtime::draw_gui_crosshair_market()
 		+ ImGui::GetFrameHeight();                   // 액션 줄
 
 	static int msg_kind = 0; // 0=없음 1=성공 2=실패
+	// ⚠️ 함수 지역 static 은 탭을 떠나도, 오버레이를 닫았다 열어도 유지된다. 타이머가 없으면
+	//    「저장했어요」 가 게임을 끌 때까지 화면에 붙어 있고, 더 나쁘게는 이미 해결된 빨간
+	//    경고가 멀쩡한 새 코드 아래 그대로 남는다. _sherbet_content_done_timer 와 같은 규약.
+	static float msg_timer = 0.0f;
 	static std::string msg;
 	static std::vector<sherbet::crosshair::quad> pv_quads; // 카드 미리보기 재사용 버퍼
 	static char name_buf[64] = "";
@@ -5975,7 +6057,7 @@ void reshade::runtime::draw_gui_crosshair_market()
 		_sherbet_val_on = true;         // 골랐으면 켜진다 — 한 번 클릭으로 끝나야 한다
 		_sherbet_crosshair_on = false;  // 클래식과 같이 켜면 조준점이 두 개 겹쳐 보인다
 		_sherbet_val_code_dirty = true; // 「에임」 탭 입력상자도 같은 코드를 보여주게
-		msg_kind = 1;
+		msg_kind = 1; msg_timer = 4.0f;
 		msg = kXhApplied;
 		save_config();
 	};
@@ -6098,7 +6180,7 @@ void reshade::runtime::draw_gui_crosshair_market()
 					_sherbet_val_profile = tmp;
 					_sherbet_val_code = code;
 					_sherbet_val_code_dirty = true;
-					msg_kind = 1;
+					msg_kind = 1; msg_timer = 4.0f;
 					msg = kXhReverted;
 					save_config();
 				}
@@ -6106,7 +6188,7 @@ void reshade::runtime::draw_gui_crosshair_market()
 			else
 			{
 				_sherbet_xh_session.undo_code.clear();
-				msg_kind = 2;
+				msg_kind = 2; msg_timer = 4.0f;
 				msg = kXhBrokenTip;
 				save_config();
 			}
@@ -6120,7 +6202,9 @@ void reshade::runtime::draw_gui_crosshair_market()
 	ImGui::SameLine();
 	ImGui::TextDisabled("%d / %d %s", static_cast<int>(_sherbet_xh_locals.size()),
 		static_cast<int>(xm::kMaxLocals), kXhSlots);
-	ImGui::SetNextItemWidth(220.0f);
+	// ⚠️ 고정 220px 이면 폰트 24 부터 힌트가 "이름 (비우면 자…" 로 잘린다. 폰트를 따라간다.
+	ImGui::SetNextItemWidth(ImMax(220.0f,
+		9.0f * ImGui::GetFontSize() + _imgui_context->Style.FramePadding.x * 2.0f));
 	ImGui::InputTextWithHint("##xh_name", kXhNameHint, name_buf, sizeof(name_buf));
 	ImGui::SameLine();
 	if (ImGui::Button(kXhSaveBtn))
@@ -6133,20 +6217,24 @@ void reshade::runtime::draw_gui_crosshair_market()
 		{
 			name_buf[0] = '\0';
 			_sherbet_xh_locals_dirty = true;
-			msg_kind = 1;
+			msg_kind = 1; msg_timer = 4.0f;
 			msg = kXhSaveOk;
 			save_config();
 		}
 		else
 		{
-			msg_kind = 2;
+			msg_kind = 2; msg_timer = 4.0f;
 			msg = kXhSaveFail;
 		}
 	}
 
+	msg_timer -= _imgui_context->IO.DeltaTime;
+	if (msg_timer <= 0.0f)
+		{ msg_kind = 0; msg.clear(); }
 	if (msg_kind != 0 && !msg.empty())
 	{
-		const ImVec4 c = (msg_kind == 2) ? ImVec4(0.95f, 0.42f, 0.42f, 1.0f) : ImVec4(0.36f, 0.86f, 0.45f, 1.0f);
+		ImVec4 c = (msg_kind == 2) ? sherbet::status_color(sherbet::status::bad) : sherbet::status_color(sherbet::status::good);
+		c.w = ImMin(1.0f, msg_timer); // 마지막 1초 페이드
 		ImGui::PushStyleColor(ImGuiCol_Text, c);
 		ImGui::TextWrapped("%s  %s", (msg_kind == 2) ? ICON_FK_CANCEL : ICON_FK_OK, msg.c_str());
 		ImGui::PopStyleColor();
@@ -6184,7 +6272,7 @@ void reshade::runtime::draw_gui_crosshair_market()
 void reshade::runtime::draw_gui_market()
 {
 	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
-	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  Market");
+	ImGui::TextUnformatted(ICON_FK_SHOPPING_CART "  \xEB\xA7\x88\xEC\xBC\x93"); // "마켓" — 에임/최적화 탭과 표기 통일
 	ImGui::PopFont();
 	ImGui::Spacing();
 
@@ -6219,7 +6307,9 @@ void reshade::runtime::draw_gui_market()
 		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
 		{
 			const float a = ImMin(1.0f, _sherbet_content_done_timer);
-			ImGui::TextColored(ImVec4(0.36f, 0.86f, 0.45f, a), ICON_FK_OK "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"); // "불러오기 완료!"
+			ImVec4 fetch_col = sherbet::status_color(sherbet::status::good); // 테마 명도에 맞는 초록
+			fetch_col.w = a;                                                // 마지막 1초 페이드
+			ImGui::TextColored(fetch_col, ICON_FK_OK "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"); // "불러오기 완료!"
 		}
 		ImGui::Spacing();
 	};

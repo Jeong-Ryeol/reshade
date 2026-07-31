@@ -57,10 +57,22 @@ namespace sherbet
 	// 라운드 패널 차일드 시작/종료(테마 panel 배경 + border + 패딩). height 0 = 자동.
 	void begin_card(const char *id, float height = 0.0f);
 	void end_card();
+	// pill_button 이 쓰는 FramePadding. 호출부가 버튼 폭을 **미리 계산**할 때 같은 값을 써야
+	// 하므로 상수로 승격했다(호출부에 14 를 다시 하드코딩하면 같은 실수가 반복된다).
+	constexpr ImVec2 pill_padding(14.0f, 7.0f);
 	// 필형 버튼. 클릭 시 true.
 	bool pill_button(const char *label, bool active);
 	// 네비게이션 레일용 44x44 라운드 아이콘 버튼(활성 시 accent 배경+글로우). 클릭 시 true.
-	bool rail_button(const char *id, const char *icon, bool active);
+	// idle_col != 0 이면 **비활성** 상태의 아이콘 색을 지정한다(브랜드 로고를 선택 표시 없이
+	// 항상 액센트로 살리기 위함).
+	bool rail_button(const char *id, const char *icon, bool active, ImU32 idle_col = 0);
+
+	// 상태 색(성공/경고/오류). 고정 파스텔은 라이트 테마(딸기)의 흰 카드 위에서 대비 1.6:1 로
+	// 사라진다 — 테마 본문색 명도로 라이트/다크를 판정해 두 벌 중 하나를 준다.
+	// ⚠️ 새 테마를 추가할 땐 t.text 를 배경과 확실히 대비되게 잡을 것. 본문색과 배경이 둘 다
+	//    중간 명도면 이 휴리스틱이 흔들린다.
+	enum class status { good, warn, bad };
+	ImVec4 status_color(status s);
 
 	// 마켓 카드 안 조준점 미리보기. 사각형 [min,max] 안 중앙에 **실제 픽셀 크기**로 그리고
 	// 넘치면 잘라낸다. 기하는 전부 crosshair::build_crosshair 가 계산한다 —

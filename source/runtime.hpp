@@ -379,6 +379,9 @@ namespace reshade
 		float _sherbet_crosshair_off[2] = { 0.0f, 0.0f };            // 중앙 기준 오프셋(px)
 		float _sherbet_crosshair_col[4] = { 1.0f, 0.36f, 0.56f, 1.0f }; // 도형 색(딸기 핑크 기본)
 		bool _sherbet_crosshair_dirty = false;   // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+		// 0=미시도(끔/내장도형/미선택) 1=성공 2=실패. 실패를 조용히 넘기면 조준점이 화면에
+		// 안 그려지는데 이유를 알 수 없다(콤보는 파일명만 보고 선택됨처럼 그린다).
+		int _sherbet_crosshair_load = 0;
 
 		// SHERBET: 발로란트급 조준점(신규). 위의 「클래식」 조준점과 **완전히 별개 토글**이다 —
 		// 이미지 조준점을 쓰던 기존 구매자의 설정이 깨지면 안 되므로 기존 멤버는 그대로 둔다.
@@ -434,6 +437,7 @@ namespace reshade
 		float _sherbet_bg_opacity = 0.9f;        // 이미지 불투명도 0..1
 		float _sherbet_bg_dim = 0.5f;            // 가독성용 어두운 스크림 강도 0..1
 		bool _sherbet_bg_dirty = false;          // 이미지 재로딩 필요(선택 변경/디바이스 리셋 후)
+		int _sherbet_bg_load = 0;                // 0=미시도 1=성공 2=실패 (위와 같은 이유)
 
 		// SHERBET: 스프레이 트레이너 입력 진단(「에임」 탭). 게임 메모리·화면 픽셀은 읽지 않고
 		// 이미 후킹 중인 입력만 관찰한다. 오버레이가 열려 있는 동안은 세지 않는다 —
@@ -448,6 +452,9 @@ namespace reshade
 		sherbet::spray::recorder _sherbet_spray;
 		bool _sherbet_spray_live = false;   // 화면에 실시간 궤적
 		bool _sherbet_spray_chart = false;  // 오버레이 에임 탭에 차트
+		// ⚠️ 같은 카드의 다른 토글 넷은 전부 ini 왕복하는데 이것만 함수 지역 static 이라
+		//    재시작하면 혼자 꺼졌다 — "설정이 저장이 안 되나?" 하는 인상을 준다.
+		bool _sherbet_spray_overlay5 = false; // 최근 5개 겹쳐보기
 		float _sherbet_spray_scale = 1.0f;  // raw → 픽셀 배율(감도가 사람마다 달라 필수)
 		int _sherbet_spray_gap_ms = 400;    // 구간 나누기 임계값
 		float _sherbet_spray_fade = 0.0f;   // 마지막 발사 후 남은 표시 시간(초). 2초에서 0 으로
