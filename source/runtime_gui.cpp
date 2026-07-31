@@ -326,6 +326,16 @@ void reshade::runtime::build_font_atlas()
 		void *gaegu_data = IM_ALLOC(gaegu.data_size);
 		memcpy(gaegu_data, gaegu.data, gaegu.data_size);
 		_sherbet_title_font = atlas->AddFontFromMemoryTTF(gaegu_data, static_cast<int>(gaegu.data_size), _font_size * 1.4f, &title_cfg);
+
+		// ⚠️ 아이콘 글리프를 **제목 폰트에도** 병합한다(본문 폰트에만 병합하면 부족하다).
+		// 안 하면 제목 폰트를 Push 한 상태에서 그린 ICON_FK_* 가 전부 '?' 로 나온다.
+		// 해당되는 곳: 「에임」·「최적화」·「Market」 탭 제목, 로그인 패널, 노드락 안내, 롤백 화면 —
+		// 하필 제품에서 가장 눈에 띄는 여섯 군데다(2026-07-31 실물 스크린샷으로 확인).
+		// MergeMode 는 **직전에 추가한 폰트**에 붙으므로 반드시 Gaegu 바로 뒤에 와야 한다.
+		ImFontConfig title_icon_cfg;
+		title_icon_cfg.MergeMode = true;
+		title_icon_cfg.PixelSnapH = true;
+		atlas->AddFontFromMemoryCompressedBase85TTF(FONT_ICON_BUFFER_NAME_FK, 0.0f, &title_icon_cfg);
 	}
 
 	ImGui::SetCurrentContext(backup_context);
@@ -3774,7 +3784,8 @@ void reshade::runtime::draw_gui_aim()
 			modified = true;
 		}
 		ImGui::TextDisabled("%s", "\xEB\x91\x90 \xEB\xAA\xA8\xEB\x93\x9C\xEC\x9D\x98 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEB\x94\xB0\xEB\xA1\x9C \xEC\xA0\x80\xEC\x9E\xA5\xEB\x8F\xBC\xEC\x9A\x94 \xE2\x80\x94 \xEB\xB0\x94\xEA\xBF\x94\xEB\x8F\x84 \xEC\x9B\x90\xEB\x9E\x98 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\xB4 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA7\x80\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4" /* 두 모드의 설정은 따로 저장돼요 — 바꿔도 원래 설정이 사라지지 않습니다 */);
-		ImGui::TextDisabled("%s", ICON_FK_WARNING " " "\xEC\x98\xA8\xEB\x9D\xBC\xEC\x9D\xB8 \xEA\xB2\xBD\xEC\x9F\x81 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\xA0 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\xB4 \xEC\xA0\x9C\xEC\x9E\xAC \xEB\x8C\x80\xEC\x83\x81\xEC\x9D\xBC \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94" /* 온라인 경쟁 게임에선 조준점이 제재 대상일 수 있어요 */);
+		// (안티치트 경고문 삭제 — 사용자 결정 2026-07-31: FiveM 은 커스텀 조준점 소프트웨어를
+		//  허용하므로 겁주는 문구가 오히려 상품 신뢰를 깎는다. 되살리지 말 것.)
 	}
 	ImGui::Spacing();
 
@@ -5827,6 +5838,36 @@ This Font Software is licensed under the SIL Open Font License, Version 1.1. (ht
 
 	ImGui::PopTextWrapPos();
 }
+
+// SHERBET: 카드 한 줄짜리 라벨 — 주어진 폭을 넘으면 말줄임표로 자른다.
+// 카드 안에서 이름을 **줄바꿈시키면 안 된다**: 두 줄이 되는 순간 아래 액션 줄과 겹친다
+// (그 겹침이 2026-07-31 실물 스크린샷의 「적용」 버튼이 작성자 이름을 덮은 바로 그 증상이다).
+// ⚠️ UTF-8 코드포인트 경계에서만 자른다 — 바이트로 자르면 한글이 깨진 조각으로 남는다.
+static std::string sherbet_ellipsize(const char *text, float max_w)
+{
+	if (text == nullptr || *text == '\0' || ImGui::CalcTextSize(text).x <= max_w)
+		return text != nullptr ? text : "";
+
+	static const char *const kEllipsis = "\xE2\x80\xA6"; // …
+	const float ellipsis_w = ImGui::CalcTextSize(kEllipsis).x;
+
+	std::string fit;
+	for (const char *p = text; *p != '\0'; )
+	{
+		const char *q = p + 1;
+		while ((static_cast<unsigned char>(*q) & 0xC0) == 0x80) // 이어지는 바이트를 전부 삼킨다
+			++q;
+
+		const std::string next = fit + std::string(p, q);
+		if (ImGui::CalcTextSize(next.c_str()).x + ellipsis_w > max_w)
+			break;
+
+		fit = next;
+		p = q;
+	}
+	return fit + kEllipsis;
+}
+
 // SHERBET: 조준점 마켓 — 「마켓」 탭의 세 번째 세그먼트.
 //
 // 왜 새 탭이 아니라 마켓 안인가: 진열·역할 잠금·「내 전용 불러오기」가 테마/프리셋과
@@ -5869,8 +5910,19 @@ void reshade::runtime::draw_gui_crosshair_market()
 	static const char *const kXhSlots = "\xEC\xB9\xB8"; // "칸"
 
 	constexpr float kCardW = 172.0f;
-	constexpr float kCardH = 178.0f;
 	constexpr float kPreviewH = 96.0f;
+	constexpr float kCardPad = 10.0f;
+
+	// 카드 높이는 **폰트에서 계산한다**(예전엔 178px 고정이었다).
+	// 담아야 하는 것: 여백 + 미리보기 + 이름 1줄 + 태그·작성자 1줄 + 액션 줄 + 여백.
+	// 기본 폰트에서도 178px 로는 약 15px 이 모자랐고, 그래서 액션 줄을 카드 바닥에 놓는
+	// SetCursorPosY 가 커서를 **위로** 되돌려 「적용」 버튼이 이미 그려둔 작성자 줄을 덮었다
+	// ("Riot" → "ot", "Sherbet" → "bet" 으로 보이던 증상. 2026-07-31 실물 스크린샷).
+	// ⚠️ 폰트 크기는 사용자가 설정에서 바꿀 수 있다 — 고정 픽셀로는 영영 못 맞춘다.
+	const float kCardH = kCardPad * 2.0f + kPreviewH
+		+ ImGui::GetStyle().ItemSpacing.y            // 미리보기 아래 간격
+		+ ImGui::GetTextLineHeightWithSpacing() * 2.0f // 이름 줄 + 태그·작성자 줄
+		+ ImGui::GetFrameHeight();                   // 액션 줄
 
 	static int msg_kind = 0; // 0=없음 1=성공 2=실패
 	static std::string msg;
@@ -5911,7 +5963,7 @@ void reshade::runtime::draw_gui_crosshair_market()
 		ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(in_use ? t.accent : t.border));
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, in_use ? 2.0f : 1.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kCardPad, kCardPad));
 		ImGui::BeginChild(e.id.c_str(), ImVec2(kCardW, kCardH), ImGuiChildFlags_Borders,
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		{
@@ -5937,15 +5989,24 @@ void reshade::runtime::draw_gui_crosshair_market()
 					sherbet::with_alpha(t.text_dim, 220), icon);
 			}
 
-			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextUnformatted(e.name.c_str());
-			ImGui::PopTextWrapPos();
+			// 이름과 부제는 각각 **한 줄로 고정**한다(넘치면 말줄임표).
+			// 줄바꿈을 허용하면 위에서 잡은 카드 높이 예산이 무너져 액션 줄과 겹친다.
+			// 이름은 서버가 보내는 값이라 길이를 우리가 통제하지 못한다 — 여기서 막아야 한다.
+			const float label_w = ImGui::GetContentRegionAvail().x;
+			ImGui::TextUnformatted(sherbet_ellipsize(e.name.c_str(), label_w).c_str());
 			if (!e.tag.empty() || !e.author.empty())
-				ImGui::TextDisabled("%s%s%s", e.tag.c_str(),
-					(!e.tag.empty() && !e.author.empty()) ? " \xC2\xB7 " : "", e.author.c_str());
+			{
+				std::string meta = e.tag;
+				if (!e.tag.empty() && !e.author.empty())
+					meta += " \xC2\xB7 ";
+				meta += e.author;
+				ImGui::TextDisabled("%s", sherbet_ellipsize(meta.c_str(), label_w).c_str());
+			}
 
-			// 액션 줄은 카드 아래에 고정한다 — 이름이 두 줄이 돼도 버튼 위치가 흔들리지 않게.
-			ImGui::SetCursorPosY(kCardH - 10.0f - ImGui::GetFrameHeight());
+			// 액션 줄은 카드 아래에 고정한다 — 이름 길이와 무관하게 버튼 위치가 흔들리지 않게.
+			// ⚠️ ImMax 로 **뒤로는 절대 가지 않는다**. 위 내용이 예산을 넘겨도 커서를 되돌리지
+			//    않으므로, 최악의 경우 버튼이 조금 내려갈 뿐 앞서 그린 글자를 덮어쓰지는 않는다.
+			ImGui::SetCursorPosY(ImMax(ImGui::GetCursorPosY(), kCardH - kCardPad - ImGui::GetFrameHeight()));
 			switch (e.state())
 			{
 			case xm::entry_state::ready:
