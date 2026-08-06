@@ -113,15 +113,16 @@ namespace sherbet
 		{
 			switch (lv)
 			{
+			// 반지름은 실물 확인 후 두 번 줄였다(2.60/1.30/0.85/0.55 → 여기서 다시 30%).
 			//                   반지름  최소간격  원뿔   이동속도
-			case level::easy:   return { 2.60f, 3.0f,  8.0f,  0.0f };
-			case level::normal: return { 1.30f, 4.0f, 11.0f,  0.0f };
-			case level::hard:   return { 0.85f, 5.0f, 14.0f,  7.0f };
+			case level::easy:   return { 1.82f, 3.0f,  8.0f,  0.0f };
+			case level::normal: return { 0.91f, 4.0f, 11.0f,  0.0f };
+			case level::hard:   return { 0.60f, 5.0f, 14.0f,  7.0f };
 			// 헬 이동속도는 14 였는데 실물에서 과했다(표적이 튀어 조준 훈련이 아니라
 			// 반사신경 시험이 됨). 어려움(7)과 구별되는 선에서 낮춘다.
-			case level::hell:   return { 0.55f, 6.0f, 17.0f, 10.0f };
+			case level::hell:   return { 0.39f, 6.0f, 17.0f, 10.0f };
 			}
-			return { 1.30f, 4.0f, 11.0f, 0.0f };
+			return { 0.91f, 4.0f, 11.0f, 0.0f };
 		}
 
 		// ── 카운트다운 ───────────────────────────────────────────────────────
@@ -287,8 +288,11 @@ namespace sherbet
 		//    그래서 멀리 뜬 표적은 실제로 더 어렵다.
 		// ⚠️ 평균이 1 근처가 되게 잡는다. 한쪽으로 치우치면 난이도가 통째로 달라져
 		//    예전 리더보드 기록과 비교가 안 된다. 판당 30~60개면 편차는 평균으로 눌린다.
-		constexpr float kDepthFar = 0.75f;   // 가장 멀리(작게)
-		constexpr float kDepthNear = 1.30f;  // 가장 가까이(크게)
+		// ⚠️ 폭을 좁게 잡는다. 예전엔 0.75~1.30 이었는데, 그 폭(약 1.7배)이 아래 진행
+		//    축소의 전체 범위와 비슷해서 **줄어드는 게 안 보이고 그냥 랜덤해 보였다**
+		//    (사용자 보고). 거리감은 살리되 진행이 읽히도록 좁힌다.
+		constexpr float kDepthFar = 0.90f;   // 가장 멀리(작게)
+		constexpr float kDepthNear = 1.12f;  // 가장 가까이(크게)
 
 		// ── 진행에 따른 축소 ─────────────────────────────────────────────────
 		// 처음엔 크게 시작해 맞출수록 작아진다. 몸이 덜 풀린 초반에 실패로 시작하지 않게
@@ -301,11 +305,15 @@ namespace sherbet
 		// 자유 모드라도 위아래로 크게 벌어지면 실전 감각과 멀어진다 — 사람은 대체로
 		// 같은 높이에 서 있어서 세로 조준이 드물다. 원뿔을 **타원**으로 눌러 가로는
 		// 그대로 두고 세로만 절반으로 줄인다.
-		constexpr float kVerticalSquash = 0.5f;
+		// 실물 확인 후 두 번 줄였다(1.0 → 0.5 → 0.25). 자유 모드라도 세로는 가로의
+		// 1/4 폭만 쓴다 — 파엠 실전이 그만큼 가로 위주다.
+		constexpr float kVerticalSquash = 0.25f;
 
+		// ⚠️ 범위가 거리 변화(kDepthFar~kDepthNear)보다 **확실히 넓어야** 줄어드는 게
+		//    눈에 보인다. 둘이 비슷하면 표적 크기가 그냥 랜덤해 보인다.
 		constexpr int kRampHits = 25;        // 이쯤 맞추면 최소 크기에 닿는다
-		constexpr float kRampStart = 1.45f;  // 첫 표적
-		constexpr float kRampEnd = 0.85f;    // 다 줄어든 뒤
+		constexpr float kRampStart = 1.55f;  // 첫 표적
+		constexpr float kRampEnd = 0.78f;    // 다 줄어든 뒤
 
 		// 명중 수 → 크기 배율.
 		inline float ramp_scale(int hits)
@@ -380,6 +388,44 @@ namespace sherbet
 			return true;
 		}
 
+		// 절대 방향 → 화면 픽셀. **카메라 자세를 제대로 반영한다.**
+		//
+		// ⚠️ 위의 project() 처럼 각도를 그냥 빼면 안 된다. 그건 카메라가 수평(pitch 0)일
+		//    때만 맞다 — 위를 보고 있으면 같은 위도의 표적이 화면에서 아래로 휘어야 하는데
+		//    각도 차이만 쓰면 늘 한가운데 줄에 그려진다. 카메라 기저(정면·오른쪽·위)로
+		//    회전시켜야 정확하다.
+		inline bool project_from(float cam_yaw, float cam_pitch, float tgt_yaw, float tgt_pitch,
+			float fov_deg, float screen_w, float screen_h, float &out_x, float &out_y)
+		{
+			constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+			if (fov_deg <= 1.0f || fov_deg >= 179.0f || screen_w <= 0.0f || screen_h <= 0.0f)
+				return false;
+
+			const float cy = cam_yaw * kDeg2Rad, cp = clamp_pitch(cam_pitch) * kDeg2Rad;
+			const float fx = std::cos(cp) * std::cos(cy), fy = std::sin(cp), fz = std::cos(cp) * std::sin(cy);
+			const float rlen = std::sqrt(fz * fz + fx * fx);
+			const float rx = (rlen > 1e-6f) ? (-fz / rlen) : 0.0f;
+			const float rz = (rlen > 1e-6f) ? (fx / rlen) : 1.0f;
+			const float ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
+
+			const float ty = tgt_yaw * kDeg2Rad, tp = tgt_pitch * kDeg2Rad;
+			const float tx = std::cos(tp) * std::cos(ty);
+			const float tyv = std::sin(tp);
+			const float tz = std::cos(tp) * std::sin(ty);
+
+			const float d = tx * fx + tyv * fy + tz * fz;       // 정면 성분(깊이)
+			if (d <= 0.0001f)
+				return false;                                   // 뒤쪽
+			const float rr = tx * rx + tz * rz;                 // 오른쪽 성분(right 는 y=0)
+			const float uu = tx * ux + tyv * uy + tz * uz;      // 위쪽 성분
+
+			const float half_w = screen_w * 0.5f;
+			const float focal = half_w / std::tan(fov_deg * 0.5f * kDeg2Rad);
+			out_x = half_w + focal * (rr / d);
+			out_y = screen_h * 0.5f - focal * (uu / d);
+			return true;
+		}
+
 		// ── 판 ───────────────────────────────────────────────────────────────
 		// 카메라 방향은 **밖에서** 준다. 이 헤더는 마우스도 감도도 모른다 —
 		// 호출부가 raw 델타에 감도를 곱해 카메라를 굴리고, 그 결과만 넘긴다.
@@ -410,6 +456,7 @@ namespace sherbet
 				// 앵커 = 판을 시작한 방향. 표적은 평생 이 주위 원뿔 안에서만 논다.
 				_anchor_yaw = wrap_deg(cam_yaw);
 				_anchor_pitch = clamp_pitch(cam_pitch);
+					_cam_pitch_now = clamp_pitch(cam_pitch);
 				_has_target = false;
 				spawn();
 			}
@@ -425,6 +472,7 @@ namespace sherbet
 			//    표적이 밀리거나 늦게 따라오는 일이 없다.
 			void tick(float dt, float cam_yaw, float cam_pitch)
 			{
+				_cam_pitch_now = cam_pitch; // 수평 모드가 표적 높이를 여기에 맞춘다
 				if (dt < 0.0f || !(dt == dt)) // 음수·NaN 방어(알트탭·디버거 정지)
 					dt = 0.0f;
 				if (dt > 0.25f)
@@ -443,6 +491,7 @@ namespace sherbet
 						// 시작 버튼을 누를 때가 아니라 **첫 표적이 뜨는 순간**의 시야가 기준이다.
 						_anchor_yaw = wrap_deg(cam_yaw);
 						_anchor_pitch = clamp_pitch(cam_pitch);
+					_cam_pitch_now = clamp_pitch(cam_pitch);
 						_has_target = false;
 						spawn();
 					}
@@ -474,6 +523,7 @@ namespace sherbet
 			//    나가지만, 그건 아직 판이 아니다.
 			bool shoot(float cam_yaw, float cam_pitch)
 			{
+				_cam_pitch_now = cam_pitch; // 다음 표적이 이 높이에 뜬다
 				if (_phase != phase::running)
 					return false;
 
@@ -569,10 +619,18 @@ namespace sherbet
 						// ⚠️ "수평" 은 **같은 높이(위도선)** 이지 대원(大圓)이 아니다.
 						//    direction_at 로 옆으로 돌리면 위도가 적도 쪽으로 휘어서
 						//    pitch 가 유지되지 않는다(호스트 테스트가 잡았다).
-						//    yaw 만 바꾸고 pitch 는 앵커 값 그대로 둔다.
+						//    yaw 만 바꾸고 pitch 는 고정한다.
 						//    위도선에서 각거리는 Δyaw·cos(pitch) 이므로 나눠서 보정한다.
+						//
+						// ⚠️⚠️ 높이는 판 시작 시점이 아니라 **표적이 뜨는 순간의 시야**에
+						//    맞춘다. 게임에서 실제로 총을 쏘면 반동으로 화면이 위로 튀는데,
+						//    우리 가상 카메라는 마우스만 보므로 내려 당긴 것만 보고 위로
+						//    튄 것은 못 본다. 그래서 쏠수록 우리 카메라가 아래로 밀리고,
+						//    앵커 고정이면 표적이 화면에서 계속 위로 올라간다(실제로 겪음).
+						//    매번 지금 시야 높이에 맞추면 그 누적이 사라진다.
+						//    yaw 는 여전히 앵커 기준이라 좌우로 떠내려가지는 않는다.
 						ty = wrap_deg(_anchor_yaw + (_rng.unit() < 0.5f ? -yaw_span(dist) : yaw_span(dist)));
-						tp = _anchor_pitch;
+						tp = clamp_pitch(_cam_pitch_now);
 					}
 					else
 					{
@@ -700,6 +758,9 @@ namespace sherbet
 			float _anchor_yaw = 0.0f;   // 판 시작 방향 — 표적 원뿔의 중심
 			float _anchor_pitch = 0.0f;
 			bool _has_target = false;   // 직전 표적이 있는가(최소 간격 검사용)
+			// 마지막으로 받은 카메라 pitch. 수평 모드가 표적 높이를 여기에 맞춘다 —
+			// 반동으로 우리 카메라가 밀려도 표적이 눈높이를 따라오게 하기 위해서다.
+			float _cam_pitch_now = 0.0f;
 			float _since_finish = 0.0f; // 판 종료 후 경과(초)
 			target _target;
 			stats _stats;

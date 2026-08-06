@@ -193,6 +193,27 @@ static void test_project()
 	assert(!project(120.0f, 0.0f, FOV, W, H, x, y));
 	assert(!project(180.0f, 0.0f, FOV, W, H, x, y));
 
+	// ── 카메라 자세를 반영하는 투영 ──────────────────────────────────────────
+	// 카메라가 수평이면 두 함수가 같은 답을 낸다.
+	float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
+	assert(project(20.0f, 8.0f, FOV, W, H, ax, ay));
+	assert(project_from(0.0f, 0.0f, 20.0f, 8.0f, FOV, W, H, bx, by));
+	assert(feq(ax, bx, 0.5f) && feq(ay, by, 0.5f));
+
+	// ★ 카메라가 **위를 보고 있을 때** 갈린다. 위도선은 대원이 아니라 극 쪽으로 굽으므로,
+	//   같은 높이의 옆 표적은 화면에서 **위로** 휘어야 한다(수평선은 아래로 떨어진다).
+	//   각도를 그냥 빼면 늘 한가운데 줄에 그려져 틀린다.
+	assert(project_from(0.0f, 30.0f, 25.0f, 30.0f, FOV, W, H, bx, by));
+	assert(by < H * 0.5f - 1.0f); // 중앙보다 위
+	// 아래를 볼 때는 반대로 아래로 휜다.
+	assert(project_from(0.0f, -30.0f, 25.0f, -30.0f, FOV, W, H, bx, by));
+	assert(by > H * 0.5f + 1.0f);
+	// 정면은 언제나 화면 중앙이다(카메라 자세와 무관).
+	assert(project_from(40.0f, -25.0f, 40.0f, -25.0f, FOV, W, H, bx, by));
+	assert(feq(bx, W * 0.5f, 0.5f) && feq(by, H * 0.5f, 0.5f));
+	// 뒤쪽은 거부.
+	assert(!project_from(0.0f, 0.0f, 179.0f, 0.0f, FOV, W, H, bx, by));
+
 	// 말도 안 되는 인자 방어.
 	assert(!project(0.0f, 0.0f, 0.0f, W, H, x, y));
 	assert(!project(0.0f, 0.0f, 180.0f, W, H, x, y));
@@ -263,6 +284,12 @@ static void test_ramp()
 	// 단조 감소여야 한다 — 중간에 커지면 사용자가 뭐가 뭔지 모른다.
 	for (int i = 1; i <= kRampHits + 5; ++i)
 		assert(ramp_scale(i) <= ramp_scale(i - 1) + 1e-6f);
+
+	// ★ 축소 범위가 거리 변화 폭보다 확실히 넓어야 한다. 비슷하면 크기가 그냥
+	//   랜덤해 보이고 "쏘다 보면 작아진다" 가 읽히지 않는다(실제로 그렇게 보였다).
+	const float ramp_span = kRampStart / kRampEnd;
+	const float depth_span = kDepthNear / kDepthFar;
+	assert(ramp_span > depth_span * 1.5f);
 }
 
 // ── 수평 모드 ────────────────────────────────────────────────────────────────
@@ -312,10 +339,11 @@ static void test_level_mode()
 		f.shoot(t.yaw, t.pitch);
 	}
 	assert(saw_pitch);
-	// ★ 세로 폭이 가로 폭의 대략 절반이어야 한다. 표본이 많으니 양 극단에 닿는다.
+	// ★ 세로 폭이 가로 폭의 kVerticalSquash 배 언저리여야 한다. 표본이 많으니 양 극단에
+	//   닿는다. 여기가 1 에 가까워지면 눌림이 풀린 것이고, 0 이면 수평 모드와 같아진다.
 	assert(max_dp < max_dy);
-	assert(max_dp < max_dy * 0.75f);
-	assert(max_dp > max_dy * 0.25f);
+	assert(max_dp < max_dy * (kVerticalSquash * 1.6f));
+	assert(max_dp > max_dy * (kVerticalSquash * 0.4f));
 }
 
 // ── 8. 판 진행: 카운트다운 → 시작 ────────────────────────────────────────────
