@@ -2312,7 +2312,29 @@ void reshade::runtime::draw_gui()
 			// 우측 원클릭 버튼 3종 (기존 기능 호출만)
 			const float bh = ImGui::GetFrameHeight() * 0.9f, bw = bh * 1.4f, gap = 6.0f;
 			const float win_w = ImGui::GetWindowSize().x;
-			ImGui::SetCursorPos(ImVec2(win_w - 14.0f - (bw * 4.0f + gap * 3.0f), (sherbet_header_h - bh) * 0.5f));
+			const float buttons_left = win_w - 14.0f - (bw * 4.0f + gap * 3.0f);
+
+			// SHERBET: 구매자 각인 — 테마 이름 오른쪽. 스플래시·정보 탭과 **같은 이름**을 쓴다
+			// (서버가 릴레이한 디스코드 표시이름 우선 → SHERBET_OWNER 폴백 → 빈 문자열).
+			if (const std::string hdr_owner = sherbet::auth::effective_owner_name(_sherbet_auth); !hdr_owner.empty())
+			{
+				// ⚠️ 오른쪽 원클릭 버튼 4개를 침범하면 안 된다. 남는 폭을 재서 긴 문구가 안 들어가면
+				//    짧은 문구로, 그것도 안 들어가면 **아예 그리지 않는다** — 반쯤 잘린 각인은
+				//    각인이 아니라 버그로 보인다("Sherbet" 이 "bet" 으로 보이던 그 건과 같은 실수).
+				//    폰트 크기는 사용자가 바꿀 수 있으므로 고정 픽셀로 재지 않고 매번 잰다.
+				ImGui::SameLine(0.0f, 8.0f);
+				const float room = buttons_left - ImGui::GetCursorPosX() - 8.0f;
+				const std::string mark_full = "\xC2\xB7 " + hdr_owner + " \xEC\xA0\x84\xEC\x9A\xA9 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C"; // "· <이름> 전용 커스텀 리쉐이드"
+				const std::string mark_short = "\xC2\xB7 " + hdr_owner + " \xEC\xA0\x84\xEC\x9A\xA9 \xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80"; // "· <이름> 전용 커스텀"
+				if (ImGui::CalcTextSize(mark_full.c_str()).x <= room)
+					ImGui::TextDisabled("%s", mark_full.c_str());
+				else if (ImGui::CalcTextSize(mark_short.c_str()).x <= room)
+					ImGui::TextDisabled("%s", mark_short.c_str());
+				// 자리가 없으면 그리지 않는다. 바로 아래 SetCursorPos 가 커서를 절대좌표로 옮기므로
+				// 여기서 줄을 정리해 줄 필요는 없다.
+			}
+
+			ImGui::SetCursorPos(ImVec2(buttons_left, (sherbet_header_h - bh) * 0.5f));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().chip));
 			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().text));
@@ -2732,6 +2754,11 @@ void reshade::runtime::draw_gui_home()
 	// (a) 홈 탭 최상단 — 오버레이를 여는 구매자가 가장 먼저 보는 자리
 	draw_sherbet_update_card(false);
 
+	// (b) 프리셋 줄 — 아래 이펙트 목록을 하나씩 만지기 전에 "통째로 바꾸는" 길을 먼저 보여준다.
+	//     아래 스톡 프리셋 바(파일명·저장·새로 만들기)는 그대로 둔다 — 직접 만들어 쓰는 사람의
+	//     동선이다. 이 줄은 그 위에 얹기만 한다.
+	draw_sherbet_preset_bar();
+
 	std::string tutorial_text;
 
 	// It is not possible to follow some of the tutorial steps while performance mode is active, so skip them
@@ -3106,6 +3133,11 @@ void reshade::runtime::draw_gui_home()
 			ImGui::Text(_("Effects are disabled. Press '%s' to enable them again."), input::key_name(_effects_key_data).c_str());
 			ImGui::Spacing();
 		}
+
+		// SHERBET: 위 프리셋 줄과 짝이 되는 라벨. "프리셋 = 통째로 / 이펙트 = 하나씩" 이
+		//          한눈에 읽혀야, 아래 목록을 일일이 켜고 끄는 것이 유일한 조작으로 보이지 않는다.
+		ImGui::TextDisabled("%s", ICON_FK_SLIDERS "  \xEC\x9D\xB4\xED\x8E\x99\xED\x8A\xB8 \xE2\x80\x94 \xEC\xA7\x81\xEC\xA0\x91 \xEC\x84\xB8\xEB\xB0\x80\xED\x95\x98\xEA\xB2\x8C \xEC\xA1\xB0\xEC\xA0\x88"); // "이펙트 — 직접 세밀하게 조절"
+		ImGui::Spacing();
 
 		float bottom_height = _variable_editor_height;
 		bottom_height = std::max(bottom_height, 20.0f);
@@ -6562,6 +6594,151 @@ void reshade::runtime::draw_gui_crosshair_market()
 	}
 }
 
+// SHERBET: "내 전용 불러오기" 버튼 — 「마켓」 세 세그먼트와 「홈」 프리셋 줄 공용.
+// 페치 중이면 클릭을 막고 로딩 표시로 바꿔, 되는지 안 되는지 헷갈려 연타하는 것을 방지한다.
+// (원래 draw_gui_market 의 지역 람다였다. 「홈」 에서도 같은 버튼이 필요해져 멤버로 올렸다 —
+//  복사하면 두 곳의 로딩/완료 표시가 언젠가 어긋난다.)
+void reshade::runtime::draw_sherbet_fetch_button()
+{
+	if (!(sherbet::auth::enabled() && _sherbet_auth.is_authed()))
+		return;
+	if (_sherbet_auth.content_active())
+	{
+		const int dots = 1 + static_cast<int>(ImGui::GetTime() * 2.0) % 3; // 1~3, 애니메이션용
+		char buf[64];
+		snprintf(buf, sizeof(buf), ICON_FK_DOWNLOAD "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91%.*s", dots, "..."); // "불러오는 중"
+		ImGui::BeginDisabled();
+		sherbet::pill_button(buf, true);
+		ImGui::EndDisabled();
+	}
+	else if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
+		_sherbet_auth.begin_fetch_content();
+	// 완료 배너(마지막 1초 페이드) — 되는지 안 되는지 헷갈리지 않게 명확히 표시
+	if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
+	{
+		const float a = ImMin(1.0f, _sherbet_content_done_timer);
+		ImVec4 fetch_col = sherbet::status_color(sherbet::status::good); // 테마 명도에 맞는 초록
+		fetch_col.w = a;                                                // 마지막 1초 페이드
+		ImGui::TextColored(fetch_col, ICON_FK_OK "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"); // "불러오기 완료!"
+	}
+	ImGui::Spacing();
+}
+
+// SHERBET: 프리셋 전환 공용 경로.
+//
+// ⚠️ set_current_preset_path() 만 부르면 **전환은 되는데 화면에 아무 일도 안 일어난다.**
+//    「홈」 탭 프리셋 바의 전환 경로(draw_gui_home 의 reload_preset 블록)는 그 뒤에
+//    스플래시와 전환 상태를 같이 세운다. 마켓 카드는 그걸 빠뜨려서, 적용해도 바뀐 티가
+//    안 났다 — 프리셋 마켓이 안 쓰이던 이유 중 하나다. 두 호출부가 이 함수만 쓰게 한다.
+void reshade::runtime::sherbet_apply_preset(const std::filesystem::path &preset_path)
+{
+	// 저장 → 경로 교체 → load_current_preset 까지는 여기가 다 한다.
+	set_current_preset_path(preset_path.u8string().c_str());
+
+	// 여기부터가 시각 피드백. 순서도 홈의 reload_preset 블록과 같다(로드 뒤에 세운다).
+	_show_splash = true;
+	_preset_is_modified = false;
+	_last_preset_switching_time = _last_present_time;
+	_is_in_preset_transition = true;
+}
+
+// SHERBET: 「홈」 탭 최상단 프리셋 줄.
+//
+// 왜 있는가: 홈만 쓰는 사람에게는 프리셋이라는 개념이 보이지 않았다. 홈 맨 위 프리셋 바는
+// 스톡 리쉐이드 UI 라 **파일명**만 뜨고, 서버가 내려준 Sherbet-Presets 의 존재를 모른다.
+// 그래서 다들 아래 이펙트 목록을 하나씩 켜고 껐다 — 「마켓」 탭까지 갈 이유가 없었다.
+//
+// 마켓과 **같은 소스**(sherbet::content_presets())와 **같은 상태 판정**(_current_preset_path
+// 비교)을 쓴다. 그래서 한쪽에서 바꾸면 다른 쪽이 저절로 따라온다 — 동기화 코드가 따로 없다.
+//
+// 잠긴(안 산) 프리셋은 여기 진열하지 않는다. 판매 노출은 「마켓」 탭이 맡는다.
+void reshade::runtime::draw_sherbet_preset_bar()
+{
+	const std::vector<sherbet::content_item> &presets = sherbet::content_presets();
+
+	// 살 수 있는 것 말고 **지금 쓸 수 있는 것**만 센다. basename 규칙은 마켓·다운로드 워커와
+	// 동일해야 카드가 실제 파일을 가리킨다(sherbet::safe_basename).
+	std::size_t usable = 0;
+	for (const sherbet::content_item &it : presets)
+		if (it.unlocked && !sherbet::safe_basename(it.filename).empty())
+			++usable;
+
+	const bool can_fetch = sherbet::auth::enabled() && _sherbet_auth.is_authed();
+
+	// 쓸 것도 없고 불러올 수단도 없으면 줄 자체를 띄우지 않는다 — 빈 카드는 소음이다.
+	// (오프라인 빌드나 로그인 전에는 홈이 예전 그대로 보인다.)
+	if (usable == 0 && !can_fetch)
+		return;
+
+	sherbet::begin_card("##sherbet_preset_bar");
+
+	ImGui::TextUnformatted(ICON_FK_MAGIC "  \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B \xE2\x80\x94 \xED\x95\x9C \xEB\xB2\x88\xEC\x97\x90 \xEB\xB0\x94\xEA\xBE\xB8\xEA\xB8\xB0"); // "프리셋 — 한 번에 바꾸기"
+	ImGui::TextDisabled("%s", "\xEC\x95\x84\xEB\x9E\x98 \xEC\x9D\xB4\xED\x8E\x99\xED\x8A\xB8\xEB\xA5\xBC \xED\x95\x98\xEB\x82\x98\xEC\x94\xA9 \xEC\xBC\x9C\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEB\x8F\x84, \xEC\x97\xAC\xEA\xB8\xB0\xEC\x84\x9C \xEA\xB3\xA0\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C \xEC\x84\xB8\xED\x8A\xB8\xEA\xB0\x80 \xED\x86\xB5\xEC\xA7\xB8\xEB\xA1\x9C \xEB\xB0\x94\xEB\x80\x8C\xEC\x96\xB4\xEC\x9A\x94."); // "아래 이펙트를 하나씩 켜지 않아도, 여기서 고르면 한 세트가 통째로 바뀌어요."
+	ImGui::Spacing();
+
+	if (usable == 0)
+	{
+		ImGui::TextDisabled("%s", "\xEB\xB0\x9B\xEC\x9D\x80 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94. \xEC\x95\x84\xEB\x9E\x98 '\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0'\xEB\xA5\xBC \xEB\x88\x8C\xEB\x9F\xAC \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94."); // "받은 프리셋이 없어요. 아래 '내 전용 불러오기'를 눌러 주세요."
+		ImGui::Spacing();
+		draw_sherbet_fetch_button();
+		sherbet::end_card();
+		return;
+	}
+
+	// 알약 줄바꿈 — ImGui::SameLine 은 창 폭을 모른다. pill_padding 으로 폭을 미리 재서
+	// 넘칠 때만 줄을 바꾼다(마켓 세그먼트와 같은 방식, 상수도 같은 것을 쓴다).
+	const float avail = ImGui::GetContentRegionAvail().x;
+	const float spacing = _imgui_context->Style.ItemSpacing.x;
+	float line_w = 0.0f;
+	bool first_on_line = true;
+
+	for (std::size_t i = 0; i < presets.size(); ++i)
+	{
+		const sherbet::content_item &it = presets[i];
+		if (!it.unlocked)
+			continue; // 잠긴 것은 「마켓」 탭에서만 진열한다
+		const std::string base = sherbet::safe_basename(it.filename);
+		if (base.empty())
+			continue;
+
+		const std::filesystem::path preset_path = _config_path.parent_path() / L"Sherbet-Presets" /
+			std::filesystem::u8path(base);
+		const bool active = _current_preset_path == preset_path;
+
+		// 지금 쓰는 것에는 체크 표시를 붙인다 — 알약 색만으로는 "선택됨" 이 안 읽힌다.
+		std::string label;
+		if (active)
+			label = ICON_FK_OK "  ";
+		label += it.display_name;
+
+		const float w = ImGui::CalcTextSize(label.c_str()).x + sherbet::pill_padding.x * 2.0f;
+
+		if (!first_on_line && line_w + spacing + w > avail)
+		{
+			line_w = 0.0f;
+			first_on_line = true;
+		}
+		if (!first_on_line)
+		{
+			ImGui::SameLine();
+			line_w += spacing;
+		}
+
+		ImGui::PushID((int)i);
+		if (sherbet::pill_button(label.c_str(), active) && !active)
+			sherbet_apply_preset(preset_path);
+		ImGui::PopID();
+
+		line_w += w;
+		first_on_line = false;
+	}
+
+	ImGui::Spacing();
+	draw_sherbet_fetch_button();
+
+	sherbet::end_card();
+}
+
 void reshade::runtime::draw_gui_market()
 {
 	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
@@ -6580,39 +6757,12 @@ void reshade::runtime::draw_gui_market()
 	if (sherbet::pill_button("\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEB\xA7\x88\xEC\xBC\x93", seg == 2)) seg = 2; // "조준점 마켓"
 	ImGui::Spacing();
 
-	// "내 전용 불러오기" 버튼 — 세 세그먼트 공용. 페치 중이면 클릭을 막고
-	// 로딩 표시로 바꿔, 되는지 안 되는지 헷갈려 연타하는 것을 방지한다.
-	auto sherbet_fetch_button = [&]() {
-		if (!(sherbet::auth::enabled() && _sherbet_auth.is_authed()))
-			return;
-		if (_sherbet_auth.content_active())
-		{
-			const int dots = 1 + static_cast<int>(ImGui::GetTime() * 2.0) % 3; // 1~3, 애니메이션용
-			char buf[64];
-			snprintf(buf, sizeof(buf), ICON_FK_DOWNLOAD "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91%.*s", dots, "..."); // "불러오는 중"
-			ImGui::BeginDisabled();
-			sherbet::pill_button(buf, true);
-			ImGui::EndDisabled();
-		}
-		else if (sherbet::pill_button(ICON_FK_DOWNLOAD "  \xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0", true)) // "내 전용 불러오기"
-			_sherbet_auth.begin_fetch_content();
-		// 완료 배너(마지막 1초 페이드) — 되는지 안 되는지 헷갈리지 않게 명확히 표시
-		if (!_sherbet_auth.content_active() && _sherbet_content_done_timer > 0.0f)
-		{
-			const float a = ImMin(1.0f, _sherbet_content_done_timer);
-			ImVec4 fetch_col = sherbet::status_color(sherbet::status::good); // 테마 명도에 맞는 초록
-			fetch_col.w = a;                                                // 마지막 1초 페이드
-			ImGui::TextColored(fetch_col, ICON_FK_OK "  \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0 \xEC\x99\x84\xEB\xA3\x8C\x21"); // "불러오기 완료!"
-		}
-		ImGui::Spacing();
-	};
-
 	if (seg == 0)
 	{
 		ImGui::TextUnformatted("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4 \xED\x85\x8C\xEB\xA7\x88. \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x9C \xED\x85\x8C\xEB\xA7\x88\xEB\x8A\x94 \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEC\x84\xB8\xEC\x9A\x94."); // "오버레이 테마. 구매한 테마는 디스코드 로그인 후 불러오세요."
 		ImGui::Spacing();
 
-		sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
+		draw_sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
 
 		// 커스텀 사진 배경 구매자 안내 — 불러온 뒤 '설정' 탭에서 사진을 지정한다는 것을 알려줌
 		if (sherbet::has_feature("custompicture"))
@@ -6654,7 +6804,7 @@ void reshade::runtime::draw_gui_market()
 	{
 		// 조준점 마켓 — 항목이 공유 코드 한 줄이라 파일 다운로드가 없다.
 		// 페치 버튼은 여기서도 같은 것을 쓴다(/content/me 하나로 테마·프리셋·조준점이 전부 온다).
-		sherbet_fetch_button();
+		draw_sherbet_fetch_button();
 		draw_gui_crosshair_market();
 	}
 	else
@@ -6663,7 +6813,7 @@ void reshade::runtime::draw_gui_market()
 		ImGui::TextUnformatted("\xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 '\xEB\x82\xB4 \xEC\xA0\x84\xEC\x9A\xA9 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEA\xB8\xB0'\xEB\xA1\x9C \xEB\xB0\x9B\xEC\x95\x84\xEC\x9A\x94."); // "디스코드 로그인 후 '내 전용 불러오기'로 받아요."
 		ImGui::Spacing();
 
-		sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
+		draw_sherbet_fetch_button(); // /content/me 페치(비동기) — 로딩 중이면 클릭 막힘
 
 		const std::vector<sherbet::content_item> &presets = sherbet::content_presets();
 		if (presets.empty())
@@ -6702,7 +6852,7 @@ void reshade::runtime::draw_gui_market()
 					if (active)
 						ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
 					else if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
-						set_current_preset_path(preset_path.u8string().c_str());
+						sherbet_apply_preset(preset_path); // 「홈」 프리셋 줄과 같은 경로(전환 + 시각 피드백)
 				}
 			}
 			sherbet::end_card();

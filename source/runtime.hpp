@@ -660,6 +660,14 @@ namespace reshade
 		void draw_gui_about();
 		void draw_gui_market();
 		void draw_gui_crosshair_market(); // 「마켓」 탭의 조준점 세그먼트
+		// SHERBET: 「내 전용 불러오기」 버튼. 「마켓」 탭 세 세그먼트와 「홈」 탭 프리셋 줄이 공용한다
+		// (/content/me 하나로 테마·프리셋·조준점이 전부 온다).
+		void draw_sherbet_fetch_button();
+		// SHERBET: 「홈」 탭 최상단 프리셋 줄 — 서버가 내려준 프리셋을 알약으로 진열한다.
+		void draw_sherbet_preset_bar();
+		// SHERBET: 프리셋 전환 **공용 경로**. 「마켓」 카드와 「홈」 프리셋 줄이 둘 다 이걸 부른다.
+		// 전환만 하고 시각 피드백을 빠뜨리면 "눌러도 아무 일도 안 일어난다" 로 보인다.
+		void sherbet_apply_preset(const std::filesystem::path &preset_path);
 #if RESHADE_ADDON
 		void draw_gui_addons();
 #endif
