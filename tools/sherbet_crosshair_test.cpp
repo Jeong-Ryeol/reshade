@@ -16,6 +16,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -2346,7 +2347,8 @@ static void test_error_dt_spike_guard()
 	run(s2, t, neg, 10);
 	assert(s2.vel == 0.0f);
 
-	error_input nan_dt = frame(0.0f / 0.0f);
+	// MSVC 는 상수식 0.0f/0.0f 를 C2124 로 거부한다(clang 은 통과). NaN 은 라이브러리로 만든다.
+	error_input nan_dt = frame(std::numeric_limits<float>::quiet_NaN());
 	nan_dt.fwd = true;
 	update_error(s2, t, nan_dt);
 	assert(s2.vel >= 0.0f && s2.vel <= 1.0f);
