@@ -7207,13 +7207,27 @@ void reshade::runtime::draw_gui_aimlab()
 				{
 					const float name_x = _imgui_context->Style.WindowPadding.x + 2.6f * ImGui::GetFontSize();
 					const float hits_x = name_x + 9.0f * ImGui::GetFontSize();
+					const float acc_x = hits_x + 4.2f * ImGui::GetFontSize();
+
+					// 열 이름. 없으면 "62  86%" 가 뭘 뜻하는지 알 길이 없다(실제로 물었다).
+					ImGui::TextDisabled("%s", "\xEC\x88\x9C\xEC\x9C\x84"); // "순위"
+					ImGui::SameLine(name_x);
+					ImGui::TextDisabled("%s", "\xEC\x9D\xB4\xEB\xA6\x84"); // "이름"
+					ImGui::SameLine(hits_x);
+					ImGui::TextDisabled("%s", "\xEB\xAA\x85\xEC\xA4\x91"); // "명중"
+					ImGui::SameLine(acc_x);
+					ImGui::TextDisabled("%s", "\xEC\xA0\x95\xED\x99\x95\xEB\x8F\x84"); // "정확도"
+					ImGui::Separator();
+
 					for (const aim::board_row &r : _sherbet_aim_board.top)
 					{
 						ImGui::Text("%d", r.rank);
 						ImGui::SameLine(name_x);
 						ImGui::TextUnformatted(r.name.c_str());
 						ImGui::SameLine(hits_x);
-						ImGui::Text("%d   %.0f%%", r.hits, r.accuracy * 100.0f);
+						ImGui::Text("%d", r.hits);
+						ImGui::SameLine(acc_x);
+						ImGui::Text("%.0f%%", r.accuracy * 100.0f);
 					}
 				}
 				ImGui::Spacing();
