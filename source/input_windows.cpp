@@ -12,6 +12,10 @@
 #include <cstring> // std::memset
 #include <algorithm> // std::any_of, std::copy_n, std::max_element
 #include <Windows.h>
+// SHERBET: 한글 IME 처리(ImmGetVirtualKey / ImmGetCompositionStringW).
+// imm32 는 MSVC 기본 링크 목록에 없다 — vcxproj 를 32/64 양쪽 다 고치는 대신 여기서 붙인다.
+#include <imm.h>
+#pragma comment(lib, "imm32.lib")
 
 extern bool is_uwp_app();
 
@@ -98,6 +102,18 @@ std::shared_ptr<reshade::input> reshade::input::register_window(window_handle wi
 	}
 }
 
+// SHERBET: 한글/일본어 IME 가 켜져 있으면 Windows 는 실제 키 대신 VK_PROCESSKEY 를 보낸다.
+// 그대로 두면 _keys['V'] 가 영영 안 켜져서 **한글 상태에서는 Ctrl+V 가 안 먹는다**
+// (영문 상태에서만 붙여넣기가 되던 증상). ImmGetVirtualKey 로 원래 가상키를 되찾는다.
+// ⚠️ keydown 과 keyup 을 **둘 다** 거쳐야 한다. 한쪽만 고치면 키가 눌린 채로 남는다.
+static WPARAM sherbet_resolve_ime_vk(WPARAM vk, HWND hwnd)
+{
+	if (vk != VK_PROCESSKEY || hwnd == nullptr)
+		return vk;
+	const UINT real_vk = ImmGetVirtualKey(hwnd);
+	return (real_vk != 0 && real_vk != VK_PROCESSKEY && real_vk < 0xFF) ? real_vk : vk;
+}
+
 bool reshade::input::handle_window_message(const void *message_data)
 {
 	assert(message_data != nullptr);
@@ -106,6 +122,15 @@ bool reshade::input::handle_window_message(const void *message_data)
 
 	bool is_mouse_message = details.message >= WM_MOUSEFIRST && details.message <= WM_MOUSELAST;
 	bool is_keyboard_message = details.message >= WM_KEYFIRST && details.message <= WM_KEYLAST;
+
+	// SHERBET: IME(한글) 메시지는 WM_KEYFIRST~WM_KEYLAST(0x0100~0x0109) **범위 밖**이다
+	// (WM_IME_COMPOSITION 0x010F, WM_IME_CHAR 0x0286). 그래서 예전에는 바로 아래에서
+	// 통째로 버려졌고, 조합이 끝난 한글이 _text_input 에 들어갈 길이 없었다 — 오버레이
+	// 입력칸에 영문만 써지던 원인. 키보드 메시지로 취급해 아래 스위치까지 보낸다
+	// (오버레이가 키보드를 잡고 있을 때 게임으로 새지 않게 차단 규칙도 같이 적용된다).
+	if (details.message == WM_IME_STARTCOMPOSITION || details.message == WM_IME_COMPOSITION ||
+		details.message == WM_IME_ENDCOMPOSITION || details.message == WM_IME_CHAR)
+		is_keyboard_message = true;
 
 	// Ignore messages that are not related to mouse or keyboard input
 	if (details.message != WM_INPUT && !is_mouse_message && !is_keyboard_message)
@@ -264,23 +289,51 @@ bool reshade::input::handle_window_message(const void *message_data)
 	case WM_CHAR:
 		input->_text_input += static_cast<wchar_t>(details.wParam);
 		break;
+	// SHERBET: 조합이 끝나 **확정된** 한글. 오버레이가 키보드를 잡고 있을 때만 우리가 소비한다
+	// (안 잡고 있으면 게임 것이다 — 건드리면 게임 채팅 입력이 깨진다).
+	// ⚠️ 소비하면 아래 반환값이 true 가 되어 메시지가 게임에 가지 않는다. 그래서 게임의
+	//    DefWindowProc 이 WM_IME_CHAR 를 WM_CHAR 로 바꿔 되돌려보내는 일이 없고, 같은
+	//    글자가 두 번 들어가지 않는다. (WM_IME_CHAR 는 여기서 따로 읽지 않는다 — 읽으면 중복이다.)
+	// 한계: 조합 **중인** 글자는 화면에 안 보이고 완성된 순간 들어간다. 게임 위에 IME 조합창을
+	//    띄울 방법이 없어서 감수한다.
+	case WM_IME_COMPOSITION:
+		if (input->is_blocking_keyboard_input() && (details.lParam & GCS_RESULTSTR) != 0)
+		{
+			if (const HIMC himc = ImmGetContext(details.hwnd); himc != nullptr)
+			{
+				if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_RESULTSTR, nullptr, 0); bytes > 0)
+				{
+					std::wstring result(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+					ImmGetCompositionStringW(himc, GCS_RESULTSTR, result.data(), static_cast<DWORD>(bytes));
+					input->_text_input += result;
+				}
+				ImmReleaseContext(details.hwnd, himc);
+			}
+		}
+		break;
 	case WM_KEYDOWN:
 	case WM_SYSKEYDOWN:
-		assert(details.wParam > 0 && details.wParam < std::size(input->_keys));
-		input->_keys[details.wParam] = 0x88;
-		input->_keys_time[details.wParam] = details.time;
+	{
+		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // 한글 IME → 실제 키 복원
+		assert(vk > 0 && vk < std::size(input->_keys));
+		input->_keys[vk] = 0x88;
+		input->_keys_time[vk] = details.time;
 		if (input->is_blocking_keyboard_input())
-			input->_keys[details.wParam] |= 0x04;
+			input->_keys[vk] |= 0x04;
 		break;
+	}
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
-		assert(details.wParam > 0 && details.wParam < std::size(input->_keys));
+	{
+		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // keydown 과 반드시 짝을 맞춘다
+		assert(vk > 0 && vk < std::size(input->_keys));
 		// Do not block key up messages if the key down one was not blocked previously (so key does not get stuck for the application)
-		if (input->is_blocking_keyboard_input() && (input->_keys[details.wParam] & 0x04) == 0)
+		if (input->is_blocking_keyboard_input() && (input->_keys[vk] & 0x04) == 0)
 			is_keyboard_message = false;
-		input->_keys[details.wParam] = 0x08;
-		input->_keys_time[details.wParam] = details.time;
+		input->_keys[vk] = 0x08;
+		input->_keys_time[vk] = details.time;
 		break;
+	}
 	case WM_LBUTTONDOWN:
 	case WM_LBUTTONDBLCLK: // Double clicking generates this sequence: WM_LBUTTONDOWN -> WM_LBUTTONUP -> WM_LBUTTONDBLCLK -> WM_LBUTTONUP, so handle it like a normal down
 		input->_keys[VK_LBUTTON] = 0x88;
