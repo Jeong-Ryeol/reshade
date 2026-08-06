@@ -6756,7 +6756,15 @@ void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool 
 		return;
 	}
 	if (ph == sherbet::aim::phase::finished)
+	{
+		// ⚠️ 여기서 그냥 return 하면 **tick() 이 안 불려 결과 HUD 타이머가 멈춘다.**
+		//    3초 뒤 사라지는 코드는 tick() 안에 있는데, 그 함수에 도달을 못 해서
+		//    왼쪽 결과판이 게임 내내 화면에 눌어붙었다. 카메라와 사격은 건드리지 않고
+		//    시간만 흘린다.
+		//    (호스트 테스트는 tick() 을 직접 불러서 통과했다 — 끊긴 것은 배선이었다.)
+		_sherbet_aim.tick(dt, _sherbet_aim_cam_yaw, _sherbet_aim_cam_pitch);
 		return;
+	}
 
 	// 가상 카메라. **이 프레임에 들어온 입력만** 쓴다 — 화면 리드백은 몇 프레임 늦으므로
 	// 여기 절대 끼우지 않는다. 스무딩·보간도 넣지 않는다(지연 0 이 이 기능의 생명이다).
