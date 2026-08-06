@@ -49,43 +49,53 @@ const char *sherbet::aim::duration_key(duration d)
 	return "s60";
 }
 
-void sherbet::aim::net::begin_fetch(const std::string &bearer, level lv, duration d)
+const char *sherbet::aim::mode_key(mode m)
+{
+	switch (m)
+	{
+	case mode::free:  return "free";
+	case mode::level: return "level";
+	}
+	return "free";
+}
+
+void sherbet::aim::net::begin_fetch(const std::string &bearer, level lv, duration d, mode m)
 {
 	if (_active.load() || bearer.empty())
 		return;
 	join(); // 이전 워커가 끝났지만 아직 join 안 됐을 수 있다
 	_active.store(true);
-	_worker = std::thread(&net::run, this, bearer, lv, d, false, 0, 0);
+	_worker = std::thread(&net::run, this, bearer, lv, d, m, false, 0, 0);
 }
 
-void sherbet::aim::net::begin_submit(const std::string &bearer, level lv, duration d, int hits, int shots)
+void sherbet::aim::net::begin_submit(const std::string &bearer, level lv, duration d, mode m, int hits, int shots)
 {
 	if (_active.load() || bearer.empty())
 		return;
 	join();
 	_active.store(true);
-	_worker = std::thread(&net::run, this, bearer, lv, d, true, hits, shots);
+	_worker = std::thread(&net::run, this, bearer, lv, d, m, true, hits, shots);
 }
 
-void sherbet::aim::net::run(std::string bearer, level lv, duration d, bool submit, int hits, int shots)
+void sherbet::aim::net::run(std::string bearer, level lv, duration d, mode m, bool submit, int hits, int shots)
 {
 	std::string resp;
 	int status = 0;
 
 	if (submit)
 	{
-		char body[192];
+		char body[256];
 		std::snprintf(body, sizeof(body),
-			"{\"level\":\"%s\",\"duration\":\"%s\",\"hits\":%d,\"shots\":%d}",
-			level_key(lv), duration_key(d), hits, shots);
+			"{\"level\":\"%s\",\"duration\":\"%s\",\"mode\":\"%s\",\"hits\":%d,\"shots\":%d}",
+			level_key(lv), duration_key(d), mode_key(m), hits, shots);
 		status = sherbet::http::post_json(kHost, kScorePath, body, resp, bearer.c_str());
 	}
 	else
 	{
-		wchar_t path[192];
-		// 레벨·길이 키는 우리가 만든 고정 문자열이라 이스케이프가 필요 없다.
-		const char *lk = level_key(lv), *dk = duration_key(d);
-		std::swprintf(path, 192, L"/sherbet-auth/aim/leaderboard?level=%hs&duration=%hs", lk, dk);
+		wchar_t path[256];
+		// 난이도·길이·모드 키는 우리가 만든 고정 문자열이라 이스케이프가 필요 없다.
+		std::swprintf(path, 256, L"/sherbet-auth/aim/leaderboard?level=%hs&duration=%hs&mode=%hs",
+			level_key(lv), duration_key(d), mode_key(m));
 		status = sherbet::http::get(kHost, path, resp, bearer.c_str());
 	}
 

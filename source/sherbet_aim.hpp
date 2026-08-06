@@ -41,6 +41,19 @@ namespace sherbet
 		};
 		constexpr int kLevelCount = 4;
 
+		// ── 조준 모드 ────────────────────────────────────────────────────────
+		// 실전에서는 사람이 대부분 **같은 높이에 서 있다**. 그래서 위아래를 거의 안 쓰고
+		// 좌우로만 조준하는 경우가 훨씬 많다. 그 상황만 따로 연습하는 모드다.
+		//
+		// ⚠️ 수평은 자유도가 하나 줄어 **더 쉽다.** 같은 리더보드에 섞으면 자유 모드
+		//    기록이 전부 밀린다 — 모드도 표 키에 들어간다(server/app/aim.py 의 MODES).
+		enum class mode
+		{
+			free = 0,   // 자유 — 사방
+			level = 1,  // 수평 — 좌우만, 높이 고정
+		};
+		constexpr int kModeCount = 2;
+
 		// ── 판 길이 ──────────────────────────────────────────────────────────
 		// 10초는 몸풀기다. 짧을수록 표본이 적어 편차가 커지는데(60초 대비 약 2.5배),
 		// 싸게 여러 번 돌려 제일 잘 나온 판만 남기면 그건 실력이 아니라 운이다.
@@ -277,6 +290,34 @@ namespace sherbet
 		constexpr float kDepthFar = 0.75f;   // 가장 멀리(작게)
 		constexpr float kDepthNear = 1.30f;  // 가장 가까이(크게)
 
+		// ── 진행에 따른 축소 ─────────────────────────────────────────────────
+		// 처음엔 크게 시작해 맞출수록 작아진다. 몸이 덜 풀린 초반에 실패로 시작하지 않게
+		// 해 주고, 뒤로 갈수록 진짜 실력이 갈린다.
+		//
+		// ⚠️ **시간이 아니라 명중 수**에 연동한다. 잘하는 사람이 더 빨리 작은 표적을 만나
+		//    자연스러운 핸디캡이 되고, 점수가 폭주하지 않는다. 시간 기준이면 못하는 사람도
+		//    똑같이 작아져서 초반에 도와준 의미가 사라진다.
+		// ── 세로 눌림 ────────────────────────────────────────────────────────
+		// 자유 모드라도 위아래로 크게 벌어지면 실전 감각과 멀어진다 — 사람은 대체로
+		// 같은 높이에 서 있어서 세로 조준이 드물다. 원뿔을 **타원**으로 눌러 가로는
+		// 그대로 두고 세로만 절반으로 줄인다.
+		constexpr float kVerticalSquash = 0.5f;
+
+		constexpr int kRampHits = 25;        // 이쯤 맞추면 최소 크기에 닿는다
+		constexpr float kRampStart = 1.45f;  // 첫 표적
+		constexpr float kRampEnd = 0.85f;    // 다 줄어든 뒤
+
+		// 명중 수 → 크기 배율.
+		inline float ramp_scale(int hits)
+		{
+			if (hits <= 0)
+				return kRampStart;
+			if (hits >= kRampHits)
+				return kRampEnd;
+			const float t = static_cast<float>(hits) / static_cast<float>(kRampHits);
+			return kRampStart + (kRampEnd - kRampStart) * t;
+		}
+
 		// ── 진행 단계 ────────────────────────────────────────────────────────
 		enum class phase
 		{
@@ -348,10 +389,11 @@ namespace sherbet
 			// 시작. 카메라의 현재 방향을 기준으로 첫 표적을 놓는다.
 			// override_seconds > 0 이면 그 길이로 돈다(맛보기). 0 이면 duration 을 따른다.
 			void start(level lv, duration d, std::uint32_t seed, float cam_yaw, float cam_pitch, float fov_deg,
-				float override_seconds = 0.0f)
+				float override_seconds = 0.0f, mode md = mode::free)
 			{
 				_level = lv;
 				_duration = d;
+				_mode = md;
 				_tuning = tuning_for(lv);
 				_rng = rng(seed);
 				_fov = fov_deg;
@@ -463,9 +505,13 @@ namespace sherbet
 			level current_level() const { return _level; }
 			duration current_duration() const { return _duration; }
 			const tuning &current_tuning() const { return _tuning; }
-			// 지금 표적의 **실제** 각반지름. 거리 배율이 곱해진 값이다 —
+			// 지금 표적의 **실제** 각반지름. 거리 배율과 진행 축소가 모두 곱해진 값이다 —
 			// 그리기도 판정도 반드시 이걸 쓴다(tuning.radius_deg 를 직접 쓰면 어긋난다).
-			float target_radius_deg() const { return _tuning.radius_deg * _target.scale; }
+			float target_radius_deg() const
+			{
+				return _tuning.radius_deg * _target.scale * ramp_scale(_stats.hits);
+			}
+			mode current_mode() const { return _mode; }
 			bool last_shot_hit() const { return _last_hit_ok; }
 			// 판 시작 방향. 표적은 이 주위 원뿔 안에서만 뜬다.
 			float anchor_yaw() const { return _anchor_yaw; }
@@ -494,7 +540,8 @@ namespace sherbet
 				float cone = _tuning.cone_deg;
 				// 여백은 **가장 커질 수 있는** 표적 기준으로 잡는다 — 평균으로 잡으면
 				// 가까이 뜬(큰) 표적이 화면 가장자리에서 잘린다.
-				const float edge = (_fov * 0.5f - _tuning.radius_deg * kDepthNear - 1.0f) * 0.5f;
+				// 진행 축소의 시작값(kRampStart)도 곱한다. 판 초반 표적이 제일 크다.
+				const float edge = (_fov * 0.5f - _tuning.radius_deg * kDepthNear * kRampStart - 1.0f) * 0.5f;
 				if (cone > edge) cone = edge;
 				if (cone < 0.5f) cone = 0.5f;
 
@@ -511,9 +558,35 @@ namespace sherbet
 				// 최소 간격보다 중요하다(화면 밖으로 나가는 것이 훨씬 나쁘다).
 				for (int attempt = 0; attempt < 24; ++attempt)
 				{
-					const float dist = cone * std::sqrt(_rng.unit()); // 원뿔 안 균일 분포
-					const float ang = _rng.range(0.0f, 360.0f);
-					direction_at(_anchor_yaw, _anchor_pitch, dist, ang, ty, tp);
+					// 수평 모드는 원뿔이 아니라 **선분**이다. 균일 분포 보정(sqrt)은 원의
+					// 넓이 때문에 넣은 것이라 선분에는 쓰면 안 된다 — 그대로 쓰면 표적이
+					// 바깥쪽에 몰린다.
+					const float dist = (_mode == mode::level)
+						? cone * _rng.unit()
+						: cone * std::sqrt(_rng.unit()); // 원뿔 안 균일 분포
+					if (_mode == mode::level)
+					{
+						// ⚠️ "수평" 은 **같은 높이(위도선)** 이지 대원(大圓)이 아니다.
+						//    direction_at 로 옆으로 돌리면 위도가 적도 쪽으로 휘어서
+						//    pitch 가 유지되지 않는다(호스트 테스트가 잡았다).
+						//    yaw 만 바꾸고 pitch 는 앵커 값 그대로 둔다.
+						//    위도선에서 각거리는 Δyaw·cos(pitch) 이므로 나눠서 보정한다.
+						ty = wrap_deg(_anchor_yaw + (_rng.unit() < 0.5f ? -yaw_span(dist) : yaw_span(dist)));
+						tp = _anchor_pitch;
+					}
+					else
+					{
+						// 원이 아니라 **타원**으로 뽑는다. 극좌표를 접평면 xy 로 펴서
+						// 세로만 눌러 준 뒤 다시 극좌표로 되돌린다.
+						constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+						constexpr float kRad2Deg = 180.0f / 3.14159265358979323846f;
+						const float ang = _rng.range(0.0f, 360.0f);
+						const float u = dist * std::cos(ang * kDeg2Rad);
+						const float v = dist * std::sin(ang * kDeg2Rad) * kVerticalSquash;
+						const float d2 = std::sqrt(u * u + v * v);
+						const float a2 = std::atan2(v, u) * kRad2Deg;
+						direction_at(_anchor_yaw, _anchor_pitch, d2, a2, ty, tp);
+					}
 					if (!have_prev || angular_distance(ty, tp, prev_yaw, prev_pitch) >= gap)
 						break;
 				}
@@ -527,10 +600,21 @@ namespace sherbet
 
 				if (_tuning.move_speed_deg > 0.0f)
 				{
-					constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-					const float mv = _rng.range(0.0f, 360.0f);
-					_target.vu = _tuning.move_speed_deg * std::cos(mv * kDeg2Rad);
-					_target.vv = _tuning.move_speed_deg * std::sin(mv * kDeg2Rad);
+					if (_mode == mode::level)
+					{
+						// 수평 모드는 이동도 좌우뿐이다. 위아래로 움직이면 "높이 고정" 이 깨진다.
+						_target.vu = _tuning.move_speed_deg * (_rng.unit() < 0.5f ? -1.0f : 1.0f);
+						_target.vv = 0.0f;
+					}
+					else
+					{
+						constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+						const float mv = _rng.range(0.0f, 360.0f);
+						_target.vu = _tuning.move_speed_deg * std::cos(mv * kDeg2Rad);
+						// 이동도 세로를 눌러 둔다 — 배치만 눌러 놓고 이동이 위아래로
+						// 크게 흔들면 결국 세로 조준을 시키는 셈이다.
+						_target.vv = _tuning.move_speed_deg * std::sin(mv * kDeg2Rad) * kVerticalSquash;
+					}
 				}
 				else
 				{
@@ -565,6 +649,15 @@ namespace sherbet
 				recompute_target();
 			}
 
+			// 각거리 dist 에 해당하는 yaw 차이. 위도선 위에서는 1도를 돌아도 실제 각거리가
+			// cos(pitch) 배로 줄어들기 때문에 나눠서 보정한다. 극 근처에서 폭주하지 않게 자른다.
+			float yaw_span(float dist) const
+			{
+				constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+				const float cp = std::cos(_anchor_pitch * kDeg2Rad);
+				return dist / (cp > 0.1f ? cp : 0.1f);
+			}
+
 			// 접평면 오프셋 → 절대 방향.
 			void recompute_target()
 			{
@@ -572,6 +665,13 @@ namespace sherbet
 				if (r <= 1e-6f)
 				{
 					_target.yaw = _target.home_yaw;
+					_target.pitch = _target.home_pitch;
+					return;
+				}
+				if (_mode == mode::level)
+				{
+					// 이동도 위도선을 따른다 — 높이는 절대 안 바뀐다.
+					_target.yaw = wrap_deg(_target.home_yaw + yaw_span(_target.off_u));
 					_target.pitch = _target.home_pitch;
 					return;
 				}
@@ -589,6 +689,7 @@ namespace sherbet
 
 			level _level = level::normal;
 			duration _duration = duration::s60;
+			mode _mode = mode::free;
 			tuning _tuning = tuning_for(level::normal);
 			rng _rng { 1u };
 			float _fov = 90.0f;

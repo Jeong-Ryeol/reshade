@@ -538,7 +538,7 @@ namespace reshade
 		bool _sherbet_motion_on = false;    // 메인 토글(기본 꺼짐)
 		bool _sherbet_motion_hud = true;    // 화면에 작은 숫자판(메인 토글이 켜져 있을 때만)
 
-		// SHERBET: 에임 트레이너(「사격 훈련」 탭). 판정·배치·점수는 전부 sherbet_aim.hpp 다.
+		// SHERBET: 에임 트레이너(「에임 랩」 탭). 판정·배치·점수는 전부 sherbet_aim.hpp 다.
 		// 여기 있는 것은 그 순수 로직을 게임에 물리는 배선뿐이다.
 		sherbet::aim::session _sherbet_aim;
 		// 가상 카메라. 판이 시작될 때 (0,0) 에서 출발해 raw 마우스 델타로만 굴린다.
@@ -552,10 +552,13 @@ namespace reshade
 		float _sherbet_aim_fov = 70.0f;   // 그리기 전용. 판정에는 쓰지 않는다
 		int _sherbet_aim_level = 1;       // 0=쉬움 1=보통 2=어려움 3=헬
 		int _sherbet_aim_duration = 2;    // 0=10초 1=30초 2=60초
+		int _sherbet_aim_mode = 0;        // 0=자유 1=수평(높이 고정)
 		bool _sherbet_aim_trial = false;  // 이번 판이 맛보기(미구매)인가
-		// 개인 최고 기록 [난이도][시간]. HUD 의 "내 최고기록보다" 비교에 쓴다.
+		// 개인 최고 기록 [난이도][시간][방식]. HUD 의 "내 최고기록보다" 비교에 쓴다.
 		// 리더보드(서버)와 별개다 — 10초도 여기에는 남는다.
-		int _sherbet_aim_best[sherbet::aim::kLevelCount][sherbet::aim::kDurationCount] = {};
+		// ⚠️ 방식(자유/수평)도 칸을 가른다. 수평이 더 쉬워서 섞으면 자유 모드에서
+		//    영원히 "최고기록보다 낮음" 만 뜬다.
+		int _sherbet_aim_best[sherbet::aim::kLevelCount][sherbet::aim::kDurationCount][sherbet::aim::kModeCount] = {};
 
 		// 리더보드. 조회·제출은 워커 스레드에서 돈다(렌더 스레드에서 HTTP 를 부르면
 		// 서버가 죽었을 때 게임이 5초 멈춘다).
@@ -569,6 +572,7 @@ namespace reshade
 		bool _sherbet_aim_board_ok = false;   // 한 번이라도 받아왔는가
 		int _sherbet_aim_board_level = -1;    // 지금 화면에 뜬 표가 어느 조합인지
 		int _sherbet_aim_board_duration = -1;
+		int _sherbet_aim_board_mode = -1;
 		bool _sherbet_aim_submitted = false;  // 이번 판 기록을 이미 보냈는가
 		std::string _sherbet_aim_msg;         // 실패 안내 등
 		float _sherbet_aim_msg_timer = 0.0f;
@@ -700,7 +704,7 @@ namespace reshade
 		void draw_gui_about();
 		void draw_gui_market();
 		void draw_gui_crosshair_market(); // 「마켓」 탭의 조준점 세그먼트
-		// SHERBET: 「사격 훈련」 탭(에임 트레이너). 난이도·시간 선택, 시작, 결과, 리더보드.
+		// SHERBET: 「에임 랩」 탭(에임 트레이너). 난이도·시간 선택, 시작, 결과, 리더보드.
 		void draw_gui_aimlab();
 		// 오버레이가 닫힌 채로 화면에 그리는 부분 — 카운트다운, 표적, 좌측 HUD.
 		// ⚠️ 조준점·궤적과 같은 ForegroundDrawList 다(오버레이 게이트 바깥).

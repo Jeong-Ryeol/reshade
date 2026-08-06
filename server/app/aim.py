@@ -40,6 +40,11 @@ SCORES_PATH = os.path.join(
 LEVELS = ("easy", "normal", "hard", "hell")
 DURATIONS = {"s30": 30, "s60": 60}   # 순위에 올라가는 길이만 받는다(10초 없음)
 
+# 조준 모드. free=사방, level=수평(좌우만, 높이 고정).
+# ⚠️ **모드가 표 키에 들어간다.** 수평은 자유도가 하나 줄어 더 쉬우므로, 같은 표에
+#    섞으면 자유 모드 기록이 전부 밀린다. 표가 4x2x2=16 개로 늘지만 그게 정직하다.
+MODES = ("free", "level")
+
 # 사람이 낼 수 있는 상한. 초당 3개는 아주 잘하는 사람의 쉬움 난이도보다도 위다 —
 # 넉넉하게 잡아 정상 기록을 자르지 않으면서, 자동화된 값은 걸러낸다.
 MAX_HITS_PER_SECOND = 3.0
@@ -51,9 +56,13 @@ TOP_N = 5
 MAX_NAME = 40
 
 
-def board_key(level: str, duration: str) -> str:
-    """난이도·길이 조합 하나가 리더보드 하나다. 8개(4×2)가 된다."""
-    return f"{level}:{duration}"
+def board_key(level: str, duration: str, mode: str = "free") -> str:
+    """난이도·길이·모드 조합 하나가 리더보드 하나다. 16개(4×2×2)가 된다.
+
+    ⚠️ 기본값이 "free" 인 이유: 모드가 생기기 전(1.7.4 이하)에 쌓인 기록은 전부
+    자유 모드다. 그 키를 그대로 유지해야 기존 기록이 사라지지 않는다.
+    """
+    return f"{level}:{duration}" if mode == "free" else f"{mode}:{level}:{duration}"
 
 
 def valid_level(level: str) -> bool:
@@ -62,6 +71,10 @@ def valid_level(level: str) -> bool:
 
 def valid_duration(duration: str) -> bool:
     return duration in DURATIONS
+
+
+def valid_mode(mode: str) -> bool:
+    return mode in MODES
 
 
 def plausible(level: str, duration: str, hits: int, shots: int) -> bool:
@@ -121,14 +134,15 @@ def save_scores(data: dict, path: str | None = None) -> None:
 
 
 def upsert_score(data: dict, level: str, duration: str, user_id: str,
-                 name: str, hits: int, shots: int, now: float | None = None) -> bool:
+                 name: str, hits: int, shots: int, now: float | None = None,
+                 mode: str = "free") -> bool:
     """개인 최고 기록만 남긴다. 갱신했으면 True.
 
     ⚠️ 더 낮은 점수로 덮어쓰지 않는다. 안 그러면 1등을 한 뒤 아무 판이나 대충 돌리면
     자기 기록이 사라진다 — 리더보드가 '마지막 판' 표가 되어 버린다.
     이름은 매번 갱신한다(디스코드에서 바꿀 수 있으므로).
     """
-    key = board_key(level, duration)
+    key = board_key(level, duration, mode)
     board = data.setdefault(key, {})
     prev = board.get(user_id)
     ts = time.time() if now is None else now
@@ -144,10 +158,10 @@ def upsert_score(data: dict, level: str, duration: str, user_id: str,
     return True
 
 
-def ranked_entries(data: dict, level: str, duration: str) -> list[dict]:
+def ranked_entries(data: dict, level: str, duration: str, mode: str = "free") -> list[dict]:
     """점수 내림차순. 동점이면 먼저 낸 사람이 위다 — 나중에 온 사람이 동점으로
     앞지르면 앞 사람은 아무것도 안 했는데 순위가 밀린다."""
-    board = data.get(board_key(level, duration), {})
+    board = data.get(board_key(level, duration, mode), {})
     rows = []
     for uid, e in board.items():
         rows.append({
@@ -196,6 +210,8 @@ class ScoreBody(BaseModel):
     duration: str
     hits: int
     shots: int
+    # 모드가 생기기 전 클라(1.7.4 이하)는 이 필드를 안 보낸다 — 자유 모드로 본다.
+    mode: str = "free"
 
 
 def _identity(authorization: str | None, settings: Settings) -> dict:
@@ -216,7 +232,7 @@ def aim_score(
 ) -> dict:
     payload = _identity(authorization, settings)
 
-    if not valid_level(body.level) or not valid_duration(body.duration):
+    if not valid_level(body.level) or not valid_duration(body.duration) or not valid_mode(body.mode):
         # 10초를 올리려 한 경우도 여기로 온다. 클라가 애초에 안 보내지만,
         # 서버가 계약의 단일 지점이어야 한다.
         raise HTTPException(status_code=400, detail="bad_board")
@@ -229,11 +245,12 @@ def aim_score(
 
     data = load_scores()
     changed = upsert_score(data, body.level, body.duration, user_id,
-                           str(payload.get("name", "")), body.hits, body.shots)
+                           str(payload.get("name", "")), body.hits, body.shots,
+                           mode=body.mode)
     if changed:
         save_scores(data)
 
-    rows = ranked_entries(data, body.level, body.duration)
+    rows = ranked_entries(data, body.level, body.duration, body.mode)
     # 숫자는 문자열, 불리언은 진짜 불리언 — public_rows() 주석 참조.
     # ⚠️ 최상위 키를 my_* 로 쓰는 이유는 아래 aim_leaderboard() 주석 참조.
     return {
@@ -248,16 +265,17 @@ def aim_score(
 def aim_leaderboard(
     level: str,
     duration: str,
+    mode: str = "free",   # 모드 이전 클라와의 호환 — 안 보내면 자유 모드
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     payload = _identity(authorization, settings)
-    if not valid_level(level) or not valid_duration(duration):
+    if not valid_level(level) or not valid_duration(duration) or not valid_mode(mode):
         raise HTTPException(status_code=400, detail="bad_board")
 
     user_id = str(payload.get("sub", ""))
     data = load_scores()
-    rows = ranked_entries(data, level, duration)
+    rows = ranked_entries(data, level, duration, mode)
     me = rank_of(rows, user_id)
     my_hits = 0
     for r in rows:
@@ -272,6 +290,7 @@ def aim_leaderboard(
     return {
         "level": level,
         "duration": duration,
+        "mode": mode,
         "top": public_rows(rows),
         "my_rank": str(me),
         "my_hits": str(my_hits),

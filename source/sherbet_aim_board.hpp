@@ -2,7 +2,7 @@
  * Copyright (C) 2026 정렬 (Jeong-Ryeol)
  * SPDX-License-Identifier: BSD-3-Clause
  */
-// Sherbet 사격 훈련 리더보드 응답 파서 — 순수 로직(플랫폼 비의존).
+// Sherbet 에임 랩 리더보드 응답 파서 — 순수 로직(플랫폼 비의존).
 //
 // 서버(server/app/aim.py)의 /aim/leaderboard · /aim/score 응답을 읽는다.
 // imgui 도 Windows 도 필요 없어서 호스트 테스트로 전수 검증하고, 서버 테스트가

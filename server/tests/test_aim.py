@@ -54,7 +54,13 @@ def test_boards():
     assert valid_duration("s30") and valid_duration("s60")
     assert set(DURATIONS) == {"s30", "s60"}
 
+    # ★ 자유 모드 키는 모드가 생기기 전과 **똑같아야** 한다 — 안 그러면 1.7.4 이하에서
+    #   쌓인 기록이 통째로 사라진다.
     assert board_key("hell", "s60") == "hell:s60"
+    assert board_key("hell", "s60", "free") == "hell:s60"
+    # 수평은 자유도가 하나 줄어 더 쉬우므로 표가 갈린다.
+    assert board_key("hell", "s60", "level") == "level:hell:s60"
+    assert board_key("hell", "s60", "level") != board_key("hell", "s60", "free")
 
 
 # ── 타당성 ──────────────────────────────────────────────────────────────────
@@ -230,6 +236,38 @@ def test_score_rejects_bad_board_and_implausible(settings, monkeypatch, tmp_path
         # 거부된 요청은 아무것도 남기지 않는다.
         lb = c.get("/aim/leaderboard?level=hell&duration=s60", headers=h).json()
         assert lb["total"] == "0"
+    finally:
+        _reset()
+
+
+def test_modes_are_separate_boards(settings, monkeypatch, tmp_path):
+    """수평 모드 기록이 자유 모드 표에 섞이면 안 된다 — 더 쉬운 판이 순위를 밀어낸다."""
+    _use_tmp_scores(monkeypatch, tmp_path)
+    _override(settings)
+    try:
+        c = TestClient(app)
+        h = _auth(settings, "u1", "정렬")
+
+        c.post("/aim/score", headers=h,
+               json={"level": "hard", "duration": "s60", "hits": 30, "shots": 40, "mode": "free"})
+        c.post("/aim/score", headers=h,
+               json={"level": "hard", "duration": "s60", "hits": 55, "shots": 60, "mode": "level"})
+
+        free = c.get("/aim/leaderboard?level=hard&duration=s60&mode=free", headers=h).json()
+        lvl = c.get("/aim/leaderboard?level=hard&duration=s60&mode=level", headers=h).json()
+        assert free["top"][0]["hits"] == "30"
+        assert lvl["top"][0]["hits"] == "55"
+        assert free["total"] == "1" and lvl["total"] == "1"
+
+        # mode 를 안 보내면 자유 모드다 — 구버전 클라 호환.
+        old = c.get("/aim/leaderboard?level=hard&duration=s60", headers=h).json()
+        assert old["top"][0]["hits"] == "30"
+
+        # 없는 모드는 거부.
+        r = c.post("/aim/score", headers=h,
+                   json={"level": "hard", "duration": "s60", "hits": 5, "shots": 5, "mode": "nope"})
+        assert r.status_code == 400 and r.json()["detail"] == "bad_board"
+        assert c.get("/aim/leaderboard?level=hard&duration=s60&mode=nope", headers=h).status_code == 400
     finally:
         _reset()
 

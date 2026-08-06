@@ -249,6 +249,75 @@ static void test_trial_length()
 	assert(feq(t.total_seconds(), 30.0f, 1e-2f));
 }
 
+// ── 진행에 따른 축소 ─────────────────────────────────────────────────────────
+static void test_ramp()
+{
+	// 처음엔 크고, 맞출수록 작아지고, 다 줄면 더 안 줄어든다.
+	assert(feq(ramp_scale(0), kRampStart));
+	assert(feq(ramp_scale(-5), kRampStart));           // 음수 방어
+	assert(feq(ramp_scale(kRampHits), kRampEnd));
+	assert(feq(ramp_scale(kRampHits * 10), kRampEnd)); // 더 내려가지 않는다
+	assert(ramp_scale(5) < ramp_scale(0));
+	assert(ramp_scale(20) < ramp_scale(5));
+	assert(ramp_scale(20) > ramp_scale(kRampHits));
+	// 단조 감소여야 한다 — 중간에 커지면 사용자가 뭐가 뭔지 모른다.
+	for (int i = 1; i <= kRampHits + 5; ++i)
+		assert(ramp_scale(i) <= ramp_scale(i - 1) + 1e-6f);
+}
+
+// ── 수평 모드 ────────────────────────────────────────────────────────────────
+static void test_level_mode()
+{
+	// ★ 실전에서는 대부분 같은 높이에 서 있다. 이 모드는 위아래를 안 쓴다.
+	for (level lv : { level::easy, level::hell }) // 이동 없는 것과 있는 것 둘 다
+	{
+		session s;
+		s.start(lv, duration::s60, 4242u, 0.0f, 12.0f, 90.0f, 0.0f, mode::level);
+		advance(s, kCountdownSeconds + 0.1f, 0.0f, 12.0f);
+		assert(s.current_phase() == phase::running);
+		assert(s.current_mode() == mode::level);
+
+		const float anchor_p = s.anchor_pitch();
+		float cam_y = 0.0f, cam_p = 12.0f;
+		for (int i = 0; i < 120; ++i)
+		{
+			const target t = s.current_target();
+			// 높이가 앵커와 같아야 한다. 이동 난이도에서도 위아래로 새면 안 된다.
+			assert(feq(t.pitch, anchor_p, 0.2f));
+			cam_y = t.yaw; cam_p = t.pitch;
+			assert(s.shoot(cam_y, cam_p));
+			// 이동 표적이 위아래로 흐르지 않는지도 본다.
+			for (int k = 0; k < 30; ++k)
+				s.tick(1.0f / 60.0f, cam_y, cam_p);
+			assert(feq(s.current_target().pitch, anchor_p, 0.5f));
+		}
+	}
+
+	// 자유 모드는 반대로 위아래를 실제로 쓴다(안 그러면 모드를 나눈 의미가 없다).
+	// 다만 **원이 아니라 타원**이다 — 사람은 대체로 같은 높이에 서 있어서 세로 조준이
+	// 드물다. 가로는 그대로 두고 세로만 절반으로 눌렀다.
+	session f;
+	f.start(level::normal, duration::s60, 77u, 0.0f, 0.0f, 90.0f, 0.0f, mode::free);
+	advance(f, kCountdownSeconds + 0.1f);
+	bool saw_pitch = false;
+	float max_dy = 0.0f, max_dp = 0.0f;
+	for (int i = 0; i < 400; ++i)
+	{
+		const target t = f.current_target();
+		const float dp = std::fabs(t.pitch - f.anchor_pitch());
+		const float dy = std::fabs(wrap_deg(t.yaw - f.anchor_yaw()));
+		if (dp > 1.0f) saw_pitch = true;
+		if (dp > max_dp) max_dp = dp;
+		if (dy > max_dy) max_dy = dy;
+		f.shoot(t.yaw, t.pitch);
+	}
+	assert(saw_pitch);
+	// ★ 세로 폭이 가로 폭의 대략 절반이어야 한다. 표본이 많으니 양 극단에 닿는다.
+	assert(max_dp < max_dy);
+	assert(max_dp < max_dy * 0.75f);
+	assert(max_dp > max_dy * 0.25f);
+}
+
 // ── 8. 판 진행: 카운트다운 → 시작 ────────────────────────────────────────────
 static void test_phase_flow()
 {
@@ -382,8 +451,10 @@ static void test_spawn_rules()
 
 			// ★ 거리 배율 — 표적마다 크기가 다르되 정해진 범위 안이어야 한다.
 			assert(t.scale >= kDepthFar - 1e-3f && t.scale <= kDepthNear + 1e-3f);
-			// ★ 보이는 크기와 맞는 크기가 같아야 한다. 판정 반지름은 배율이 곱해진 값이다.
-			assert(feq(s.target_radius_deg(), tn.radius_deg * t.scale, 1e-3f));
+			// ★ 보이는 크기와 맞는 크기가 같아야 한다.
+			//   판정 반지름 = 기본 × 거리 배율 × 진행 축소. 셋 다 곱해져야 한다.
+			assert(feq(s.target_radius_deg(),
+				tn.radius_deg * t.scale * ramp_scale(s.result().hits), 1e-3f));
 
 			prev_y = t.yaw; prev_p = t.pitch; have_prev = true;
 			cam_y = t.yaw; cam_p = t.pitch;
@@ -613,6 +684,8 @@ int main()
 	test_project();
 	test_accuracy();
 	test_trial_length();
+	test_ramp();
+	test_level_mode();
 	test_phase_flow();
 	test_frame_rate_independence();
 	test_zero_latency();

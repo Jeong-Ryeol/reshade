@@ -2,7 +2,7 @@
  * Copyright (C) 2026 정렬 (Jeong-Ryeol)
  * SPDX-License-Identifier: BSD-3-Clause
  */
-// Sherbet 사격 훈련 리더보드 — 네트워크 글루.
+// Sherbet 에임 랩 리더보드 — 네트워크 글루.
 //
 // 파싱은 sherbet_aim_board.hpp(순수, 호스트 테스트), HTTP 는 sherbet_http, 여기는
 // 그 둘을 스레드에 얹는 얇은 층이다.
@@ -30,6 +30,7 @@ namespace sherbet
 		// **셋이 같아야 한다.** 어긋나면 기록이 엉뚱한 표에 들어가거나 통째로 거부된다.
 		const char *level_key(level lv);
 		const char *duration_key(duration d);
+		const char *mode_key(mode m);
 
 		class net
 		{
@@ -40,9 +41,9 @@ namespace sherbet
 			net &operator=(const net &) = delete;
 
 			// 리더보드 조회를 시작한다. 이미 도는 중이면 무시한다(연타 방지).
-			void begin_fetch(const std::string &bearer, level lv, duration d);
+			void begin_fetch(const std::string &bearer, level lv, duration d, mode m);
 			// 기록 제출을 시작한다. 응답에 갱신된 표가 같이 오므로 따로 조회하지 않는다.
-			void begin_submit(const std::string &bearer, level lv, duration d, int hits, int shots);
+			void begin_submit(const std::string &bearer, level lv, duration d, mode m, int hits, int shots);
 
 			bool active() const { return _active.load(); }
 
@@ -58,7 +59,7 @@ namespace sherbet
 			}
 
 		private:
-			void run(std::string bearer, level lv, duration d, bool submit, int hits, int shots);
+			void run(std::string bearer, level lv, duration d, mode m, bool submit, int hits, int shots);
 
 			std::thread _worker;
 			std::atomic<bool> _active { false };
