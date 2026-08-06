@@ -235,9 +235,10 @@ def aim_score(
 
     rows = ranked_entries(data, body.level, body.duration)
     # 숫자는 문자열, 불리언은 진짜 불리언 — public_rows() 주석 참조.
+    # ⚠️ 최상위 키를 my_* 로 쓰는 이유는 아래 aim_leaderboard() 주석 참조.
     return {
         "updated": changed,
-        "rank": str(rank_of(rows, user_id)),
+        "my_rank": str(rank_of(rows, user_id)),
         "total": str(len(rows)),
         "top": public_rows(rows),
     }
@@ -263,11 +264,16 @@ def aim_leaderboard(
         if r["user_id"] == user_id:
             my_hits = r["hits"]
             break
+    # ⚠️ 최상위 필드 이름이 `top` 줄의 필드와 **겹치면 안 된다.**
+    # 클라의 평면 헬퍼(sherbet_json.hpp)는 중첩을 모르고 body 전체에서 첫 "key" 를
+    # 찾는다. 최상위를 그냥 "rank" 로 두면 top[0] 의 "rank" 가 먼저 걸려서, 내 순위가
+    # 항상 1위로 읽힌다 — 아무 오류도 없이 조용히 틀린다. 그래서 my_ 를 붙인다.
+    # (설계 §3.3: 새 페이로드는 평면 파서에 맞게 설계한다.)
     return {
         "level": level,
         "duration": duration,
         "top": public_rows(rows),
-        "rank": str(me),
-        "hits": str(my_hits),
+        "my_rank": str(me),
+        "my_hits": str(my_hits),
         "total": str(len(rows)),
     }

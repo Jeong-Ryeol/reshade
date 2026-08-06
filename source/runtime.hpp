@@ -13,6 +13,7 @@
 #include "sherbet_magnifier.hpp"
 #include "sherbet_spray.hpp"
 #include "sherbet_aim.hpp"
+#include "sherbet_aim_net.hpp"
 #include "sherbet_crosshair.hpp"
 #include "sherbet_xhmarket.hpp"
 #include "sherbet_motion.hpp"
@@ -555,6 +556,17 @@ namespace reshade
 		// 개인 최고 기록 [난이도][시간]. HUD 의 "내 최고기록보다" 비교에 쓴다.
 		// 리더보드(서버)와 별개다 — 10초도 여기에는 남는다.
 		int _sherbet_aim_best[sherbet::aim::kLevelCount][sherbet::aim::kDurationCount] = {};
+
+		// 리더보드. 조회·제출은 워커 스레드에서 돈다(렌더 스레드에서 HTTP 를 부르면
+		// 서버가 죽었을 때 게임이 5초 멈춘다).
+		sherbet::aim::net _sherbet_aim_net;
+		sherbet::aim::board _sherbet_aim_board;
+		bool _sherbet_aim_board_ok = false;   // 한 번이라도 받아왔는가
+		int _sherbet_aim_board_level = -1;    // 지금 화면에 뜬 표가 어느 조합인지
+		int _sherbet_aim_board_duration = -1;
+		bool _sherbet_aim_submitted = false;  // 이번 판 기록을 이미 보냈는가
+		std::string _sherbet_aim_msg;         // 실패 안내 등
+		float _sherbet_aim_msg_timer = 0.0f;
 		int _sherbet_motion_lag = 0;        // 화면 ↔ 마우스 정렬 보정(프레임). 엔진 입력 지연만큼 어긋난다
 		api::resource _sherbet_motion_stage[kSherbetMotionSlots] = {};
 		bool _sherbet_motion_slot_full[kSherbetMotionSlots] = {};

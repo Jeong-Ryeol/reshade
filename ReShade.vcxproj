@@ -663,6 +663,7 @@
     <ClCompile Include="source\sherbet_http.cpp" />
     <ClCompile Include="source\sherbet_auth.cpp" />
     <ClCompile Include="source\sherbet_content.cpp" />
+    <ClCompile Include="source\sherbet_aim_net.cpp" />
     <ClCompile Include="source\sherbet_themes.cpp" />
     <ClCompile Include="source\sherbet_theme_state.cpp" />
     <ClCompile Include="source\sherbet_ui.cpp" />
@@ -784,6 +785,9 @@
     <ClInclude Include="source\runtime.hpp" />
     <ClInclude Include="source\runtime_internal.hpp" />
     <ClInclude Include="source\runtime_manager.hpp" />
+    <ClInclude Include="source\sherbet_aim.hpp" />
+    <ClInclude Include="source\sherbet_aim_board.hpp" />
+    <ClInclude Include="source\sherbet_aim_net.hpp" />
     <ClInclude Include="source\sherbet_auth.hpp" />
     <ClInclude Include="source\sherbet_auth_core.hpp" />
     <ClInclude Include="source\sherbet_content.hpp" />

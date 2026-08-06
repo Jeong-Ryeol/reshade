@@ -171,24 +171,28 @@ def test_score_submit_and_board(settings, monkeypatch, tmp_path):
         assert r.status_code == 200
         j = r.json()
         # updated 는 진짜 불리언(json_bool 로 읽는다), 숫자는 문자열.
-        assert j["updated"] is True and j["rank"] == "1" and j["total"] == "1"
+        # ★ 최상위는 my_rank 다 — 그냥 "rank" 로 두면 클라 평면 파서가 top[0] 의
+        #   "rank" 를 먼저 집어서 내 순위가 항상 1위로 읽힌다(조용히 틀린다).
+        assert j["updated"] is True and j["my_rank"] == "1" and j["total"] == "1"
+        assert "rank" not in j  # 최상위에 겹치는 키가 없어야 한다
         assert j["top"][0]["name"] == "정렬"
 
         # 두 번째 사람이 더 잘하면 1위가 바뀐다.
         r2 = c.post("/aim/score", headers=_auth(settings, "u2", "서아연"),
                     json={"level": "hard", "duration": "s60", "hits": 55, "shots": 60})
-        assert r2.json()["rank"] == "1"
+        assert r2.json()["my_rank"] == "1"
 
         # 첫 사람의 순위는 2위로 밀린다.
         lb = c.get("/aim/leaderboard?level=hard&duration=s60",
                    headers=_auth(settings, "u1", "정렬")).json()
-        assert lb["rank"] == "2" and lb["hits"] == "40" and lb["total"] == "2"
+        assert lb["my_rank"] == "2" and lb["my_hits"] == "40" and lb["total"] == "2"
+        assert "rank" not in lb and "hits" not in lb  # top 줄과 키가 겹치면 안 된다
         assert [t["name"] for t in lb["top"]] == ["서아연", "정렬"]
 
         # 다른 난이도는 완전히 별개 표다.
         other = c.get("/aim/leaderboard?level=easy&duration=s60",
                       headers=_auth(settings, "u1")).json()
-        assert other["top"] == [] and other["rank"] == "0"
+        assert other["top"] == [] and other["my_rank"] == "0"
 
         # 실제로 디스크에 남았다.
         with open(path, encoding="utf-8") as f:
@@ -244,6 +248,6 @@ def test_leaderboard_shows_top_five_only(settings, monkeypatch, tmp_path):
         assert [t["rank"] for t in lb["top"]] == ["1", "2", "3", "4", "5"]
         assert lb["total"] == "8"
         # 꼴찌도 자기 순위는 안다 — 5등 밖이라고 아무것도 안 보이면 다시 안 한다.
-        assert lb["rank"] == "8"
+        assert lb["my_rank"] == "8"
     finally:
         _reset()

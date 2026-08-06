@@ -6728,6 +6728,22 @@ void reshade::runtime::draw_gui_crosshair_market()
 // 매 프레임. 스프레이 샘플링과 **같은 자리**에서 같은 raw 델타를 나눠 받는다.
 void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool fire)
 {
+	// 워커 결과 수거는 판 상태와 무관하게 매 프레임 한다 — 아래에서 early-out 하면
+	// 판을 안 하는 동안 받아온 리더보드가 영영 화면에 안 뜬다.
+	{
+		bool was_submit = false, updated = false;
+		if (_sherbet_aim_net.take_board(_sherbet_aim_board, was_submit, updated))
+			_sherbet_aim_board_ok = true;
+		std::string err;
+		if (_sherbet_aim_net.take_error(err))
+		{
+			_sherbet_aim_msg = err;
+			_sherbet_aim_msg_timer = 6.0f;
+		}
+	}
+	if (_sherbet_aim_msg_timer > 0.0f)
+		_sherbet_aim_msg_timer = ImMax(0.0f, _sherbet_aim_msg_timer - dt);
+
 	const sherbet::aim::phase ph = _sherbet_aim.current_phase();
 	if (ph == sherbet::aim::phase::idle)
 		return;
@@ -6757,7 +6773,7 @@ void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool 
 
 	_sherbet_aim.tick(dt, _sherbet_aim_cam_yaw, _sherbet_aim_cam_pitch);
 
-	// 방금 끝났으면 개인 최고 기록 갱신.
+	// 방금 끝났으면 개인 최고 기록 갱신 + 리더보드 제출.
 	if (_sherbet_aim.current_phase() == sherbet::aim::phase::finished && !_sherbet_aim_trial)
 	{
 		const int li = static_cast<int>(_sherbet_aim.current_level());
@@ -6768,6 +6784,18 @@ void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool 
 				_sherbet_aim_best[li][di] = _sherbet_aim.result().hits;
 				save_config();
 			}
+
+		// 순위에 올라가는 길이만 보낸다(10초는 연습용). 판당 정확히 한 번.
+		if (!_sherbet_aim_submitted && sherbet::aim::ranked(_sherbet_aim.current_duration()) &&
+			sherbet::auth::enabled() && _sherbet_auth.is_authed())
+		{
+			_sherbet_aim_submitted = true;
+			_sherbet_aim_net.begin_submit(_sherbet_auth.token(), _sherbet_aim.current_level(),
+				_sherbet_aim.current_duration(), _sherbet_aim.result().hits, _sherbet_aim.result().shots);
+			// 제출 응답에 갱신된 표가 같이 오므로 화면 표를 이 조합으로 맞춰 둔다.
+			_sherbet_aim_board_level = static_cast<int>(_sherbet_aim.current_level());
+			_sherbet_aim_board_duration = static_cast<int>(_sherbet_aim.current_duration());
+		}
 	}
 }
 
@@ -6935,6 +6963,7 @@ void reshade::runtime::draw_gui_aimlab()
 	// 판 시작. 오버레이를 닫는다 — 열려 있으면 게임이 마우스를 못 받아 조준이 성립하지 않는다.
 	auto start_run = [&](bool trial) {
 		_sherbet_aim_trial = trial;
+		_sherbet_aim_submitted = false; // 판마다 정확히 한 번만 보낸다
 		_sherbet_aim_cam_yaw = 0.0f;
 		_sherbet_aim_cam_pitch = 0.0f;
 		const aim::level lv = static_cast<aim::level>(ImClamp(_sherbet_aim_level, 0, aim::kLevelCount - 1));
@@ -7042,6 +7071,83 @@ void reshade::runtime::draw_gui_aimlab()
 		if (sherbet::pill_button(ICON_FK_REFRESH "  \xEB\x8B\xA4\xEC\x8B\x9C \xED\x95\x98\xEA\xB8\xB0", true)) // "다시 하기"
 			start_run(_sherbet_aim_trial);
 		sherbet::end_card();
+	}
+
+	// ── 리더보드 ─────────────────────────────────────────────────────────────
+	ImGui::Spacing();
+	if (ImGui::CollapsingHeader(ICON_FK_USERS "  \xEB\xA6\xAC\xEB\x8D\x94\xEB\xB3\xB4\xEB\x93\x9C", ImGuiTreeNodeFlags_DefaultOpen)) // "리더보드"
+	{
+		const aim::duration cur_du = static_cast<aim::duration>(ImClamp(_sherbet_aim_duration, 0, aim::kDurationCount - 1));
+		const aim::level cur_lv = static_cast<aim::level>(ImClamp(_sherbet_aim_level, 0, aim::kLevelCount - 1));
+
+		if (!aim::ranked(cur_du))
+		{
+			// 조용히 빈 표를 보여주면 10초로 잘 나온 사람이 순위를 찾다가 헤맨다.
+			ImGui::TextDisabled("%s", "10\xEC\xB4\x88\xEB\x8A\x94 \xEC\x97\xB0\xEC\x8A\xB5\xEC\x9A\xA9\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\x80 30\xEC\xB4\x88\xEC\x99\x80 60\xEC\xB4\x88\xEB\xA7\x8C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEC\x9A\x94"); // "10초는 연습용이에요 — 기록은 30초와 60초만 올라가요"
+		}
+		else if (!(sherbet::auth::enabled() && _sherbet_auth.is_authed()))
+		{
+			ImGui::TextDisabled("%s", "\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8\xED\x95\x98\xEB\xA9\xB4 \xEC\x88\x9C\xEC\x9C\x84\xEB\xA5\xBC \xEB\xB3\xBC \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94"); // "로그인하면 순위를 볼 수 있어요"
+		}
+		else
+		{
+			// 고른 조합이 화면의 표와 다르면 자동으로 받아온다. 사용자가 새로고침을
+			// 눌러야만 갱신되면, 난이도를 바꿔놓고 남의 표를 자기 것으로 착각한다.
+			const bool stale = !_sherbet_aim_board_ok
+				|| _sherbet_aim_board_level != static_cast<int>(cur_lv)
+				|| _sherbet_aim_board_duration != static_cast<int>(cur_du);
+			if (stale && !_sherbet_aim_net.active())
+			{
+				_sherbet_aim_board_level = static_cast<int>(cur_lv);
+				_sherbet_aim_board_duration = static_cast<int>(cur_du);
+				_sherbet_aim_board_ok = false;
+				_sherbet_aim_net.begin_fetch(_sherbet_auth.token(), cur_lv, cur_du);
+			}
+
+			if (_sherbet_aim_net.active())
+			{
+				ImGui::TextDisabled("%s", "\xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91"); // "불러오는 중"
+			}
+			else if (sherbet::pill_button(ICON_FK_REFRESH "  \xEC\x83\x88\xEB\xA1\x9C\xEA\xB3\xA0\xEC\xB9\xA8", false)) // "새로고침"
+			{
+				_sherbet_aim_board_ok = false;
+				_sherbet_aim_net.begin_fetch(_sherbet_auth.token(), cur_lv, cur_du);
+			}
+
+			if (_sherbet_aim_board_ok)
+			{
+				if (_sherbet_aim_board.top.empty())
+				{
+					// 빈 표를 '없음' 이 아니라 '자리가 비어 있다' 로 보여준다 —
+					// 초기 공백이 약점이 아니라 유인이 된다.
+					ImGui::TextDisabled("%s", "\xEC\x95\x84\xEC\xA7\x81 \xEC\x95\x84\xEB\xAC\xB4\xEB\x8F\x84 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 1\xEC\x9C\x84 \xEC\x9E\x90\xEB\xA6\xAC\xEA\xB0\x80 \xEB\xB9\x84\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94"); // "아직 아무도 기록이 없어요 — 1위 자리가 비어 있어요"
+				}
+				else
+				{
+					const float name_x = _imgui_context->Style.WindowPadding.x + 2.6f * ImGui::GetFontSize();
+					const float hits_x = name_x + 9.0f * ImGui::GetFontSize();
+					for (const aim::board_row &r : _sherbet_aim_board.top)
+					{
+						ImGui::Text("%d", r.rank);
+						ImGui::SameLine(name_x);
+						ImGui::TextUnformatted(r.name.c_str());
+						ImGui::SameLine(hits_x);
+						ImGui::Text("%d   %.0f%%", r.hits, r.accuracy * 100.0f);
+					}
+				}
+				ImGui::Spacing();
+				// 5등 밖도 자기 순위는 안다 — 아무것도 안 보이면 다시 안 한다.
+				if (_sherbet_aim_board.my_rank > 0)
+					ImGui::Text("%s  %d / %d%s", "\xEB\x82\xB4 \xEC\x88\x9C\xEC\x9C\x84", // "내 순위"
+						_sherbet_aim_board.my_rank, _sherbet_aim_board.total, "\xEB\xAA\x85"); // "명"
+				else
+					ImGui::TextDisabled("%s", "\xEA\xB8\xB0\xEB\xA1\x9D \xEC\x97\x86\xEC\x9D\x8C"); // "기록 없음"
+			}
+		}
+
+		if (_sherbet_aim_msg_timer > 0.0f && !_sherbet_aim_msg.empty())
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", _sherbet_aim_msg.c_str());
+		ImGui::Spacing();
 	}
 
 	// ── 개인 최고 기록 ───────────────────────────────────────────────────────

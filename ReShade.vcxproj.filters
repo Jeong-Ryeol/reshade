@@ -417,6 +417,9 @@
     <ClCompile Include="source\sherbet_content.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
+    <ClCompile Include="source\sherbet_aim_net.cpp">
+      <Filter>core\runtime</Filter>
+    </ClCompile>
     <ClCompile Include="source\sherbet_themes.cpp">
       <Filter>core\runtime</Filter>
     </ClCompile>
@@ -777,6 +780,15 @@
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_content.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_aim.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_aim_board.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_aim_net.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
     <ClInclude Include="source\sherbet_http.hpp">
