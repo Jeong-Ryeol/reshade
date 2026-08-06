@@ -651,7 +651,7 @@ git commit -m "auth: SHERBET_ONLINE_AUTH 빌드 플래그 기본값(0) 추가"
     - `void tick();` — 오버레이 프레임마다 호출. 비동기 결과 반영(캐시 저장 등). 논블로킹.
     - `void begin_login();` — start→ShellExecute→poll 스레드 시작. 이미 진행 중이면 무시.
     - `bool login_active() const;` — 로그인 폴링 진행 중.
-    - `const char *status_text() const;` — 표시용 상태 문자열(UTF-8): "" / "로그인 대기중…" / "구매자 역할이 없습니다" / "연결 실패".
+    - `std::string status_text() const;` — 표시용 상태 문자열(락 안에서 복사한 값 반환)(UTF-8): "" / "로그인 대기중…" / "구매자 역할이 없습니다" / "연결 실패".
 
 동시성: 백그라운드 스레드가 결과를 `std::atomic`/뮤텍스 보호 필드에 쓰고, `tick()`이 메인 스레드에서 읽어 캐시 파일 기록. 상세는 아래.
 
@@ -686,7 +686,7 @@ namespace sherbet
 			void tick();
 			void begin_login();
 			bool login_active() const;
-			const char *status_text() const;
+			std::string status_text() const;
 
 		private:
 			void join_worker();
@@ -812,10 +812,10 @@ bool sherbet::auth::controller::login_active() const
 	return _login_active.load();
 }
 
-const char *sherbet::auth::controller::status_text() const
+std::string sherbet::auth::controller::status_text() const
 {
 	std::lock_guard<std::mutex> lk(_mtx);
-	return _status.c_str();
+	return _status; // 락 안에서 값 복사 — 반환 후 워커가 _status를 바꿔도 안전
 }
 
 void sherbet::auth::controller::tick()
@@ -953,7 +953,7 @@ git commit -m "auth: controller(캐시로드·비동기verify·로그인 흐름 
 		return;
 ```
 
-> `update_effects`가 매 프레임 초기에 호출되므로, 인증 전에는 이펙트가 로드/적용되지 않는다. 인증되면 다음 프레임부터 정상 진행. (게임 자체 렌더는 영향 없음.)
+> `update_effects`가 매 프레임 초기에 호출되므로, 인증 전에는 이펙트가 로드/적용되지 않는다. **주의:** `_frame_count`는 `on_present`에서 매 프레임 무조건 증가하므로, 잠금 상태로 프레임이 흐르면 `if (_frame_count == 0)` 최초-로드 원샷을 지나쳐 버린다. 따라서 잠금→인증 **전환 시점에 `reload_effects()`를 한 번 호출해 원샷을 재무장**해야 한다(`_sherbet_auth_was_locked` 엣지 추적). 그렇지 않으면 로그인 성공 후에도 이펙트가 자동 로드되지 않는다. (게임 자체 렌더는 영향 없음.)
 
 - [ ] **Step 4: 로컬 구문 선검증(가능 범위)**
 
@@ -1016,9 +1016,9 @@ git commit -m "auth: 런타임 배선 — 생성자 init + update_effects 이펙
 				_sherbet_auth.begin_login();
 			ImGui::EndDisabled();
 
-			// 상태 텍스트(대기중/거부 사유/실패)
-			const char *st = _sherbet_auth.status_text();
-			if (st && st[0] != '\0') { ImGui::Spacing(); centered_text(st); }
+			// 상태 텍스트(대기중/거부 사유/실패) — status_text()는 락 안에서 복사한 std::string 값 반환
+			const std::string st = _sherbet_auth.status_text();
+			if (!st.empty()) { ImGui::Spacing(); centered_text(st.c_str()); }
 
 			ImGui::Spacing();
 			centered_text("\xEB\xA1\x9C\xEA\xB7\xB8\xEC\x9D\xB8 \xED\x9B\x84 \xEC\x9E\x90\xEB\x8F\x99\xEC\x9C\xBC\xEB\xA1\x9C \xEC\xA7\x84\xED\x96\x89\xEB\x90\xA9\xEB\x8B\x88\xEB\x8B\xA4"); // "로그인 후 자동으로 진행됩니다"
