@@ -6914,39 +6914,41 @@ void reshade::runtime::draw_sherbet_aim_overlay()
 			// 셰이더 없이 동심원을 겹쳐 그린다. 안쪽으로 갈수록 중심을 광원 쪽으로
 			// 조금씩 밀고 색을 밝게 보간하면 평평한 원이 공처럼 읽힌다.
 			// 도형만 그리므로 폰트 아틀라스와 무관하다 — 크기가 매 프레임 변해도 안전하다.
-			const ImVec2 lightdir(-0.42f, -0.42f); // 좌상단 광원
-			// 단계 수를 반지름에 맞춘다. 작은 표적에 16단계는 낭비고 뭉개져 보인다.
-			const int steps = ImClamp(static_cast<int>(r_px / 2.0f), 4, 16);
+			const ImVec2 lightdir(-0.40f, -0.40f); // 좌상단 광원
+			// 단계가 많을수록 매끈하다. 도형만 그리므로 비용은 삼각형 몇백 개뿐이다
+			// (폰트와 달리 텍스처를 만들지 않는다). 작은 표적은 단계를 줄여 뭉개짐을 막는다.
+			const int steps = ImClamp(static_cast<int>(r_px / 1.1f), 6, 28);
 
 			// 바닥 그림자 — 배경에서 떠 보이게. 표적 뒤에 먼저 깔린다.
-			dl->AddCircleFilled(ImVec2(c.x + r_px * 0.10f, c.y + r_px * 0.16f), r_px * 1.02f,
-				fade(IM_COL32(0, 0, 0, 90)), 24);
+			dl->AddCircleFilled(ImVec2(c.x + r_px * 0.10f, c.y + r_px * 0.16f), r_px * 1.03f,
+				fade(IM_COL32(0, 0, 0, 95)), 28);
 
 			const ImVec4 acc = ImGui::ColorConvertU32ToFloat4(t.accent);
 			for (int i = 0; i < steps; ++i)
 			{
 				const float u = static_cast<float>(i) / static_cast<float>(steps); // 0=바깥 1=안
-				const float rr = r_px * (1.0f - u * 0.96f);
-				if (rr < 0.6f)
+				const float rr = r_px * (1.0f - u);
+				if (rr < 0.5f)
 					break;
-				const ImVec2 cc(c.x + lightdir.x * r_px * u * 0.55f, c.y + lightdir.y * r_px * u * 0.55f);
-				// 바깥은 어둡게(0.45배), 광원 쪽 안쪽은 흰색으로 수렴.
-				const float k = 0.45f + 0.55f * u;
-				const float w = u * u * 0.85f; // 흰색 섞이는 정도 — 안쪽에서 급격히
+				// 안쪽 원일수록 광원 쪽으로 밀어 밝은 면을 한쪽에 몰아 준다.
+				const ImVec2 cc(c.x + lightdir.x * r_px * u * 0.62f, c.y + lightdir.y * r_px * u * 0.62f);
+				// ⚠️ 흰색을 세게 섞지 않는다. 예전엔 안쪽이 흰색으로 수렴해서 구가 아니라
+				//    만화 하이라이트로 보였다. 색조를 유지한 채 밝기만 올린다.
+				float k = 0.33f + 0.75f * u;
+				if (k > 1.0f) k = 1.0f;
+				// 가장 안쪽 1/4 에만 아주 옅은 광택. 점이 아니라 넓게 퍼진 면이라야 구다.
+				const float w = ImMax(0.0f, u - 0.75f) * 0.55f;
 				const ImU32 col = ImGui::GetColorU32(ImVec4(
 					acc.x * k + (1.0f - acc.x * k) * w,
 					acc.y * k + (1.0f - acc.y * k) * w,
 					acc.z * k + (1.0f - acc.z * k) * w,
-					0.95f));
-				dl->AddCircleFilled(cc, rr, fade(col), 24);
+					1.0f));
+				dl->AddCircleFilled(cc, rr, fade(col), 28);
 			}
 
-			// 반사광 점 하나 — 이것만으로도 뇌가 구로 인식한다.
-			dl->AddCircleFilled(ImVec2(c.x + lightdir.x * r_px * 0.95f, c.y + lightdir.y * r_px * 0.95f),
-				ImMax(1.0f, r_px * 0.16f), fade(IM_COL32(255, 255, 255, 230)), 12);
-
-			// 바깥 테두리 — 배경이 밝을 때 윤곽이 사라지지 않게.
-			dl->AddCircle(c, r_px, fade(IM_COL32(255, 255, 255, 190)), 28, ImMax(1.0f, r_px * 0.06f));
+			// 가장자리를 한 겹 더 어둡게 — 실제 구는 테두리가 밝지 않고 어둡다.
+			// 흰 테두리를 두르면 스티커처럼 납작해 보인다.
+			dl->AddCircle(c, r_px * 0.985f, fade(IM_COL32(0, 0, 0, 70)), 32, ImMax(1.0f, r_px * 0.07f));
 		}
 	}
 
