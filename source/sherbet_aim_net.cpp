@@ -123,6 +123,10 @@ bool sherbet::aim::net::take_board(board &out, bool &was_submit, bool &updated)
 	out = _board;
 	was_submit = _was_submit;
 	updated = _updated;
+	// ⚠️ 이름 그대로 **가져가면 비운다.** 안 비우면 호출부가 매 프레임 참이라 벡터와
+	//    문자열을 통째로 다시 복사한다 — 프레임마다 힙 할당이 여러 번 일어난다.
+	//    화면에 띄울 사본은 호출부가 이미 들고 있으므로 여기 남겨 둘 이유가 없다.
+	_has_board = false;
 	return true;
 }
 

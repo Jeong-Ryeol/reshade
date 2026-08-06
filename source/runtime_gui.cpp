@@ -6846,9 +6846,17 @@ void reshade::runtime::draw_sherbet_aim_overlay()
 			char buf[8];
 			snprintf(buf, sizeof(buf), "%d", n);
 			// 숫자가 바뀌는 순간 크게, 1초에 걸쳐 잦아든다.
+			//
+			// ⚠️ **폰트 크기를 매 프레임 연속으로 바꾸면 안 된다.** ImGui 1.92 는 동적
+			//    아틀라스라 요청한 크기마다 글리프를 새로 굽고 텍스처를 올린다. 여기 크기가
+			//    1080p 에서 약 237px 인데 그걸 매 프레임 새로 구우면 카운트다운 5초 동안
+			//    프레임이 바닥난다(1.7.0 에서 실제로 겪음).
+			//    크기를 6단계로 양자화해 구운 결과가 재사용되게 한다 — 눈으로는 차이가 없다.
+			//    이 코드베이스가 폰트 크기에 고정 상수만 쓰는 이유가 이것이다.
 			const float frac = std::fmod(_sherbet_aim.countdown_remaining(), 1.0f);
-			const float grow = 1.0f + 0.25f * frac;
-			const float sz = ImMin(W, H) * 0.22f * grow;
+			const float base = ImMin(W, H) * 0.22f;
+			const int steps = static_cast<int>(frac * 6.0f); // 0~5
+			const float sz = base * (1.0f + 0.05f * static_cast<float>(steps));
 			const ImVec2 ts = _sherbet_title_font->CalcTextSizeA(sz, FLT_MAX, 0.0f, buf);
 			const ImVec2 p(vp->Pos.x + (W - ts.x) * 0.5f, vp->Pos.y + (H - ts.y) * 0.5f);
 			dl->AddText(_sherbet_title_font, sz, ImVec2(p.x + 3.0f, p.y + 3.0f), IM_COL32(0, 0, 0, 150), buf);
