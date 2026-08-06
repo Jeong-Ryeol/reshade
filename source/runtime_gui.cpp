@@ -6931,9 +6931,10 @@ void reshade::runtime::draw_sherbet_aim_overlay()
 				"\xEB\x82\xB4 \xEC\xB5\x9C\xEA\xB3\xA0\xEA\xB8\xB0\xEB\xA1\x9D\xEB\xB3\xB4\xEB\x8B\xA4"); // "내 최고기록보다"
 			y += lh;
 			ImVec4 cv = sherbet::status_color(diff >= 0 ? sherbet::status::good : sherbet::status::bad);
+			// 개수 비교라 "앞섬/뒤짐"(경주) 보다 "높음/낮음"(수량) 이 맞다.
 			snprintf(buf, sizeof(buf), "%s %d\xEA\xB0\x9C %s", diff >= 0 ? ICON_FK_ARROW_UP : ICON_FK_ARROW_DOWN,
 				diff >= 0 ? diff : -diff,
-				diff >= 0 ? "\xEC\x95\x9E\xEC\x84\xAC" : "\xEB\x92\xA4\xEC\xA7\x90"); // "앞섬"/"뒤짐"
+				diff >= 0 ? "\xEB\x86\x92\xEC\x9D\x8C" : "\xEB\x82\xAE\xEC\x9D\x8C"); // "높음"/"낮음"
 			dl->AddText(ImVec2(p0.x + pad, y), fade(ImGui::GetColorU32(cv)), buf);
 			y += lh * 1.2f;
 		}
