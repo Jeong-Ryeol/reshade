@@ -425,6 +425,29 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetMotionLag", _sherbet_motion_lag);
 	// 보정 상한이 +1 인 이유: 링에 아직 안 적힌 '미래' 프레임의 마우스 값을 가리키게 된다.
 	_sherbet_motion_lag = ImClamp(_sherbet_motion_lag, -2, 1);
+	// SHERBET: 에임 트레이너. 손으로 고친 ini 방어 — 회전값이 0 이면 표적이 영영 안 움직이고
+	// 난이도/시간 번호가 범위를 벗어나면 tuning_for 가 기본값으로 떨어져 조용히 다른 판이 된다.
+	config.get("OVERLAY", "SherbetAimLevel", _sherbet_aim_level);
+	config.get("OVERLAY", "SherbetAimDuration", _sherbet_aim_duration);
+	config.get("OVERLAY", "SherbetAimDpc", _sherbet_aim_dpc);
+	config.get("OVERLAY", "SherbetAimFov", _sherbet_aim_fov);
+	_sherbet_aim_level = ImClamp(_sherbet_aim_level, 0, sherbet::aim::kLevelCount - 1);
+	_sherbet_aim_duration = ImClamp(_sherbet_aim_duration, 0, sherbet::aim::kDurationCount - 1);
+	_sherbet_aim_dpc = ImClamp(_sherbet_aim_dpc, 0.002f, 0.200f);
+	_sherbet_aim_fov = ImClamp(_sherbet_aim_fov, 40.0f, 120.0f);
+	{
+		// 최고 기록은 [난이도][시간] 을 한 줄로 편다. 길이가 안 맞으면 통째로 버린다 —
+		// 반쯤 읽으면 엉뚱한 칸에 남의 기록이 들어간다.
+		std::vector<int> aim_best;
+		config.get("OVERLAY", "SherbetAimBest", aim_best);
+		if (aim_best.size() == static_cast<std::size_t>(sherbet::aim::kLevelCount * sherbet::aim::kDurationCount))
+			for (int li = 0; li < sherbet::aim::kLevelCount; ++li)
+				for (int di = 0; di < sherbet::aim::kDurationCount; ++di)
+				{
+					const int v = aim_best[static_cast<std::size_t>(li * sherbet::aim::kDurationCount + di)];
+					_sherbet_aim_best[li][di] = v > 0 ? v : 0;
+				}
+	}
 	config.get("OVERLAY", "NoFontScaling", _no_font_scaling);
 	config.get("OVERLAY", "ShowClock", _show_clock);
 	config.get("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
@@ -612,6 +635,19 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetMotionSpike", _sherbet_motion_on);
 	config.set("OVERLAY", "SherbetMotionHud", _sherbet_motion_hud);
 	config.set("OVERLAY", "SherbetMotionLag", _sherbet_motion_lag);
+	// SHERBET: 에임 트레이너
+	config.set("OVERLAY", "SherbetAimLevel", _sherbet_aim_level);
+	config.set("OVERLAY", "SherbetAimDuration", _sherbet_aim_duration);
+	config.set("OVERLAY", "SherbetAimDpc", _sherbet_aim_dpc);
+	config.set("OVERLAY", "SherbetAimFov", _sherbet_aim_fov);
+	{
+		std::vector<int> aim_best;
+		aim_best.reserve(static_cast<std::size_t>(sherbet::aim::kLevelCount * sherbet::aim::kDurationCount));
+		for (int li = 0; li < sherbet::aim::kLevelCount; ++li)
+			for (int di = 0; di < sherbet::aim::kDurationCount; ++di)
+				aim_best.push_back(_sherbet_aim_best[li][di]);
+		config.set("OVERLAY", "SherbetAimBest", aim_best);
+	}
 	config.set("OVERLAY", "ShowClock", _show_clock);
 	config.set("OVERLAY", "ShowForceLoadEffectsButton", _show_force_load_effects_button);
 	config.set("OVERLAY", "ShowFPS", _show_fps);
@@ -1397,6 +1433,10 @@ void reshade::runtime::draw_gui()
 			_sherbet_spray.on_frame(imgui_io.DeltaTime, raw_dx, raw_dy, fire);
 		}
 
+		// SHERBET: 에임 트레이너도 **같은 한 번 읽은 델타**를 쓴다. 여기서 또 읽으면
+		// 스프레이와 서로 절반씩만 보게 된다(raw_mouse_delta 는 읽으면 리셋이다).
+		sherbet_aim_frame(imgui_io.DeltaTime, raw_dx, raw_dy, fire);
+
 		if (_sherbet_spray_fade > 0.0f)
 			_sherbet_spray_fade = ImMax(0.0f, _sherbet_spray_fade - imgui_io.DeltaTime);
 	}
@@ -1696,6 +1736,9 @@ void reshade::runtime::draw_gui()
 			}
 		}
 	}
+
+	// SHERBET: 에임 트레이너 — 카운트다운·표적·좌측 HUD. 오버레이가 닫혀 있을 때만 그린다.
+	draw_sherbet_aim_overlay();
 
 	// SHERBET(실험): 화면 이동 추정 숫자판. 조준점·궤적과 같은 ForegroundDrawList 라
 	// **오버레이 게이트 바깥**이고, 그래서 오버레이를 닫은 채로 검증할 수 있다 —
@@ -2400,6 +2443,7 @@ void reshade::runtime::draw_gui()
 				{ "##tab_home", ICON_FK_HOME, 0 },
 				{ "##tab_market", ICON_FK_SHOPPING_CART, 1 },
 				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5 },
+				{ "##tab_aimlab", ICON_FK_BULLSEYE, 7 },
 				{ "##tab_optimize", ICON_FK_DASHBOARD, 6 },
 				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
 				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
@@ -2407,14 +2451,15 @@ void reshade::runtime::draw_gui()
 			};
 			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다.
 			// ⚠️ 배열에 항목을 추가하면 **반드시 여기도 같이 늘린다** — 안 그러면 마지막
-			//    탭이 조용히 사라진다(에임 탭 때 실제로 겪었다). 에임 4→5, 최적화 5→6.
-			int item_count = 6;
+			//    탭이 조용히 사라진다(에임 탭 때 실제로 겪었다).
+			//    에임 4→5, 최적화 5→6, 사격 훈련 6→7.
+			int item_count = 7;
 #if RESHADE_ADDON
 			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
 			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
 			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external || !info.file.empty()) { item_count = 7; break; }
+				if (info.external || !info.file.empty()) { item_count = 8; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
@@ -2447,6 +2492,7 @@ void reshade::runtime::draw_gui()
 #endif
 		case 5: draw_gui_aim(); break;
 		case 6: draw_gui_optimize(); break;
+		case 7: draw_gui_aimlab(); break;
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
@@ -6672,6 +6718,366 @@ void reshade::runtime::draw_gui_crosshair_market()
 	{
 		_sherbet_xh_locals_dirty = true;
 		save_config();
+	}
+}
+
+// ── SHERBET: 에임 트레이너 배선 ──────────────────────────────────────────────
+// 판정·배치·점수는 전부 sherbet_aim.hpp 에 있다(호스트 테스트로 검증됨).
+// 여기 있는 것은 그것을 게임에 물리는 배선과 그리기뿐이다.
+
+// 매 프레임. 스프레이 샘플링과 **같은 자리**에서 같은 raw 델타를 나눠 받는다.
+void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool fire)
+{
+	const sherbet::aim::phase ph = _sherbet_aim.current_phase();
+	if (ph == sherbet::aim::phase::idle)
+		return;
+
+	// 오버레이를 열면 게임이 마우스를 못 받아 판이 성립하지 않는다(화면이 아예 안 돈다).
+	// 진행 중이었다면 중단한다. 끝난 판(finished)은 결과를 봐야 하므로 남긴다.
+	if (_show_overlay && (ph == sherbet::aim::phase::countdown || ph == sherbet::aim::phase::running))
+	{
+		_sherbet_aim.stop();
+		return;
+	}
+	if (ph == sherbet::aim::phase::finished)
+		return;
+
+	// 가상 카메라. **이 프레임에 들어온 입력만** 쓴다 — 화면 리드백은 몇 프레임 늦으므로
+	// 여기 절대 끼우지 않는다. 스무딩·보간도 넣지 않는다(지연 0 이 이 기능의 생명이다).
+	_sherbet_aim_cam_yaw = sherbet::aim::wrap_deg(
+		_sherbet_aim_cam_yaw + static_cast<float>(raw_dx) * _sherbet_aim_dpc);
+	// 마우스를 아래로 내리면(raw_dy +) 시야도 내려간다.
+	_sherbet_aim_cam_pitch = sherbet::aim::clamp_pitch(
+		_sherbet_aim_cam_pitch - static_cast<float>(raw_dy) * _sherbet_aim_dpc);
+
+	// ⚠️ 사격을 tick 보다 **먼저** 판정한다. 사용자가 클릭한 순간 화면에 있던 표적은
+	//    지난 프레임에 그려진 위치다 — 먼저 움직이고 판정하면 안 보이던 자리로 채점한다.
+	if (fire)
+		_sherbet_aim.shoot(_sherbet_aim_cam_yaw, _sherbet_aim_cam_pitch);
+
+	_sherbet_aim.tick(dt, _sherbet_aim_cam_yaw, _sherbet_aim_cam_pitch);
+
+	// 방금 끝났으면 개인 최고 기록 갱신.
+	if (_sherbet_aim.current_phase() == sherbet::aim::phase::finished && !_sherbet_aim_trial)
+	{
+		const int li = static_cast<int>(_sherbet_aim.current_level());
+		const int di = static_cast<int>(_sherbet_aim.current_duration());
+		if (li >= 0 && li < sherbet::aim::kLevelCount && di >= 0 && di < sherbet::aim::kDurationCount)
+			if (_sherbet_aim.result().hits > _sherbet_aim_best[li][di])
+			{
+				_sherbet_aim_best[li][di] = _sherbet_aim.result().hits;
+				save_config();
+			}
+	}
+}
+
+// 오버레이가 닫힌 채로 화면에 그린다 — 카운트다운, 표적, 좌측 HUD.
+// 조준점·궤적과 같은 ForegroundDrawList 라 오버레이 게이트 바깥이다.
+void reshade::runtime::draw_sherbet_aim_overlay()
+{
+	const sherbet::aim::phase ph = _sherbet_aim.current_phase();
+	if (ph == sherbet::aim::phase::idle || _show_overlay)
+		return;
+
+	const ImGuiViewport *const vp = ImGui::GetMainViewport();
+	ImDrawList *const dl = ImGui::GetForegroundDrawList();
+	const sherbet::theme &t = sherbet::active_theme();
+	const float W = vp->Size.x, H = vp->Size.y;
+
+	// ── 카운트다운 ───────────────────────────────────────────────────────────
+	if (ph == sherbet::aim::phase::countdown)
+	{
+		const int n = _sherbet_aim.countdown_display();
+		if (n > 0)
+		{
+			char buf[8];
+			snprintf(buf, sizeof(buf), "%d", n);
+			// 숫자가 바뀌는 순간 크게, 1초에 걸쳐 잦아든다.
+			const float frac = std::fmod(_sherbet_aim.countdown_remaining(), 1.0f);
+			const float grow = 1.0f + 0.25f * frac;
+			const float sz = ImMin(W, H) * 0.22f * grow;
+			const ImVec2 ts = _sherbet_title_font->CalcTextSizeA(sz, FLT_MAX, 0.0f, buf);
+			const ImVec2 p(vp->Pos.x + (W - ts.x) * 0.5f, vp->Pos.y + (H - ts.y) * 0.5f);
+			dl->AddText(_sherbet_title_font, sz, ImVec2(p.x + 3.0f, p.y + 3.0f), IM_COL32(0, 0, 0, 150), buf);
+			dl->AddText(_sherbet_title_font, sz, p, sherbet::with_alpha(t.accent, 240), buf);
+		}
+		return; // 카운트다운 중에는 표적을 미리 보여주지 않는다(반응 시간 측정이 무의미해진다)
+	}
+
+	// ── 표적 ─────────────────────────────────────────────────────────────────
+	if (ph == sherbet::aim::phase::running)
+	{
+		const sherbet::aim::target &tg = _sherbet_aim.current_target();
+		const float rel_yaw = sherbet::aim::wrap_deg(tg.yaw - _sherbet_aim_cam_yaw);
+		const float rel_pitch = tg.pitch - _sherbet_aim_cam_pitch;
+
+		float sx = 0.0f, sy = 0.0f;
+		if (sherbet::aim::project(rel_yaw, rel_pitch, _sherbet_aim_fov, W, H, sx, sy))
+		{
+			// 화면 반지름 — 표적에서 반지름만큼 떨어진 점을 같이 투영해 픽셀 거리로 잰다.
+			// 각도를 픽셀로 직접 환산하면 화면 가장자리에서 어긋난다(원근).
+			const float rad = _sherbet_aim.current_tuning().radius_deg;
+			float ey = 0.0f, ep = 0.0f, ex = 0.0f, eyy = 0.0f;
+			sherbet::aim::direction_at(tg.yaw, tg.pitch, rad, 0.0f, ey, ep);
+			float r_px = 8.0f;
+			if (sherbet::aim::project(sherbet::aim::wrap_deg(ey - _sherbet_aim_cam_yaw),
+					ep - _sherbet_aim_cam_pitch, _sherbet_aim_fov, W, H, ex, eyy))
+			{
+				const float dx = ex - sx, dy = eyy - sy;
+				r_px = std::sqrt(dx * dx + dy * dy);
+			}
+			if (r_px < 3.0f) r_px = 3.0f;
+
+			const ImVec2 c(vp->Pos.x + sx, vp->Pos.y + sy);
+			dl->AddCircleFilled(c, r_px, sherbet::with_alpha(t.accent, 210), 32);
+			dl->AddCircle(c, r_px, IM_COL32(255, 255, 255, 220), 32, 2.0f);
+			dl->AddCircleFilled(c, ImMax(2.0f, r_px * 0.18f), IM_COL32(255, 255, 255, 235), 12);
+		}
+	}
+
+	// ── 좌측 HUD ─────────────────────────────────────────────────────────────
+	// 조준 중엔 눈이 표적에 있다. 왼쪽은 주변시라 글자를 못 읽는다 — 큰 숫자와 색으로
+	// 안 읽고도 알 수 있어야 한다. 자세한 것은 판이 끝난 뒤 오버레이에서 본다.
+	{
+		const sherbet::aim::stats &st = _sherbet_aim.result();
+		const float lh = ImGui::GetTextLineHeightWithSpacing();
+		const float pad = 12.0f;
+		const float bw = 190.0f;
+		const ImVec2 p0(vp->Pos.x + 28.0f, vp->Pos.y + H * 0.30f);
+		const float bh = lh * 6.5f + pad * 2.0f;
+		dl->AddRectFilled(p0, ImVec2(p0.x + bw, p0.y + bh), IM_COL32(12, 12, 16, 175), 12.0f);
+
+		float y = p0.y + pad;
+		char buf[96];
+
+		// 명중 수 — 제일 큰 글씨. 이게 곧 점수다.
+		snprintf(buf, sizeof(buf), "%d", st.hits);
+		const float big = ImGui::GetFontSize() * 2.2f;
+		dl->AddText(_sherbet_title_font, big, ImVec2(p0.x + pad, y), sherbet::with_alpha(t.text, 245), buf);
+		dl->AddText(ImVec2(p0.x + pad + _sherbet_title_font->CalcTextSizeA(big, FLT_MAX, 0.0f, buf).x + 6.0f,
+			y + big * 0.45f), sherbet::with_alpha(t.text_dim, 220),
+			"\xEB\xAA\x85\xEC\xA4\x91"); // "명중"
+		y += big + 4.0f;
+
+		// 남은 시간 + 막대. 숫자를 안 읽어도 줄어드는 게 보인다.
+		const float total = sherbet::aim::duration_seconds(_sherbet_aim.current_duration());
+		const float left = _sherbet_aim.time_left();
+		snprintf(buf, sizeof(buf), "%d:%02d", static_cast<int>(left) / 60, static_cast<int>(left) % 60);
+		dl->AddText(ImVec2(p0.x + pad, y), sherbet::with_alpha(t.text, 230), buf);
+		y += lh;
+		const float bar_w = bw - pad * 2.0f;
+		const float frac = total > 0.0f ? ImClamp(left / total, 0.0f, 1.0f) : 0.0f;
+		dl->AddRectFilled(ImVec2(p0.x + pad, y), ImVec2(p0.x + pad + bar_w, y + 6.0f), IM_COL32(255, 255, 255, 40), 3.0f);
+		dl->AddRectFilled(ImVec2(p0.x + pad, y), ImVec2(p0.x + pad + bar_w * frac, y + 6.0f),
+			sherbet::with_alpha(t.accent, 235), 3.0f);
+		y += 6.0f + lh * 0.5f;
+
+		// 내 최고기록 대비 — "잘하고 있나" 에 즉답하는 자리. 색만 봐도 안다.
+		const int li = static_cast<int>(_sherbet_aim.current_level());
+		const int di = static_cast<int>(_sherbet_aim.current_duration());
+		const int best = (li >= 0 && li < sherbet::aim::kLevelCount && di >= 0 && di < sherbet::aim::kDurationCount)
+			? _sherbet_aim_best[li][di] : 0;
+		if (best > 0 && total > 0.0f)
+		{
+			const float done = 1.0f - frac;                       // 진행률
+			const int pace = static_cast<int>(static_cast<float>(best) * done + 0.5f);
+			const int diff = st.hits - pace;
+			dl->AddText(ImVec2(p0.x + pad, y), sherbet::with_alpha(t.text_dim, 200),
+				"\xEB\x82\xB4 \xEC\xB5\x9C\xEA\xB3\xA0\xEA\xB8\xB0\xEB\xA1\x9D\xEB\xB3\xB4\xEB\x8B\xA4"); // "내 최고기록보다"
+			y += lh;
+			ImVec4 cv = sherbet::status_color(diff >= 0 ? sherbet::status::good : sherbet::status::bad);
+			snprintf(buf, sizeof(buf), "%s %d\xEA\xB0\x9C %s", diff >= 0 ? ICON_FK_ARROW_UP : ICON_FK_ARROW_DOWN,
+				diff >= 0 ? diff : -diff,
+				diff >= 0 ? "\xEC\x95\x9E\xEC\x84\xAC" : "\xEB\x92\xA4\xEC\xA7\x90"); // "앞섬"/"뒤짐"
+			dl->AddText(ImVec2(p0.x + pad, y), ImGui::GetColorU32(cv), buf);
+			y += lh * 1.2f;
+		}
+
+		// 정확도 + 최근 6발
+		snprintf(buf, sizeof(buf), "%s %.0f%%", "\xEC\xA0\x95\xED\x99\x95\xEB\x8F\x84", sherbet::aim::accuracy(st) * 100.0f); // "정확도"
+		dl->AddText(ImVec2(p0.x + pad, y), sherbet::with_alpha(t.text, 225), buf);
+		y += lh;
+		float dotx = p0.x + pad + 5.0f;
+		for (int i = 0; i < 6 && i < _sherbet_aim.shot_history_count(); ++i)
+		{
+			const bool hit = _sherbet_aim.shot_history(i);
+			if (hit)
+				dl->AddCircleFilled(ImVec2(dotx, y + 6.0f), 4.0f, sherbet::with_alpha(t.accent, 235), 12);
+			else
+				dl->AddCircle(ImVec2(dotx, y + 6.0f), 4.0f, IM_COL32(200, 200, 200, 150), 12, 1.5f);
+			dotx += 13.0f;
+		}
+
+		if (ph == sherbet::aim::phase::finished)
+		{
+			dl->AddText(ImVec2(p0.x, p0.y + bh + 8.0f), sherbet::with_alpha(t.text_dim, 215),
+				"\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEC\x97\xB4\xEB\xA9\xB4 \xEA\xB2\xB0\xEA\xB3\xBC\xEB\xA5\xBC \xEB\xB3\xBC \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94"); // "오버레이를 열면 결과를 볼 수 있어요"
+		}
+	}
+}
+
+// SHERBET: 「사격 훈련」 탭.
+//
+// 이 탭은 게임 메모리를 읽지 않는다. 마우스 입력으로 가상 카메라를 굴리고, 표적을
+// 그 방향 공간에 놓고, 클릭한 순간의 각거리로 판정할 뿐이다. 총은 게임에서 실제로
+// 나가지만 우리는 그 결과를 모른다 — 우리가 채점하는 것은 **조준**이지 킬이 아니다.
+void reshade::runtime::draw_gui_aimlab()
+{
+	using namespace sherbet;
+
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_BULLSEYE "  \xEC\x82\xAC\xEA\xB2\xA9 \xED\x9B\x88\xEB\xA0\xA8"); // "사격 훈련"
+	ImGui::PopFont();
+	ImGui::Spacing();
+
+	const bool unlocked = sherbet_feature_unlocked("aimlab");
+
+	// 판 시작. 오버레이를 닫는다 — 열려 있으면 게임이 마우스를 못 받아 조준이 성립하지 않는다.
+	auto start_run = [&](bool trial) {
+		_sherbet_aim_trial = trial;
+		_sherbet_aim_cam_yaw = 0.0f;
+		_sherbet_aim_cam_pitch = 0.0f;
+		const aim::level lv = static_cast<aim::level>(ImClamp(_sherbet_aim_level, 0, aim::kLevelCount - 1));
+		const aim::duration du = trial
+			? aim::duration::s10
+			: static_cast<aim::duration>(ImClamp(_sherbet_aim_duration, 0, aim::kDurationCount - 1));
+		// 시드는 매판 달라야 한다. 테스트에서는 주입하지만 실전에서는 시각으로 흩는다.
+		const std::uint32_t seed = static_cast<std::uint32_t>(ImGui::GetTime() * 100000.0)
+			^ (static_cast<std::uint32_t>(_sherbet_aim.result().shots) * 2654435761u) ^ 0xA5A5A5A5u;
+		_sherbet_aim.start(lv, du, seed, 0.0f, 0.0f, _sherbet_aim_fov);
+		_show_overlay = false;
+	};
+
+	// ── 잠금 상태: 판매 카드 + 맛보기 ────────────────────────────────────────
+	if (!unlocked)
+	{
+		if (const paid::feature *const f = paid::find("aimlab"))
+		{
+			sherbet::begin_card("##aimlab_lock");
+			sherbet_draw_lock_header(*f);
+			ImGui::Spacing();
+			// 말로 파는 대신 손에 쥐여 준다. 10초는 몸풀기 길이 그대로라, 정식이 60초라는
+			// 걸 보면 차이가 바로 읽힌다. 횟수 제한은 두지 않는다 — 반복해도 난이도를
+			// 못 고르고 기록도 안 남아서 "제대로 된 판" 이 되지 않는다.
+			if (sherbet::pill_button(ICON_FK_PLAY "  \xEB\xA7\x9B\xEB\xB3\xB4\xEA\xB8\xB0 10\xEC\xB4\x88", true)) // "맛보기 10초"
+				start_run(true);
+			ImGui::Spacing();
+			sherbet_draw_lock_footer(*f);
+			sherbet::end_card();
+		}
+		ImGui::Spacing();
+	}
+
+	// ── 난이도 ───────────────────────────────────────────────────────────────
+	ImGui::BeginDisabled(!unlocked);
+	{
+		static const char *const kLv[aim::kLevelCount] = {
+			"\xEC\x89\xAC\xEC\x9B\x80",         // "쉬움"
+			"\xEB\xB3\xB4\xED\x86\xB5",         // "보통"
+			"\xEC\x96\xB4\xEB\xA0\xA4\xEC\x9B\x80", // "어려움"
+			"\xED\x97\xAC",                     // "헬"
+		};
+		for (int i = 0; i < aim::kLevelCount; ++i)
+		{
+			if (i != 0) ImGui::SameLine();
+			if (sherbet::pill_button(kLv[i], _sherbet_aim_level == i))
+			{
+				_sherbet_aim_level = i;
+				save_config();
+			}
+		}
+		ImGui::Spacing();
+
+		// ── 판 길이 ──────────────────────────────────────────────────────────
+		// 트로피가 붙은 것만 순위에 올라간다는 게 문구 없이 읽힌다.
+		static const char *const kDu[aim::kDurationCount] = { "10\xEC\xB4\x88", "30\xEC\xB4\x88", "60\xEC\xB4\x88" };
+		for (int i = 0; i < aim::kDurationCount; ++i)
+		{
+			if (i != 0) ImGui::SameLine();
+			char lbl[48];
+			if (aim::ranked(static_cast<aim::duration>(i)))
+				snprintf(lbl, sizeof(lbl), "%s  " ICON_FK_TROPHY, kDu[i]);
+			else
+				snprintf(lbl, sizeof(lbl), "%s", kDu[i]);
+			if (sherbet::pill_button(lbl, _sherbet_aim_duration == i))
+			{
+				_sherbet_aim_duration = i;
+				save_config();
+			}
+		}
+		ImGui::Spacing();
+
+		if (!aim::ranked(static_cast<aim::duration>(ImClamp(_sherbet_aim_duration, 0, aim::kDurationCount - 1))))
+			ImGui::TextDisabled("%s", "10\xEC\xB4\x88\xEB\x8A\x94 \xEC\x97\xB0\xEC\x8A\xB5\xEC\x9A\xA9\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x9D\x80 30\xEC\xB4\x88\xEC\x99\x80 60\xEC\xB4\x88\xEB\xA7\x8C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEC\x9A\x94"); // "10초는 연습용이에요 — 기록은 30초와 60초만 올라가요"
+
+		ImGui::Spacing();
+		if (sherbet::pill_button(ICON_FK_PLAY "  \xEC\x8B\x9C\xEC\x9E\x91", true)) // "시작"
+			start_run(false);
+	}
+	ImGui::EndDisabled();
+
+	// ── 결과 ─────────────────────────────────────────────────────────────────
+	if (_sherbet_aim.current_phase() == aim::phase::finished)
+	{
+		const aim::stats &st = _sherbet_aim.result();
+		ImGui::Spacing();
+		sherbet::begin_card("##aimlab_result");
+		ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.8f);
+		ImGui::Text("%d", st.hits);
+		ImGui::PopFont();
+		ImGui::SameLine();
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextDisabled("%s", "\xEB\xAA\x85\xEC\xA4\x91"); // "명중"
+
+		ImGui::Text("%s %.0f%%   (%d / %d)", "\xEC\xA0\x95\xED\x99\x95\xEB\x8F\x84", // "정확도"
+			aim::accuracy(st) * 100.0f, st.hits, st.shots);
+		ImGui::TextDisabled("%.2f / \xEC\xB4\x88", aim::per_second(st, _sherbet_aim.current_duration()));
+
+		if (_sherbet_aim_trial)
+			ImGui::TextDisabled("%s", "\xEC\x97\xB0\xEC\x8A\xB5 \xED\x8C\x90\xEC\x9D\xB4\xEB\x9D\xBC \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x97\x90 \xEC\x95\x88 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEC\x9A\x94"); // "연습 판이라 기록에 안 올라가요"
+		else if (!aim::ranked(_sherbet_aim.current_duration()))
+			ImGui::TextDisabled("%s", "\xEC\x97\xB0\xEC\x8A\xB5 \xED\x8C\x90\xEC\x9D\xB4\xEB\x9D\xBC \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x97\x90 \xEC\x95\x88 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEC\x9A\x94");
+
+		ImGui::Spacing();
+		if (sherbet::pill_button(ICON_FK_REFRESH "  \xEB\x8B\xA4\xEC\x8B\x9C \xED\x95\x98\xEA\xB8\xB0", true)) // "다시 하기"
+			start_run(_sherbet_aim_trial);
+		sherbet::end_card();
+	}
+
+	// ── 개인 최고 기록 ───────────────────────────────────────────────────────
+	ImGui::Spacing();
+	if (ImGui::CollapsingHeader(ICON_FK_TROPHY "  \xEC\xB5\x9C\xEA\xB3\xA0 \xEA\xB8\xB0\xEB\xA1\x9D")) // "최고 기록"
+	{
+		static const char *const kLvS[aim::kLevelCount] = {
+			"\xEC\x89\xAC\xEC\x9B\x80", "\xEB\xB3\xB4\xED\x86\xB5", "\xEC\x96\xB4\xEB\xA0\xA4\xEC\x9B\x80", "\xED\x97\xAC" };
+		static const char *const kDuS[aim::kDurationCount] = { "10\xEC\xB4\x88", "30\xEC\xB4\x88", "60\xEC\xB4\x88" };
+		const float col = _imgui_context->Style.WindowPadding.x + 5.0f * ImGui::GetFontSize();
+		for (int li = 0; li < aim::kLevelCount; ++li)
+		{
+			ImGui::TextUnformatted(kLvS[li]);
+			for (int di = 0; di < aim::kDurationCount; ++di)
+			{
+				ImGui::SameLine(col + di * 5.0f * ImGui::GetFontSize());
+				if (_sherbet_aim_best[li][di] > 0)
+					ImGui::Text("%s %d", kDuS[di], _sherbet_aim_best[li][di]);
+				else
+					ImGui::TextDisabled("%s -", kDuS[di]);
+			}
+		}
+		ImGui::Spacing();
+	}
+
+	// ── 손에 맞추기 ──────────────────────────────────────────────────────────
+	if (ImGui::CollapsingHeader(ICON_FK_SLIDERS "  \xEC\x86\x90\xEC\x97\x90 \xEB\xA7\x9E\xEC\xB6\x94\xEA\xB8\xB0")) // "손에 맞추기"
+	{
+		ImGui::TextDisabled("%s", "\xED\x91\x9C\xEC\xA0\x81\xEC\x9D\xB4 \xEC\x86\x90\xEC\x97\x90 \xEC\x95\x88 \xEB\xB6\x99\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x9D\xB4 \xEA\xB0\x92\xEC\x9D\x84 \xEC\xA1\xB0\xEC\xA0\x88\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94"); // "표적이 손에 안 붙으면 이 값을 조절하세요"
+		if (ImGui::SliderFloat("\xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 1\xEC\xB9\xB4\xEC\x9A\xB4\xED\x8A\xB8\xEB\x8B\xB9 \xED\x9A\x8C\xEC\xA0\x84(\xEB\x8F\x84)##aimdpc", // "마우스 1카운트당 회전(도)"
+				&_sherbet_aim_dpc, 0.002f, 0.200f, "%.4f", ImGuiSliderFlags_AlwaysClamp))
+			save_config();
+		if (ImGui::SliderFloat("\xEC\x8B\x9C\xEC\x95\xBC\xEA\xB0\x81(FOV)##aimfov", // "시야각(FOV)"
+				&_sherbet_aim_fov, 40.0f, 120.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+			save_config();
+		ImGui::Spacing();
 	}
 }
 

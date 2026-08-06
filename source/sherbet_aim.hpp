@@ -399,6 +399,8 @@ namespace sherbet
 			// ── 조회 ─────────────────────────────────────────────────────────
 			phase current_phase() const { return _phase; }
 			int countdown_display() const { return countdown_number(_countdown_left); }
+			// 남은 카운트다운(초). 숫자가 커졌다 잦아드는 연출에 쓴다.
+			float countdown_remaining() const { return _countdown_left; }
 			float time_left() const { return _time_left; }
 			float time_elapsed() const { return duration_seconds(_duration) - _time_left; }
 			const target &current_target() const { return _target; }

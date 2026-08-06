@@ -54,6 +54,12 @@ static void test_catalog_shape()
 	// custompicture 는 오래 카탈로그 밖이었다 — 그래서 안 산 사람 화면에는 아예 없었고,
 	// 역할까지 만들어 둔 상품을 아무도 못 봤다. 진열 문구를 붙여 카탈로그로 들여왔다.
 	assert(ids.count("custompicture") == 1);
+	assert(ids.count("aimlab") == 1);
+
+	assert(paid::find("aimlab") != nullptr);
+	assert(std::strcmp(paid::find("aimlab")->id, "aimlab") == 0);
+	// 맛보기가 있는 기능이라 잠금 카드가 실제로 그려진다 — 진열 문구가 비어 있으면 안 된다.
+	assert(paid::find("aimlab")->bullets[0] != nullptr);
 
 	assert(paid::find("spray") != nullptr);
 	assert(paid::find("optimize") != nullptr);
@@ -82,6 +88,9 @@ static void test_lock_decision()
 	// ⚠️ 이미 custompicture 를 산 구매자가 있다. 카탈로그에 넣었다고 그 사람들 것이
 	//    잠기면 환불 사유다 — 권한만 있으면 예전과 똑같이 열려야 한다.
 	assert(paid::unlocked("custompicture", true, false));
+	assert(!paid::unlocked("aimlab", false, false));
+	assert(paid::unlocked("aimlab", true, false));
+	assert(!paid::unlocked("aimlab", true, true)); // 판매 화면 확인용 강제 잠금
 
 	// 판매 화면 확인용 강제 잠금은 권한을 이긴다(그러라고 있는 스위치다).
 	assert(!paid::unlocked("spray", true, true));

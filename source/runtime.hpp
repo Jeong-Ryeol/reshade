@@ -12,6 +12,7 @@
 #include "sherbet_alarm.hpp"
 #include "sherbet_magnifier.hpp"
 #include "sherbet_spray.hpp"
+#include "sherbet_aim.hpp"
 #include "sherbet_crosshair.hpp"
 #include "sherbet_xhmarket.hpp"
 #include "sherbet_motion.hpp"
@@ -535,6 +536,25 @@ namespace reshade
 
 		bool _sherbet_motion_on = false;    // 메인 토글(기본 꺼짐)
 		bool _sherbet_motion_hud = true;    // 화면에 작은 숫자판(메인 토글이 켜져 있을 때만)
+
+		// SHERBET: 에임 트레이너(「사격 훈련」 탭). 판정·배치·점수는 전부 sherbet_aim.hpp 다.
+		// 여기 있는 것은 그 순수 로직을 게임에 물리는 배선뿐이다.
+		sherbet::aim::session _sherbet_aim;
+		// 가상 카메라. 판이 시작될 때 (0,0) 에서 출발해 raw 마우스 델타로만 굴린다.
+		// ⚠️ 절대 방향이 아니라 **판 시작 기준 상대 회전**이다 — 게임의 실제 시야각을
+		//    알 필요가 없고, 알 방법도 없다(게임 메모리를 읽지 않는다).
+		float _sherbet_aim_cam_yaw = 0.0f;
+		float _sherbet_aim_cam_pitch = 0.0f;
+		// 마우스 1카운트당 회전(도). 이 값이 게임과 어긋나면 표적이 손에 안 붙는다.
+		// 「화면 이동 추정」이 켜져 있으면 실측으로 다듬을 수 있고, 아니면 사용자가 맞춘다.
+		float _sherbet_aim_dpc = 0.030f;
+		float _sherbet_aim_fov = 70.0f;   // 그리기 전용. 판정에는 쓰지 않는다
+		int _sherbet_aim_level = 1;       // 0=쉬움 1=보통 2=어려움 3=헬
+		int _sherbet_aim_duration = 2;    // 0=10초 1=30초 2=60초
+		bool _sherbet_aim_trial = false;  // 이번 판이 맛보기(미구매)인가
+		// 개인 최고 기록 [난이도][시간]. HUD 의 "내 최고기록보다" 비교에 쓴다.
+		// 리더보드(서버)와 별개다 — 10초도 여기에는 남는다.
+		int _sherbet_aim_best[sherbet::aim::kLevelCount][sherbet::aim::kDurationCount] = {};
 		int _sherbet_motion_lag = 0;        // 화면 ↔ 마우스 정렬 보정(프레임). 엔진 입력 지연만큼 어긋난다
 		api::resource _sherbet_motion_stage[kSherbetMotionSlots] = {};
 		bool _sherbet_motion_slot_full[kSherbetMotionSlots] = {};
@@ -663,6 +683,14 @@ namespace reshade
 		void draw_gui_about();
 		void draw_gui_market();
 		void draw_gui_crosshair_market(); // 「마켓」 탭의 조준점 세그먼트
+		// SHERBET: 「사격 훈련」 탭(에임 트레이너). 난이도·시간 선택, 시작, 결과, 리더보드.
+		void draw_gui_aimlab();
+		// 오버레이가 닫힌 채로 화면에 그리는 부분 — 카운트다운, 표적, 좌측 HUD.
+		// ⚠️ 조준점·궤적과 같은 ForegroundDrawList 다(오버레이 게이트 바깥).
+		void draw_sherbet_aim_overlay();
+		// 매 프레임 입력 배선(가상 카메라 회전 + 사격 판정). 스프레이 샘플링과 같은 자리에서
+		// **같은 한 번 읽은 raw 델타**를 나눠 쓴다 — 따로 읽으면 서로 절반씩만 본다.
+		void sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool fire);
 		// SHERBET: 「내 전용 불러오기」 버튼. 「마켓」 탭 세 세그먼트와 「홈」 탭 프리셋 줄이 공용한다
 		// (/content/me 하나로 테마·프리셋·조준점이 전부 온다).
 		void draw_sherbet_fetch_button();
