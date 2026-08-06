@@ -491,7 +491,7 @@ namespace sherbet
 						// 시작 버튼을 누를 때가 아니라 **첫 표적이 뜨는 순간**의 시야가 기준이다.
 						_anchor_yaw = wrap_deg(cam_yaw);
 						_anchor_pitch = clamp_pitch(cam_pitch);
-					_cam_pitch_now = clamp_pitch(cam_pitch);
+						_cam_pitch_now = clamp_pitch(cam_pitch);
 						_has_target = false;
 						spawn();
 					}
@@ -507,7 +507,16 @@ namespace sherbet
 				if (_phase != phase::running)
 					return;
 
+				// ⚠️ 자유 모드 앵커는 판이 끝날 때까지 **절대 안 움직인다**. 시야를 따라가게
+				//    만들면 표적 무리가 슬금슬금 따라다녀서 판이 통째로 떠내려간다.
+				//    반동 표류는 여기서 처리할 문제가 아니다 — 자유 모드는 표적마다 세로를
+				//    다시 맞추므로 매 명중마다 저절로 리셋된다. 세로를 안 맞추는 수평
+				//    모드에서만 누적되고, 그쪽은 표적 높이를 시야에 묶어서 끊는다.
 				move_target(dt);
+				// 수평 모드는 이동이 없는 난이도에서도 높이를 다시 맞춰야 한다 —
+				// move_target 은 이동 속도가 0 이면 아무것도 안 하고 돌아간다.
+				if (_mode == mode::level)
+					recompute_target();
 
 				_time_left -= dt;
 				if (_time_left <= 0.0f)
@@ -709,10 +718,12 @@ namespace sherbet
 
 			// 각거리 dist 에 해당하는 yaw 차이. 위도선 위에서는 1도를 돌아도 실제 각거리가
 			// cos(pitch) 배로 줄어들기 때문에 나눠서 보정한다. 극 근처에서 폭주하지 않게 자른다.
+			// ⚠️ 기준은 앵커가 아니라 **표적이 실제로 놓이는 높이**(= 지금 시야)다.
+			//    앵커를 쓰면 반동으로 시야가 내려간 뒤 좌우 간격이 어긋난다.
 			float yaw_span(float dist) const
 			{
 				constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
-				const float cp = std::cos(_anchor_pitch * kDeg2Rad);
+				const float cp = std::cos(clamp_pitch(_cam_pitch_now) * kDeg2Rad);
 				return dist / (cp > 0.1f ? cp : 0.1f);
 			}
 
@@ -720,16 +731,26 @@ namespace sherbet
 			void recompute_target()
 			{
 				const float r = std::sqrt(_target.off_u * _target.off_u + _target.off_v * _target.off_v);
-				if (r <= 1e-6f)
+				// ⚠️ 수평 분기가 **오프셋 0 조기 반환보다 먼저**여야 한다. 뒤에 두면
+				//    이동이 없는 난이도(쉬움·보통)에서 오프셋이 늘 0 이라 조기 반환에
+				//    걸려 높이 재조정이 통째로 건너뛰어진다.
+				if (_mode == mode::level)
 				{
-					_target.yaw = _target.home_yaw;
+					// ⚠️ 높이를 **매 프레임** 지금 시야에 맞춘다. 뜨는 순간에만 맞추면,
+					//    표적을 맞히기 전에 빗나간 사격이 쌓이는 동안 반동 누적으로
+					//    표적이 위로 올라간다(실제로 겪음 — 1.8.2 의 반쪽 수정).
+					//    우리 가상 카메라는 마우스만 봐서 반동을 못 보므로, 그 오차를
+					//    없애려면 세로를 아예 시야에 묶는 수밖에 없다.
+					//    이 모드는 애초에 세로 조준을 시키지 않는 것이 목적이라 맞는 선택이다.
+					_target.home_pitch = clamp_pitch(_cam_pitch_now);
+					_target.yaw = wrap_deg(_target.home_yaw + yaw_span(_target.off_u));
 					_target.pitch = _target.home_pitch;
 					return;
 				}
-				if (_mode == mode::level)
+				// 자유 모드: 오프셋이 없으면 생성 위치 그대로다.
+				if (r <= 1e-6f)
 				{
-					// 이동도 위도선을 따른다 — 높이는 절대 안 바뀐다.
-					_target.yaw = wrap_deg(_target.home_yaw + yaw_span(_target.off_u));
+					_target.yaw = _target.home_yaw;
 					_target.pitch = _target.home_pitch;
 					return;
 				}

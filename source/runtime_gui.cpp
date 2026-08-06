@@ -3622,24 +3622,29 @@ void reshade::runtime::sherbet_draw_lock_footer(const sherbet::paid::feature &f)
 // ⚠️ 잠금 미리보기와 실제 화면이 **같은 함수**를 쓴다. 미리보기를 따로 그리면 (1) 렌더러가
 //    바뀔 때 한쪽만 낡고 (2) 실물과 다른 그림을 파는 셈이 된다. 다른 것은 먹이는 데이터뿐이다.
 // 반환값은 원점(= 각 구간의 첫 발 자리)이라 호출부가 그 위에 글자를 얹을 수 있다.
+// pan 은 사용자가 끌어 옮긴 양이다(잠금 미리보기는 0 을 준다).
 static ImVec2 sherbet_draw_spray_canvas(ImDrawList *dl, const ImVec2 &c0, const ImVec2 &c1,
 	const sherbet::theme &ct, const std::vector<sherbet::spray::segment> &segs,
-	const sherbet::spray::segment *focus, bool overlay5, float scale)
+	const sherbet::spray::segment *focus, bool overlay5, float scale, const ImVec2 &pan = ImVec2(0.0f, 0.0f))
 {
-	const ImVec2 org((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f); // 원점 = 첫 발
-	const float cw = c1.x - c0.x, ch = c1.y - c0.y;
+	// 원점 = 첫 발. 기본은 캔버스 한가운데고, 끌어 옮긴 만큼 밀린다.
+	const ImVec2 org((c0.x + c1.x) * 0.5f + pan.x, (c0.y + c1.y) * 0.5f + pan.y);
 
 	dl->AddRectFilled(c0, c1, sherbet::with_alpha(ct.bg1, 220), 12.0f);
 	dl->PushClipRect(c0, c1, true);
 	{
 		// 격자 + 중앙 십자
 		const ImU32 grid_col = sherbet::with_alpha(ct.border, 90);
-		for (float gx = 0.0f; gx <= cw * 0.5f; gx += 32.0f)
+		// ⚠️ 한계는 캔버스 절반이 아니라 **원점에서 양 끝까지 중 먼 쪽**이다. 원점을
+		//    끌어 옮기면 한쪽이 절반보다 멀어져서, 절반으로 돌면 격자가 중간에 끊긴다.
+		const float gx_max = ImMax(org.x - c0.x, c1.x - org.x);
+		const float gy_max = ImMax(org.y - c0.y, c1.y - org.y);
+		for (float gx = 0.0f; gx <= gx_max; gx += 32.0f)
 		{
 			dl->AddLine(ImVec2(org.x + gx, c0.y), ImVec2(org.x + gx, c1.y), grid_col);
 			dl->AddLine(ImVec2(org.x - gx, c0.y), ImVec2(org.x - gx, c1.y), grid_col);
 		}
-		for (float gy = 0.0f; gy <= ch * 0.5f; gy += 32.0f)
+		for (float gy = 0.0f; gy <= gy_max; gy += 32.0f)
 		{
 			dl->AddLine(ImVec2(c0.x, org.y + gy), ImVec2(c1.x, org.y + gy), grid_col);
 			dl->AddLine(ImVec2(c0.x, org.y - gy), ImVec2(c1.x, org.y - gy), grid_col);
@@ -3815,7 +3820,11 @@ bool reshade::runtime::draw_gui_spray_trainer()
 		modified |= ImGui::Checkbox("\xED\x99\x94\xEB\xA9\xB4\xEC\x97\x90 \xEC\x8B\xA4\xEC\x8B\x9C\xEA\xB0\x84 \xED\x91\x9C\xEC\x8B\x9C##spray", &_sherbet_spray_live); // "화면에 실시간 표시"
 		modified |= ImGui::Checkbox("\xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEC\x97\x90 \xEC\xB0\xA8\xED\x8A\xB8 \xED\x91\x9C\xEC\x8B\x9C##spray", &_sherbet_spray_chart); // "오버레이에 차트 표시"
 		// raw 단위는 감도가 사람마다 달라 픽셀로 바꾸는 계수가 필요하다(스펙 §5.1).
-		modified |= ImGui::SliderFloat("\xEA\xB6\xA4\xEC\xA0\x81 \xEB\xB0\xB0\xEC\x9C\xA8##spray", &_sherbet_spray_scale, 0.1f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp); // "궤적 배율"
+		// 차트를 켜 두면 배율은 **표 위에서 휠로** 맞춘다 — 슬라이더가 설정 목록만
+		// 길게 만들었다. 차트를 끄고 실시간 표시만 쓰면 휠을 올릴 표가 없으므로,
+		// 그때만 슬라이더를 남긴다.
+		if (!_sherbet_spray_chart)
+			modified |= ImGui::SliderFloat("\xEA\xB6\xA4\xEC\xA0\x81 \xEB\xB0\xB0\xEC\x9C\xA8##spray", &_sherbet_spray_scale, 0.1f, 5.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp); // "궤적 배율"
 		modified |= ImGui::SliderInt("\xEA\xB5\xAC\xEA\xB0\x84 \xEB\x82\x98\xEB\x88\x84\xEA\xB8\xB0 \xEA\xB0\x84\xEA\xB2\xA9(ms)##spray", &_sherbet_spray_gap_ms, 50, 2000, "%d", ImGuiSliderFlags_AlwaysClamp); // "구간 나누기 간격(ms)"
 
 		if (_sherbet_spray_chart)
@@ -3851,7 +3860,50 @@ bool reshade::runtime::draw_gui_spray_trainer()
 			const float cw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
 			const float ch = 220.0f;
 			const ImVec2 c1(c0.x + cw, c0.y + ch);
-			ImGui::InvisibleButton("##spray_canvas", ImVec2(cw, ch));
+
+			// ── 표 자체를 마우스로 다룬다 ──
+			// 배율 슬라이더를 없앤 자리다. 슬라이더가 설정 목록만 길게 만들고, 정작
+			// 보고 싶은 곳은 표 안이었다. 끌어서 옮기고 휠로 키우고 줄인다.
+			// ⚠️ InvisibleButton 을 놓기만 하고 아무도 입력을 안 읽으면 자리만 잡을 뿐
+			//    아무 일도 안 일어난다(실제로 그 상태로 나갔었다).
+			static ImVec2 spray_pan(0.0f, 0.0f);
+			const ImGuiIO &imgui_io = ImGui::GetIO();
+			ImGui::InvisibleButton("##spray_canvas", ImVec2(cw, ch),
+				ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+			// 휠을 우리가 가져간다 — 안 그러면 확대하면서 창까지 같이 스크롤된다.
+			ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+			const bool canvas_hovered = ImGui::IsItemHovered();
+			if (ImGui::IsItemActive())
+			{
+				spray_pan.x += imgui_io.MouseDelta.x;
+				spray_pan.y += imgui_io.MouseDelta.y;
+			}
+			if (canvas_hovered && imgui_io.MouseWheel != 0.0f)
+			{
+				const float old_scale = _sherbet_spray_scale;
+				const float ns = ImClamp(old_scale * ImPow(1.15f, imgui_io.MouseWheel), 0.05f, 10.0f);
+				if (ns != old_scale)
+				{
+					// 커서 밑에 있던 지점이 그대로 커서 밑에 남게 원점을 다시 잡는다.
+					// 안 그러면 확대할 때마다 보던 곳이 화면 밖으로 달아난다.
+					const ImVec2 ctr((c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f);
+					const ImVec2 org_old(ctr.x + spray_pan.x, ctr.y + spray_pan.y);
+					const ImVec2 &m = imgui_io.MousePos;
+					const float k = ns / old_scale;
+					spray_pan.x = (m.x - (m.x - org_old.x) * k) - ctr.x;
+					spray_pan.y = (m.y - (m.y - org_old.y) * k) - ctr.y;
+					_sherbet_spray_scale = ns;
+					modified = true;
+				}
+			}
+			// 더블클릭이면 원위치 — 끌다가 표를 잃어버렸을 때 돌아올 길.
+			if (canvas_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			{
+				spray_pan = ImVec2(0.0f, 0.0f);
+				_sherbet_spray_scale = 1.0f;
+				modified = true;
+			}
+
 			ImDrawList *const dl = ImGui::GetWindowDrawList();
 			const sherbet::theme &ct = sherbet::active_theme();
 
@@ -3860,7 +3912,7 @@ bool reshade::runtime::draw_gui_spray_trainer()
 			// 이동을 못 읽는 게임이면 점이 전부 원점에 겹친다 — 구간을 아예 넘기지 않고
 			// (배경·격자·십자만 그리게) 그 자리에 안내만 낸다.
 			const ImVec2 org = sherbet_draw_spray_canvas(dl, c0, c1, ct, hist,
-				raw_ok2 ? focus : nullptr, raw_ok2 && _sherbet_spray_overlay5, _sherbet_spray_scale);
+				raw_ok2 ? focus : nullptr, raw_ok2 && _sherbet_spray_overlay5, _sherbet_spray_scale, spray_pan);
 			if (!raw_ok2)
 			{
 				const ImVec2 tsz = ImGui::CalcTextSize("\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"); // "발사 기록만 표시 중 — 이 게임에서는 이동을 읽을 수 없어요"
@@ -3869,6 +3921,9 @@ bool reshade::runtime::draw_gui_spray_trainer()
 					"\xEB\xB0\x9C\xEC\x82\xAC \xEA\xB8\xB0\xEB\xA1\x9D\xEB\xA7\x8C \xED\x91\x9C\xEC\x8B\x9C \xEC\xA4\x91 \xE2\x80\x94 \xEC\x9D\xB4 \xEA\xB2\x8C\xEC\x9E\x84\xEC\x97\x90\xEC\x84\x9C\xEB\x8A\x94 \xEC\x9D\xB4\xEB\x8F\x99\xEC\x9D\x84 \xEC\x9D\xBD\xEC\x9D\x84 \xEC\x88\x98 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94");
 				dl->PopClipRect();
 			}
+
+			// 표를 마우스로 다룰 수 있다는 것을 알려 준다 — 안 적어 두면 아무도 안 끌어 본다.
+			ImGui::TextDisabled(ICON_FK_MOUSE_POINTER "  \xEB\x81\x8C\xEC\x96\xB4\xEC\x84\x9C \xEC\x9D\xB4\xEB\x8F\x99 \xC2\xB7 \xED\x9C\xA0\xEB\xA1\x9C \xED\x99\x95\xEB\x8C\x80/\xEC\xB6\x95\xEC\x86\x8C \xC2\xB7 \xEB\x8D\x94\xEB\xB8\x94\xED\x81\xB4\xEB\xA6\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x9B\x90\xEC\x9C\x84\xEC\xB9\x98 (\xEB\xB0\xB0\xEC\x9C\xA8 %.2f\xEB\xB0\xB0)", _sherbet_spray_scale); // "끌어서 이동 · 휠로 확대/축소 · 더블클릭으로 원위치 (배율 %.2f배)"
 
 			// ── 통계 ──
 			if (focus != nullptr && !focus->shots.empty())

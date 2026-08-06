@@ -304,20 +304,37 @@ static void test_level_mode()
 		assert(s.current_phase() == phase::running);
 		assert(s.current_mode() == mode::level);
 
-		const float anchor_p = s.anchor_pitch();
+		// ★★ 반동 표류 방어 — 이 모드의 핵심이다.
+		//    게임에서 실제로 쏘면 반동으로 화면이 위로 튀는데 우리 가상 카메라는 마우스만
+		//    봐서 내려 당긴 것만 본다. 그래서 우리 카메라 pitch 가 계속 내려가고, 표적
+		//    높이를 고정해 두면 화면에서 표적이 끝없이 위로 올라간다(실제로 겪었다).
+		//    표적 높이는 **지금 시야**를 매 프레임 따라와야 한다.
 		float cam_y = 0.0f, cam_p = 12.0f;
 		for (int i = 0; i < 120; ++i)
 		{
+			// 반동 보정을 흉내낸다 — 매번 시야가 조금씩 아래로 밀린다.
+			// 120번 돌아도 pitch 한계(±89)에 안 닿게 잡는다.
+			cam_p = clamp_pitch(cam_p - 0.15f);
+			s.tick(1.0f / 60.0f, cam_y, cam_p);
+
 			const target t = s.current_target();
-			// 높이가 앵커와 같아야 한다. 이동 난이도에서도 위아래로 새면 안 된다.
-			assert(feq(t.pitch, anchor_p, 0.2f));
-			cam_y = t.yaw; cam_p = t.pitch;
-			assert(s.shoot(cam_y, cam_p));
-			// 이동 표적이 위아래로 흐르지 않는지도 본다.
+			// 높이가 **지금 시야**와 같아야 한다. 여기가 벌어지면 화면에서 표적이 뜬다.
+			assert(feq(t.pitch, cam_p, 0.2f));
+
+			cam_y = t.yaw;
+			assert(s.shoot(cam_y, cam_p)); // 세로를 안 맞춰도 맞아야 한다
+			// 이동 난이도에서도, 이동이 없는 난이도에서도 계속 붙어 있어야 한다.
 			for (int k = 0; k < 30; ++k)
+			{
+				cam_p = clamp_pitch(cam_p - 0.01f);
 				s.tick(1.0f / 60.0f, cam_y, cam_p);
-			assert(feq(s.current_target().pitch, anchor_p, 0.5f));
+			}
+			assert(feq(s.current_target().pitch, cam_p, 0.2f));
+			if (s.current_phase() != phase::running)
+				break;
 		}
+		// 실제로 시야가 꽤 내려갔는데도 끝까지 붙어 있었다는 뜻이다.
+		assert(cam_p < -20.0f);
 	}
 
 	// 자유 모드는 반대로 위아래를 실제로 쓴다(안 그러면 모드를 나눈 의미가 없다).
@@ -344,6 +361,33 @@ static void test_level_mode()
 	assert(max_dp < max_dy);
 	assert(max_dp < max_dy * (kVerticalSquash * 1.6f));
 	assert(max_dp > max_dy * (kVerticalSquash * 0.4f));
+
+	// ★★ 자유 모드 앵커는 판이 끝날 때까지 **절대 안 움직인다**. 시야가 아무리
+	//    돌아가고 밀려도 그대로여야 한다. 여기가 새면 표적 무리가 시야를 따라다니며
+	//    판이 통째로 떠내려간다(예전에 좌우에서 실제로 겪은 문제다).
+	//    수평 모드처럼 시야에 묶고 싶어지는 자리라서 못박아 둔다 — 자유 모드는 표적마다
+	//    세로를 다시 맞추므로 반동 오차가 매 명중마다 저절로 리셋되고, 따라서 여기서
+	//    보정할 것이 없다.
+	{
+		session r;
+		r.start(level::normal, duration::s60, 909u, 0.0f, 0.0f, 90.0f, 0.0f, mode::free);
+		advance(r, kCountdownSeconds + 0.1f);
+		const float ap0 = r.anchor_pitch(), ay0 = r.anchor_yaw();
+
+		float cam_p = 0.0f;
+		for (int i = 0; i < 600; ++i) // 10초 동안 시야를 크게 밀어 본다
+		{
+			cam_p = clamp_pitch(cam_p - 0.1f);
+			r.tick(1.0f / 60.0f, 40.0f, cam_p);
+			if (r.current_phase() != phase::running)
+				break;
+			const target t = r.current_target();
+			r.shoot(t.yaw, t.pitch);
+		}
+		assert(cam_p < -50.0f); // 시야가 실제로 크게 밀렸는데도
+		assert(feq(r.anchor_pitch(), ap0, 1e-4f));
+		assert(feq(r.anchor_yaw(), ay0, 1e-4f));
+	}
 }
 
 // ── 8. 판 진행: 카운트다운 → 시작 ────────────────────────────────────────────
