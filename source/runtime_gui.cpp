@@ -2129,7 +2129,10 @@ void reshade::runtime::draw_gui()
 			// SHERBET: custompicture 기능 구매자 — 켜져 있고 이미지가 로딩됐으면 그라디언트 대신 사진 배경 + 가독성 스크림
 			if (_sherbet_bg_dirty)
 				sherbet_load_background();
-			const bool sherbet_photo_bg = _sherbet_bg_on && sherbet::has_feature("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
+			// 판정은 sherbet_feature_unlocked 로 한다 — has_feature 만 보면 「잠금 화면
+			// 미리보기」를 켜도 배경은 계속 그려져서, 판매자가 잠긴 화면을 확인할 수 없다.
+			// (잠긴 기능은 UI 뿐 아니라 일도 돌면 안 된다 — sherbet_paid.hpp 규약.)
+			const bool sherbet_photo_bg = _sherbet_bg_on && sherbet_feature_unlocked("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
 			if (sherbet_photo_bg)
 			{
 				// 창을 덮도록 커버-핏(비율 유지, 넘치는 부분은 잘라냄) UV 계산
@@ -2370,7 +2373,7 @@ void reshade::runtime::draw_gui()
 		// 좌측 레일
 		// 레일 배경은 테마의 bg0 를 살짝 얹는다 — 검정 고정이면 라이트 테마(딸기)에서 회색 띠로 떠 보임.
 		// 단, 커스텀 사진 배경이 켜져 있으면 테마색이 사진과 충돌하므로 중립적인 어두운 스크림으로 대체한다.
-		const bool sherbet_rail_photo = _sherbet_bg_on && sherbet::has_feature("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
+		const bool sherbet_rail_photo = _sherbet_bg_on && sherbet_feature_unlocked("custompicture") && _sherbet_bg_srv != 0 && _sherbet_bg_w > 0;
 		const ImU32 sherbet_rail_bg = sherbet_rail_photo
 			? IM_COL32(12, 12, 16, 200)                                   // 사진 위: 어떤 사진이든 어울리는 중립 다크 스크림
 			: sherbet::with_alpha(sherbet::active_theme().bg0, 110);
@@ -4858,6 +4861,71 @@ void reshade::runtime::draw_gui_optimize()
 	sherbet::end_card();
 }
 
+// SHERBET: 커스텀 사진 배경 잠금 카드 — 「설정」 탭.
+//
+// 가운데 미리보기는 **가짜 사진**이다(테마색 그라디언트 + 실제와 같은 어두운 스크림).
+// 잠긴 사람에게 진짜 이미지 로딩 경로를 태우지 않는다 — 최적화 잠금 카드가 런타임 필드를
+// 한 개도 읽지 않는 것과 같은 이유다. 보여주려는 건 사진 자체가 아니라 "창 배경이 사진으로
+// 바뀐다" 는 사실이므로, 가짜 그라디언트로도 충분히 전달된다.
+void reshade::runtime::sherbet_draw_bg_lock_card(const sherbet::paid::feature &f)
+{
+	static const char *const kBgLockCaption = ICON_FK_ARROW_UP " \xEC\x98\x88\xEC\x8B\x9C\xEC\x98\x88\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB5\xAC\xEB\xA7\xA4\xED\x95\x98\xEB\xA9\xB4 \xEC\x9D\xB4 \xEC\x9E\x90\xEB\xA6\xAC\xEC\x97\x90 \xEB\x82\xB4 \xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\xB4 \xEB\x93\xA4\xEC\x96\xB4\xEC\x99\x80\xEC\x9A\x94"; // "↑ 예시예요 — 구매하면 이 자리에 내 사진이 들어와요"
+	static const char *const kBgLockPhoto = "\xEB\x82\xB4 \xEC\x82\xAC\xEC\xA7\x84"; // "내 사진"
+
+	sherbet::begin_card("##bg_lock");
+	{
+		sherbet_draw_lock_header(f);
+
+		const sherbet::theme &t = sherbet::active_theme();
+		ImDrawList *const dl = ImGui::GetWindowDrawList();
+
+		// 미니 오버레이 미리보기. 실제 배경 렌더와 **같은 규칙**으로 그린다:
+		// 둥근 모서리 → 사진 → 가독성용 어두운 스크림 → 그 위에 UI.
+		const ImVec2 p0 = ImGui::GetCursorScreenPos();
+		const float pw = ImMax(120.0f, ImGui::GetContentRegionAvail().x);
+		const float ph = ImGui::GetTextLineHeightWithSpacing() * 4.0f + 24.0f;
+		const ImVec2 p1(p0.x + pw, p0.y + ph);
+
+		// '사진' 자리 — 테마 액센트에서 액센트2 로 흐르는 대각 그라디언트.
+		dl->PushClipRect(p0, p1, true);
+		dl->AddRectFilledMultiColor(p0, p1,
+			sherbet::with_alpha(t.accent, 210), sherbet::with_alpha(t.accent2, 210),
+			sherbet::with_alpha(t.bg1, 230), sherbet::with_alpha(t.accent, 160));
+		// 실제 기능이 글씨 가독성을 위해 까는 것과 같은 스크림.
+		dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 96));
+		dl->PopClipRect();
+		dl->AddRect(p0, p1, sherbet::with_alpha(t.border, 200), 12.0f, 0, 1.0f);
+
+		// 스크림 위에 얹히는 가짜 UI — 제목 줄 하나 + 알약 두 개.
+		const float pad = 12.0f;
+		dl->AddText(ImVec2(p0.x + pad, p0.y + pad), sherbet::with_alpha(t.text, 235), "Sherbet");
+		const float chip_y = p0.y + pad + ImGui::GetTextLineHeightWithSpacing() * 1.4f;
+		float chip_x = p0.x + pad;
+		for (int i = 0; i < 2; ++i)
+		{
+			const float cw = 52.0f + i * 18.0f, ch = ImGui::GetTextLineHeight() + 6.0f;
+			dl->AddRectFilled(ImVec2(chip_x, chip_y), ImVec2(chip_x + cw, chip_y + ch),
+				sherbet::with_alpha(i == 0 ? t.accent : t.chip, 220), ch * 0.5f);
+			chip_x += cw + 8.0f;
+		}
+		// 우상단 '내 사진' 배지 — 잘라낸 스크린샷만 봐도 이 영역이 사진 자리임이 보인다.
+		{
+			const ImVec2 ts = ImGui::CalcTextSize(kBgLockPhoto);
+			const ImVec2 b1(p1.x - 10.0f, p0.y + 10.0f + ts.y + 6.0f);
+			const ImVec2 b0(b1.x - (ts.x + 16.0f), p0.y + 10.0f);
+			dl->AddRectFilled(b0, b1, IM_COL32(0, 0, 0, 150), (b1.y - b0.y) * 0.5f);
+			dl->AddText(ImVec2(b0.x + 8.0f, b0.y + 3.0f), sherbet::with_alpha(t.text, 220), kBgLockPhoto);
+		}
+
+		ImGui::Dummy(ImVec2(pw, ph));
+		ImGui::TextDisabled("%s", kBgLockCaption);
+		ImGui::Spacing();
+
+		sherbet_draw_lock_footer(f);
+	}
+	sherbet::end_card();
+}
+
 void reshade::runtime::draw_gui_settings()
 {
 	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
@@ -4987,9 +5055,21 @@ void reshade::runtime::draw_gui_settings()
 		ImGui::Spacing();
 	}
 
-	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로. 'custompicture' 기능 구매자에게만 노출.
-	if (sherbet::has_feature("custompicture") &&
-		ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD")) // "커스텀 배경"
+	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로.
+	// ⚠️ 예전엔 has_feature 로 **헤더째 숨겼다.** 그래서 안 산 사람 화면에는 이 기능이
+	//    아예 존재하지 않았고, 디스코드 역할까지 만들어 둔 상품을 아무도 볼 수 없었다.
+	//    (sherbet_paid.hpp 머리말: "안 보이는 기능은 한 개도 안 팔린다.")
+	//    이제 헤더는 **언제나** 보이고, 안쪽이 진열대냐 진짜 UI 냐만 갈린다 —
+	//    스프레이/최적화 탭이 이미 쓰던 방식과 같다.
+	if (ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD")) // "커스텀 배경"
+	{
+	if (!sherbet_feature_unlocked("custompicture"))
+	{
+		if (const sherbet::paid::feature *const bg_f = sherbet::paid::find("custompicture"))
+			sherbet_draw_bg_lock_card(*bg_f);
+		ImGui::Spacing();
+	}
+	else
 	{
 		bool bg_changed = false;
 		bg_changed |= ImGui::Checkbox("\xEB\xB0\xB0\xEA\xB2\xBD \xEC\xBC\x9C\xEA\xB8\xB0", &_sherbet_bg_on); // "배경 켜기"
@@ -5047,6 +5127,7 @@ void reshade::runtime::draw_gui_settings()
 		if (bg_changed)
 			modified = true;
 		ImGui::Spacing();
+	}
 	}
 
 	if (ImGui::CollapsingHeader(_("General"), ImGuiTreeNodeFlags_DefaultOpen))

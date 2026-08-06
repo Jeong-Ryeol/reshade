@@ -51,14 +51,20 @@ static void test_catalog_shape()
 
 	assert(ids.count("spray") == 1);
 	assert(ids.count("optimize") == 1);
+	// custompicture 는 오래 카탈로그 밖이었다 — 그래서 안 산 사람 화면에는 아예 없었고,
+	// 역할까지 만들어 둔 상품을 아무도 못 봤다. 진열 문구를 붙여 카탈로그로 들여왔다.
+	assert(ids.count("custompicture") == 1);
 
 	assert(paid::find("spray") != nullptr);
 	assert(paid::find("optimize") != nullptr);
+	assert(paid::find("custompicture") != nullptr);
 	assert(std::strcmp(paid::find("spray")->id, "spray") == 0);
 	assert(paid::find(nullptr) == nullptr);
 	assert(paid::find("") == nullptr);
 	assert(paid::find("Spray") == nullptr);      // 대소문자는 서버 계약 그대로 — 관대하게 굴지 않는다
-	assert(paid::find("custompicture") == nullptr); // 진열 문구가 없는 기존 기능은 카탈로그 밖
+	// id 는 server/content/features.json 과 글자 하나까지 같아야 한다. 여기가 어긋나면
+	// 산 사람에게도 영영 안 열린다(서버가 주는 열쇠와 자물쇠 이름이 다른 셈).
+	assert(std::strcmp(paid::find("custompicture")->id, "custompicture") == 0);
 }
 
 // ── 2. 잠금 판정 ──────────────────────────────────────────────────────────────
@@ -68,9 +74,14 @@ static void test_lock_decision()
 	assert(!paid::unlocked("spray", false, false));
 	assert(!paid::unlocked("optimize", false, false));
 
+	assert(!paid::unlocked("custompicture", false, false));
+
 	// ★ 권한 있음 → 열림. 산 사람에게 판매 카드를 보이면 안 된다.
 	assert(paid::unlocked("spray", true, false));
 	assert(paid::unlocked("optimize", true, false));
+	// ⚠️ 이미 custompicture 를 산 구매자가 있다. 카탈로그에 넣었다고 그 사람들 것이
+	//    잠기면 환불 사유다 — 권한만 있으면 예전과 똑같이 열려야 한다.
+	assert(paid::unlocked("custompicture", true, false));
 
 	// 판매 화면 확인용 강제 잠금은 권한을 이긴다(그러라고 있는 스위치다).
 	assert(!paid::unlocked("spray", true, true));
@@ -81,7 +92,9 @@ static void test_lock_decision()
 	// (조준점·조준점 마켓이 「에임」 탭 같은 자리에 있으므로 여기가 새면 무료 기능이 잠긴다).
 	assert(paid::unlocked("crosshair", false, false));
 	assert(paid::unlocked("crosshair", false, true));
-	assert(paid::unlocked("custompicture", false, true));
+	// custompicture 는 이제 카탈로그 안이므로 강제 잠금이 통해야 한다(예전엔 안 통했다).
+	assert(!paid::unlocked("custompicture", true, true));
+	assert(!paid::unlocked("custompicture", false, true));
 	assert(paid::unlocked(nullptr, false, true));
 	assert(paid::unlocked("", false, true));
 }

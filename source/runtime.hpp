@@ -645,6 +645,9 @@ namespace reshade
 		// SHERBET: 「최적화」 탭이 통째로 잠겼을 때의 판매 카드. 런타임 실측 필드를 한 개도
 		// 읽지 않는다 — 실측 코드와 다른 함수로 갈라 둔 것이 그 규칙의 구조적 보장이다.
 		void sherbet_draw_optimize_lock_card(const sherbet::paid::feature &f);
+		// SHERBET: 「설정」 탭 커스텀 사진 배경 잠금 카드. 가운데 미리보기는 **가짜 사진**
+		// (그라디언트)이다 — 잠긴 사람에게 실제 이미지 로딩 경로를 태우지 않는다.
+		void sherbet_draw_bg_lock_card(const sherbet::paid::feature &f);
 
 		// SHERBET: 유료 기능 잠금 판정의 **호출부 단일 입구**.
 		// sherbet::paid::unlocked() 에 서버 엔타이틀(has_feature)과 판매자 미리보기 스위치를
