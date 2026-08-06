@@ -6888,7 +6888,7 @@ void reshade::runtime::draw_sherbet_aim_overlay()
 		y += big + 4.0f;
 
 		// 남은 시간 + 막대. 숫자를 안 읽어도 줄어드는 게 보인다.
-		const float total = sherbet::aim::duration_seconds(_sherbet_aim.current_duration());
+		const float total = _sherbet_aim.total_seconds(); // 맛보기는 duration 과 다르다
 		const float left = _sherbet_aim.time_left();
 		snprintf(buf, sizeof(buf), "%d:%02d", static_cast<int>(left) / 60, static_cast<int>(left) % 60);
 		dl->AddText(ImVec2(p0.x + pad, y), sherbet::with_alpha(t.text, 230), buf);
@@ -6973,7 +6973,9 @@ void reshade::runtime::draw_gui_aimlab()
 		// 시드는 매판 달라야 한다. 테스트에서는 주입하지만 실전에서는 시각으로 흩는다.
 		const std::uint32_t seed = static_cast<std::uint32_t>(ImGui::GetTime() * 100000.0)
 			^ (static_cast<std::uint32_t>(_sherbet_aim.result().shots) * 2654435761u) ^ 0xA5A5A5A5u;
-		_sherbet_aim.start(lv, du, seed, 0.0f, 0.0f, _sherbet_aim_fov);
+		// 맛보기는 판 길이 선택지에 없는 고정 길이로 돈다.
+		_sherbet_aim.start(lv, du, seed, 0.0f, 0.0f, _sherbet_aim_fov,
+			trial ? aim::kTrialSeconds : 0.0f);
 		_show_overlay = false;
 	};
 
@@ -6988,7 +6990,7 @@ void reshade::runtime::draw_gui_aimlab()
 			// 말로 파는 대신 손에 쥐여 준다. 10초는 몸풀기 길이 그대로라, 정식이 60초라는
 			// 걸 보면 차이가 바로 읽힌다. 횟수 제한은 두지 않는다 — 반복해도 난이도를
 			// 못 고르고 기록도 안 남아서 "제대로 된 판" 이 되지 않는다.
-			if (sherbet::pill_button(ICON_FK_PLAY "  \xEB\xA7\x9B\xEB\xB3\xB4\xEA\xB8\xB0 10\xEC\xB4\x88", true)) // "맛보기 10초"
+			if (sherbet::pill_button(ICON_FK_PLAY "  \xEB\xA7\x9B\xEB\xB3\xB4\xEA\xB8\xB0 5\xEC\xB4\x88", true)) // "맛보기 5초"
 				start_run(true);
 			ImGui::Spacing();
 			sherbet_draw_lock_footer(*f);
@@ -7060,7 +7062,7 @@ void reshade::runtime::draw_gui_aimlab()
 
 		ImGui::Text("%s %.0f%%   (%d / %d)", "\xEC\xA0\x95\xED\x99\x95\xEB\x8F\x84", // "정확도"
 			aim::accuracy(st) * 100.0f, st.hits, st.shots);
-		ImGui::TextDisabled("%.2f / \xEC\xB4\x88", aim::per_second(st, _sherbet_aim.current_duration()));
+		ImGui::TextDisabled("%.2f / \xEC\xB4\x88", aim::per_second(st, _sherbet_aim.total_seconds()));
 
 		if (_sherbet_aim_trial)
 			ImGui::TextDisabled("%s", "\xEC\x97\xB0\xEC\x8A\xB5 \xED\x8C\x90\xEC\x9D\xB4\xEB\x9D\xBC \xEA\xB8\xB0\xEB\xA1\x9D\xEC\x97\x90 \xEC\x95\x88 \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEC\x9A\x94"); // "연습 판이라 기록에 안 올라가요"

@@ -70,6 +70,11 @@ namespace sherbet
 			return d != duration::s10;
 		}
 
+		// 맛보기(미구매) 판의 길이. **판 길이 선택지가 아니다** — duration enum 을 늘리면
+		// 선택 알약에 5초가 생기고 서버 계약(LEVELS·DURATIONS)까지 흔들린다.
+		// 손에 쥐여 주는 게 목적이라 짧아도 되고, 정식이 60초라는 걸 보면 차이가 읽힌다.
+		constexpr float kTrialSeconds = 5.0f;
+
 		// ── 난이도 설정 ──────────────────────────────────────────────────────
 		// 단위는 전부 **도**다.
 		struct tuning
@@ -271,10 +276,11 @@ namespace sherbet
 		}
 
 		// 초당 명중 수. 판 길이가 달라도 비교할 수 있게 남긴다(리더보드 부가 표시).
-		inline float per_second(const stats &s, duration d)
+		// ⚠️ duration 이 아니라 **실제 초**를 받는다 — 맛보기는 duration 선택지에 없는
+		//    길이라(kTrialSeconds), enum 으로 되짚으면 맛보기 결과가 틀린 값이 된다.
+		inline float per_second(const stats &s, float seconds)
 		{
-			const float secs = duration_seconds(d);
-			return secs > 0.0f ? static_cast<float>(s.hits) / secs : 0.0f;
+			return seconds > 0.0f ? static_cast<float>(s.hits) / seconds : 0.0f;
 		}
 
 		// ── 투영 (그리기 전용) ───────────────────────────────────────────────
@@ -315,7 +321,9 @@ namespace sherbet
 		{
 		public:
 			// 시작. 카메라의 현재 방향을 기준으로 첫 표적을 놓는다.
-			void start(level lv, duration d, std::uint32_t seed, float cam_yaw, float cam_pitch, float fov_deg)
+			// override_seconds > 0 이면 그 길이로 돈다(맛보기). 0 이면 duration 을 따른다.
+			void start(level lv, duration d, std::uint32_t seed, float cam_yaw, float cam_pitch, float fov_deg,
+				float override_seconds = 0.0f)
 			{
 				_level = lv;
 				_duration = d;
@@ -325,7 +333,9 @@ namespace sherbet
 				_stats = stats();
 				_phase = phase::countdown;
 				_countdown_left = kCountdownSeconds;
-				_time_left = duration_seconds(d);
+				// 실제 길이를 들고 있는다. duration 으로 되짚으면 맛보기가 틀린 값이 된다.
+				_total = override_seconds > 0.0f ? override_seconds : duration_seconds(d);
+				_time_left = _total;
 				_last_hit_ok = false;
 				_shot_log = 0u;
 				_shot_log_n = 0;
@@ -356,7 +366,7 @@ namespace sherbet
 						_countdown_left = 0.0f;
 						_phase = phase::running;
 						// 시간 재기는 **첫 표적이 뜬 순간**부터다. 카운트다운은 안 센다.
-						_time_left = duration_seconds(_duration);
+						_time_left = _total;
 						spawn(cam_yaw, cam_pitch); // 카운트다운 동안 돌린 시야를 기준으로 다시 놓는다
 					}
 					return;
@@ -402,7 +412,9 @@ namespace sherbet
 			// 남은 카운트다운(초). 숫자가 커졌다 잦아드는 연출에 쓴다.
 			float countdown_remaining() const { return _countdown_left; }
 			float time_left() const { return _time_left; }
-			float time_elapsed() const { return duration_seconds(_duration) - _time_left; }
+			// 이번 판의 실제 길이(초). 맛보기는 duration 선택지에 없는 값이라 여기서 읽어야 한다.
+			float total_seconds() const { return _total; }
+			float time_elapsed() const { return _total - _time_left; }
 			const target &current_target() const { return _target; }
 			const stats &result() const { return _stats; }
 			level current_level() const { return _level; }
@@ -514,6 +526,7 @@ namespace sherbet
 			phase _phase = phase::idle;
 			float _countdown_left = 0.0f;
 			float _time_left = 0.0f;
+			float _total = 0.0f; // 이번 판의 실제 길이(초). 맛보기는 duration 과 다르다
 			target _target;
 			stats _stats;
 			bool _last_hit_ok = false;

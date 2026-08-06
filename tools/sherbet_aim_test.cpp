@@ -216,9 +216,37 @@ static void test_accuracy()
 	s.hits = 7; s.shots = 7;
 	assert(feq(accuracy(s), 1.0f));
 
+	// per_second 는 duration 이 아니라 **실제 초**를 받는다 — 맛보기는 duration 선택지에
+	// 없는 길이라(kTrialSeconds) enum 으로 되짚으면 틀린 값이 된다.
 	stats p; p.hits = 30;
-	assert(feq(per_second(p, duration::s60), 0.5f));
-	assert(feq(per_second(p, duration::s30), 1.0f));
+	assert(feq(per_second(p, 60.0f), 0.5f));
+	assert(feq(per_second(p, 30.0f), 1.0f));
+	assert(feq(per_second(p, 0.0f), 0.0f)); // 0 으로 나누지 않는다
+}
+
+// ── 맛보기 ───────────────────────────────────────────────────────────────────
+static void test_trial_length()
+{
+	// 맛보기는 duration 선택지를 늘리지 않고 길이만 덮어쓴다.
+	// enum 을 늘리면 선택 알약에 5초가 생기고 서버 계약(LEVELS·DURATIONS)까지 흔들린다.
+	session s;
+	s.start(level::normal, duration::s60, 3u, 0.0f, 0.0f, 90.0f, kTrialSeconds);
+	advance(s, kCountdownSeconds + 0.1f);
+	assert(s.current_phase() == phase::running);
+	assert(feq(s.total_seconds(), kTrialSeconds, 1e-2f));
+	assert(feq(s.time_left(), kTrialSeconds, 0.1f));
+
+	// 5초면 끝난다 — 고른 60초가 아니다.
+	advance(s, 4.5f);
+	assert(s.current_phase() == phase::running);
+	advance(s, 1.0f);
+	assert(s.current_phase() == phase::finished);
+
+	// override 를 안 주면 duration 을 따른다.
+	session t;
+	t.start(level::normal, duration::s30, 3u, 0.0f, 0.0f, 90.0f);
+	advance(t, kCountdownSeconds + 0.1f);
+	assert(feq(t.total_seconds(), 30.0f, 1e-2f));
 }
 
 // ── 8. 판 진행: 카운트다운 → 시작 ────────────────────────────────────────────
@@ -547,6 +575,7 @@ int main()
 	test_rng();
 	test_project();
 	test_accuracy();
+	test_trial_length();
 	test_phase_flow();
 	test_frame_rate_independence();
 	test_zero_latency();
