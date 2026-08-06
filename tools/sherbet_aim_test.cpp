@@ -64,10 +64,10 @@ static void test_tuning_ladder()
 	assert(n.radius_deg > h.radius_deg);
 	assert(h.radius_deg > x.radius_deg);
 
-	// 어려워질수록 더 멀리 뜬다(큰 플릭).
-	assert(e.spawn_max_deg < n.spawn_max_deg);
-	assert(n.spawn_max_deg < h.spawn_max_deg);
-	assert(h.spawn_max_deg < x.spawn_max_deg);
+	// 어려워질수록 원뿔이 넓어진다(큰 플릭).
+	assert(e.cone_deg < n.cone_deg);
+	assert(n.cone_deg < h.cone_deg);
+	assert(h.cone_deg < x.cone_deg);
 
 	// ★ 이동은 **어려움부터**. 쉬움·보통은 정지다 — 한 번에 한 축씩 어려워지는 계단.
 	assert(e.move_speed_deg == 0.0f);
@@ -75,12 +75,12 @@ static void test_tuning_ladder()
 	assert(h.move_speed_deg > 0.0f);
 	assert(x.move_speed_deg > h.move_speed_deg);
 
-	// 최소 거리는 항상 최대보다 작아야 한다. 뒤집히면 링이 성립하지 않는다.
+	// 최소 간격은 원뿔 반경보다 작아야 한다. 뒤집히면 만족하는 자리가 없다.
 	for (int i = 0; i < kLevelCount; ++i)
 	{
 		const tuning t = tuning_for(static_cast<level>(i));
-		assert(t.spawn_min_deg > 0.0f);          // 0 이면 제자리 연타가 된다
-		assert(t.spawn_min_deg < t.spawn_max_deg);
+		assert(t.min_gap_deg > 0.0f);          // 0 이면 제자리 연타가 된다
+		assert(t.min_gap_deg < t.cone_deg);
 		assert(t.radius_deg > 0.0f);
 	}
 }
@@ -353,27 +353,44 @@ static void test_spawn_rules()
 
 		session s;
 		arm(s, lv, duration::s60, 1234u + static_cast<std::uint32_t>(li), 0.0f, 0.0f, fov);
+		const float ay = s.anchor_yaw(), ap = s.anchor_pitch();
 
 		float cam_y = 0.0f, cam_p = 0.0f;
+		float prev_y = 0.0f, prev_p = 0.0f;
+		bool have_prev = false;
+		int close_calls = 0;
+
 		for (int i = 0; i < 300; ++i)
 		{
 			const target t = s.current_target();
-			const float d = angular_distance(cam_y, cam_p, t.yaw, t.pitch);
 
-			// ★ 최소 거리 — 0 이면 마우스를 안 움직이고도 연타가 되어 훈련이 안 된다.
-			assert(d >= tn.spawn_min_deg - 0.5f);
-			// ★ 화면 안 — 찾느라 시간이 날아가는 건 조준 실력이 아니다.
+			// ★★ 표류 금지 — 표적은 **판 시작 방향** 주위 원뿔을 절대 벗어나지 않는다.
+			//     지금 조준 방향 기준으로 놓으면 맞출 때마다 기준이 옮겨가는 랜덤워크가 되어
+			//     인게임에서 제자리를 뱅뱅 돌게 된다(실제로 그랬다). 이게 이 테스트의 핵심이다.
+			assert(angular_distance(ay, ap, t.yaw, t.pitch) <= tn.cone_deg + 0.5f);
+
+			// ★ 화면 안 — 조준은 늘 직전 표적 위에 있으므로 최악은 원뿔 지름이다.
+			const float d = angular_distance(cam_y, cam_p, t.yaw, t.pitch);
 			assert(d <= fov * 0.5f);
-			// pitch 는 극점을 넘지 않는다.
+
+			// 직전 표적과 너무 붙지 않는다. 기각 표집이라 드물게 못 지킬 수 있으므로
+			// 개수로 본다 — 대부분은 지켜야 훈련이 된다.
+			if (have_prev && angular_distance(t.yaw, t.pitch, prev_y, prev_p) < tn.min_gap_deg - 0.5f)
+				close_calls++;
+
 			assert(t.pitch <= kPitchLimit + 1e-3f && t.pitch >= -kPitchLimit - 1e-3f);
 
-			// 표적 위로 카메라를 옮기고 쏜다 → 반드시 명중.
+			prev_y = t.yaw; prev_p = t.pitch; have_prev = true;
 			cam_y = t.yaw; cam_p = t.pitch;
-			assert(s.shoot(cam_y, cam_p));
+			assert(s.shoot(cam_y, cam_p)); // 표적 위에서 쏘면 반드시 명중
 		}
+		assert(close_calls < 15); // 300개 중 5% 미만
 		assert(s.result().hits == 300);
 		assert(s.result().shots == 300);
 		assert(feq(accuracy(s.result()), 1.0f));
+
+		// ★ 카메라(=사람 시야)도 원뿔 안에 머문다. 여기가 깨지면 뱅뱅 도는 것이다.
+		assert(angular_distance(ay, ap, cam_y, cam_p) <= tn.cone_deg + 0.5f);
 	}
 }
 
@@ -460,8 +477,21 @@ static void test_finish()
 	assert(s.result().shots == shots_before); // ★ 끝난 뒤 클릭은 기록에 안 들어간다
 
 	// 시간이 음수로 내려가지 않는다.
-	s.tick(5.0f, 0.0f, 0.0f);
+	s.tick(0.2f, 0.0f, 0.0f);
 	assert(feq(s.time_left(), 0.0f));
+
+	// ★ 끝난 뒤에도 시간을 센다 — 결과 HUD 를 언제 지울지 알아야 한다.
+	//   안 세면 왼쪽 결과판이 게임 내내 화면에 눌어붙는다(실제로 그랬다).
+	assert(s.since_finish() > 0.0f);
+	const float before = s.since_finish();
+	advance(s, 1.0f);
+	assert(s.since_finish() > before);
+	advance(s, kResultHudSeconds);
+	assert(s.since_finish() >= kResultHudSeconds); // 이 시점엔 HUD 가 사라져 있어야 한다
+
+	// 새 판을 시작하면 다시 0 부터.
+	arm(s, level::easy, duration::s10, 9u);
+	assert(feq(s.since_finish(), 0.0f));
 }
 
 // ── 13. 이동 표적 ────────────────────────────────────────────────────────────

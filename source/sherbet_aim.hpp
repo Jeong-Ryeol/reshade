@@ -70,6 +70,10 @@ namespace sherbet
 			return d != duration::s10;
 		}
 
+		// 판이 끝난 뒤 결과 HUD 를 화면에 더 붙잡아 두는 시간(초). 이 뒤에는 사라진다.
+		// 안 지우면 게임을 계속하는 내내 왼쪽에 결과판이 눌어붙어 있다(실제로 그랬다).
+		constexpr float kResultHudSeconds = 3.0f;
+
 		// 맛보기(미구매) 판의 길이. **판 길이 선택지가 아니다** — duration enum 을 늘리면
 		// 선택 알약에 5초가 생기고 서버 계약(LEVELS·DURATIONS)까지 흔들린다.
 		// 손에 쥐여 주는 게 목적이라 짧아도 되고, 정식이 60초라는 걸 보면 차이가 읽힌다.
@@ -80,23 +84,31 @@ namespace sherbet
 		struct tuning
 		{
 			float radius_deg;      // 표적 반지름
-			float spawn_min_deg;   // 다음 표적까지 최소 각거리 — 0 이면 제자리 연타가 된다
-			float spawn_max_deg;   // 최대 각거리
+			float min_gap_deg;     // **직전 표적**으로부터의 최소 각거리 — 0 이면 제자리 연타가 된다
+			float cone_deg;        // **판 시작 방향(앵커)** 기준 원뿔 반경. 표적은 이 안에서만 뜬다
 			float move_speed_deg;  // 이동 속도(도/초). 0 = 정지
 		};
 
-		// 이동은 **어려움부터** 들어간다. 쉬움→보통은 크기와 범위만 조이고, 보통→어려움에서
+		// ⚠️ 원뿔의 기준은 **판을 시작한 방향**이지 지금 조준 방향이 아니다.
+		//    지금 방향 기준으로 놓으면 맞출 때마다 기준이 옮겨가는 랜덤워크가 되어,
+		//    30~60개 하는 동안 인게임에서 제자리를 뱅뱅 돌게 된다(실제로 그랬다).
+		//    앵커 고정이면 표적이 늘 눈앞 화면 안에서만 논다.
+		//
+		// 이동은 **어려움부터** 들어간다. 쉬움→보통은 크기와 원뿔만 조이고, 보통→어려움에서
 		// "움직인다" 는 축이 새로 하나 붙는다. 한 번에 하나씩 어려워지는 계단이다.
 		inline tuning tuning_for(level lv)
 		{
 			switch (lv)
 			{
-			case level::easy:   return { 2.60f, 3.0f,  9.0f,  0.0f };
-			case level::normal: return { 1.70f, 4.0f, 14.0f,  0.0f };
-			case level::hard:   return { 1.10f, 5.0f, 20.0f,  7.0f };
-			case level::hell:   return { 0.70f, 6.0f, 26.0f, 14.0f };
+			//                   반지름  최소간격  원뿔   이동속도
+			case level::easy:   return { 2.60f, 3.0f,  8.0f,  0.0f };
+			case level::normal: return { 1.30f, 4.0f, 11.0f,  0.0f };
+			case level::hard:   return { 0.85f, 5.0f, 14.0f,  7.0f };
+			// 헬 이동속도는 14 였는데 실물에서 과했다(표적이 튀어 조준 훈련이 아니라
+			// 반사신경 시험이 됨). 어려움(7)과 구별되는 선에서 낮춘다.
+			case level::hell:   return { 0.55f, 6.0f, 17.0f, 10.0f };
 			}
-			return { 1.70f, 4.0f, 14.0f, 0.0f };
+			return { 1.30f, 4.0f, 11.0f, 0.0f };
 		}
 
 		// ── 카운트다운 ───────────────────────────────────────────────────────
@@ -337,9 +349,14 @@ namespace sherbet
 				_total = override_seconds > 0.0f ? override_seconds : duration_seconds(d);
 				_time_left = _total;
 				_last_hit_ok = false;
+				_since_finish = 0.0f;
 				_shot_log = 0u;
 				_shot_log_n = 0;
-				spawn(cam_yaw, cam_pitch);
+				// 앵커 = 판을 시작한 방향. 표적은 평생 이 주위 원뿔 안에서만 논다.
+				_anchor_yaw = wrap_deg(cam_yaw);
+				_anchor_pitch = clamp_pitch(cam_pitch);
+				_has_target = false;
+				spawn();
 			}
 
 			void stop()
@@ -367,11 +384,22 @@ namespace sherbet
 						_phase = phase::running;
 						// 시간 재기는 **첫 표적이 뜬 순간**부터다. 카운트다운은 안 센다.
 						_time_left = _total;
-						spawn(cam_yaw, cam_pitch); // 카운트다운 동안 돌린 시야를 기준으로 다시 놓는다
+						// 카운트다운 동안 시야를 돌렸을 수 있다. 그 방향을 앵커로 다시 잡는다 —
+						// 시작 버튼을 누를 때가 아니라 **첫 표적이 뜨는 순간**의 시야가 기준이다.
+						_anchor_yaw = wrap_deg(cam_yaw);
+						_anchor_pitch = clamp_pitch(cam_pitch);
+						_has_target = false;
+						spawn();
 					}
 					return;
 				}
 
+				if (_phase == phase::finished)
+				{
+					// 끝난 뒤에도 시간은 센다 — 결과 HUD 를 언제 지울지 알아야 한다.
+					_since_finish += dt;
+					return;
+				}
 				if (_phase != phase::running)
 					return;
 
@@ -382,6 +410,7 @@ namespace sherbet
 				{
 					_time_left = 0.0f;
 					_phase = phase::finished;
+					_since_finish = 0.0f;
 				}
 			}
 
@@ -399,7 +428,7 @@ namespace sherbet
 				if (hit)
 				{
 					_stats.hits++;
-					spawn(cam_yaw, cam_pitch);
+					spawn();
 				}
 				_last_hit_ok = hit;
 				push_shot(hit);
@@ -421,6 +450,11 @@ namespace sherbet
 			duration current_duration() const { return _duration; }
 			const tuning &current_tuning() const { return _tuning; }
 			bool last_shot_hit() const { return _last_hit_ok; }
+			// 판 시작 방향. 표적은 이 주위 원뿔 안에서만 뜬다.
+			float anchor_yaw() const { return _anchor_yaw; }
+			float anchor_pitch() const { return _anchor_pitch; }
+			// 판이 끝난 뒤 흐른 시간(초). 결과 HUD 를 지울 때를 정한다.
+			float since_finish() const { return _since_finish; }
 
 			// 최근 사격 n 발의 명중 여부(0 = 가장 최근). HUD 의 점 표시용.
 			// 기록이 없으면 false 를 돌려주므로 count() 로 유효 개수를 먼저 본다.
@@ -433,26 +467,41 @@ namespace sherbet
 			}
 
 		private:
-			// 지금 카메라 방향을 기준으로 링 안 무작위 지점에 표적을 놓는다.
-			void spawn(float cam_yaw, float cam_pitch)
+			// **앵커(판 시작 방향)** 기준 원뿔 안 무작위 지점에 표적을 놓는다.
+			// 지금 카메라 방향은 쓰지 않는다 — 쓰면 기준이 매번 옮겨가는 랜덤워크가 된다.
+			void spawn()
 			{
-				// 링 반경. 최소값은 제자리 연타 방지, 최대값은 화면 밖 방지.
-				float lo = _tuning.spawn_min_deg;
-				float hi = _tuning.spawn_max_deg;
+				// 원뿔 반경. 화면 밖으로 나가면 찾느라 시간이 날아가는데 그건 조준 실력이 아니다.
+				// ⚠️ 조준은 항상 **직전 표적 위**에 있다(방금 맞췄으니까). 그러니 최악의 경우
+				//    원뿔 양 끝 사이 거리 = 2×반경 이 화면 안에 들어와야 한다.
+				float cone = _tuning.cone_deg;
+				const float edge = (_fov * 0.5f - _tuning.radius_deg - 1.0f) * 0.5f;
+				if (cone > edge) cone = edge;
+				if (cone < 0.5f) cone = 0.5f;
 
-				// 화면 밖으로 나가면 찾느라 시간이 날아가는데 그건 조준 실력이 아니다.
-				// 시야각의 절반에서 표적 반지름만큼 물러난 곳까지만 허용한다.
-				const float edge = _fov * 0.5f - _tuning.radius_deg - 1.0f;
-				if (hi > edge) hi = edge;
-				if (lo > hi) lo = hi > 0.0f ? hi * 0.5f : 0.0f;
-				if (lo < 0.0f) lo = 0.0f;
-				if (hi < 0.0f) hi = 0.0f;
+				// 직전 표적과 너무 붙지 않게. 원뿔이 좁으면 요구를 낮춘다 —
+				// 안 그러면 만족하는 자리가 없어 아래 루프가 전부 헛돈다.
+				float gap = _tuning.min_gap_deg;
+				if (gap > cone) gap = cone;
 
-				const float dist = _rng.range(lo, hi);
-				const float ang = _rng.range(0.0f, 360.0f);
+				const bool have_prev = _has_target;
+				const float prev_yaw = _target.home_yaw, prev_pitch = _target.home_pitch;
 
-				// 접평면에서 회전시킨다 — 이래야 각거리가 정확히 dist 다.
-				direction_at(cam_yaw, cam_pitch, dist, ang, _target.home_yaw, _target.home_pitch);
+				float ty = 0.0f, tp = 0.0f;
+				// 기각 표집. 몇 번 실패하면 마지막 후보를 쓴다 — 원뿔 안이라는 성질이
+				// 최소 간격보다 중요하다(화면 밖으로 나가는 것이 훨씬 나쁘다).
+				for (int attempt = 0; attempt < 24; ++attempt)
+				{
+					const float dist = cone * std::sqrt(_rng.unit()); // 원뿔 안 균일 분포
+					const float ang = _rng.range(0.0f, 360.0f);
+					direction_at(_anchor_yaw, _anchor_pitch, dist, ang, ty, tp);
+					if (!have_prev || angular_distance(ty, tp, prev_yaw, prev_pitch) >= gap)
+						break;
+				}
+
+				_target.home_yaw = ty;
+				_target.home_pitch = tp;
+				_has_target = true;
 				_target.off_u = 0.0f;
 				_target.off_v = 0.0f;
 
@@ -527,6 +576,10 @@ namespace sherbet
 			float _countdown_left = 0.0f;
 			float _time_left = 0.0f;
 			float _total = 0.0f; // 이번 판의 실제 길이(초). 맛보기는 duration 과 다르다
+			float _anchor_yaw = 0.0f;   // 판 시작 방향 — 표적 원뿔의 중심
+			float _anchor_pitch = 0.0f;
+			bool _has_target = false;   // 직전 표적이 있는가(최소 간격 검사용)
+			float _since_finish = 0.0f; // 판 종료 후 경과(초)
 			target _target;
 			stats _stats;
 			bool _last_hit_ok = false;

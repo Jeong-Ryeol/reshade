@@ -561,6 +561,11 @@ namespace reshade
 		// 서버가 죽었을 때 게임이 5초 멈춘다).
 		sherbet::aim::net _sherbet_aim_net;
 		sherbet::aim::board _sherbet_aim_board;
+		// ⚠️ 리더보드는 **버튼을 눌러야만** 불러온다. 자동 조회를 넣지 말 것.
+		//    "받아왔는가" 로 자동 조회를 걸었더니 실패했을 때 조건이 계속 참이라 매 프레임
+		//    다시 불러왔고, 스레드 생성 + HTTP 가 반복돼 오버레이를 켜 둔 동안 화면이 몇 초마다
+		//    툭툭 걸렸다(실제로 겪었다). 수동이면 그 실패 모드가 아예 존재하지 않고,
+		//    홈서버도 탭을 열어 둔 사람 수만큼 얻어맞지 않는다.
 		bool _sherbet_aim_board_ok = false;   // 한 번이라도 받아왔는가
 		int _sherbet_aim_board_level = -1;    // 지금 화면에 뜬 표가 어느 조합인지
 		int _sherbet_aim_board_duration = -1;
