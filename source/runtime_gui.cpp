@@ -6913,7 +6913,11 @@ void reshade::runtime::draw_sherbet_aim_overlay()
 
 		// 명중 수 — 제일 큰 글씨. 이게 곧 점수다.
 		snprintf(buf, sizeof(buf), "%d", st.hits);
-		const float big = ImGui::GetFontSize() * 2.2f;
+		// ⚠️ ImGui::GetFontSize() 를 쓰면 안 된다. 그건 **직전에 그린 창**의 폰트 크기라
+		//    프레임마다 값이 달라질 수 있고, 크기가 달라지면 동적 아틀라스가 글리프를
+		//    다시 굽는다(카운트다운에서 프레임이 바닥난 것과 같은 원인).
+		//    이 코드베이스가 FontSizeBase 를 쓰는 이유가 이것이다 — 항상 같은 값이다.
+		const float big = _imgui_context->Style.FontSizeBase * 2.2f;
 		dl->AddText(_sherbet_title_font, big, ImVec2(p0.x + pad, y), fade(sherbet::with_alpha(t.text, 245)), buf);
 		dl->AddText(ImVec2(p0.x + pad + _sherbet_title_font->CalcTextSizeA(big, FLT_MAX, 0.0f, buf).x + 6.0f,
 			y + big * 0.45f), fade(sherbet::with_alpha(t.text_dim, 220)),
