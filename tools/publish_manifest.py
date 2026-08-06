@@ -28,17 +28,21 @@ import sys
 import urllib.request
 
 # ── 릴리스마다 여기 두 개만 고친다 ──────────────────────────────────────────
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 # ⚠️ 알림 문구에 「 」 를 쓰지 말 것. 폰트 아틀라스에 없어서 인게임에 **물음표로 찍힌다**
 # (1.6.9 에서 실제로 겪음: "새 ?사격 훈련? 탭"). 코드베이스 관례대로 '작은따옴표' 를 쓴다.
 # · — 는 폰트에 있으니 써도 된다.
 NOTES = (
+    "1.8.3 에서 프리셋 마켓과 '내 전용 불러오기'가 사라지던 문제를 고쳤어요\n"
     "수평 방식에서 쏠수록 표적이 위로 올라가던 문제를 완전히 고쳤어요\n"
     "표적이 전체적으로 작아지고, 쏠수록 작아지는 게 눈에 보이게 다듬었어요\n"
     "자유 방식의 위아래 폭을 더 줄였어요\n"
     "스프레이 표를 마우스로 끌어 옮기고 휠로 확대·축소할 수 있어요"
 )
 # ───────────────────────────────────────────────────────────────────────────
+
+# 배포 빌드에만 박히는 각인(source/sherbet_auth.cpp 의 enabled()).
+AUTH_GATE = b"SHERBET-BUILD-ONLINE-AUTH-ON"
 
 TAG = f"sherbet-{VERSION}"
 BASE = f"https://github.com/Jeong-Ryeol/reshade/releases/download/{TAG}"
@@ -70,6 +74,15 @@ def main() -> int:
         # 바이너리 안에 이번 버전 문자열이 있는지 — 태그와 빌드가 어긋나는 사고 방지.
         if VERSION.encode() not in data:
             print(f"  X {name}: 바이너리 안에 버전 문자열 {VERSION} 이 없습니다.")
+            return 1
+        # ★ 온라인 인증이 켜진 빌드인지 — 여기가 **우회 불가능한 마지막 관문**이다.
+        #   SHERBET_ONLINE_AUTH 기본값은 0(개발)이고 배포 빌드만 헤더를 고쳐 1 로 만든다.
+        #   릴리스 스크립트를 안 거치고 그냥 msbuild 를 돌리면 인증이 꺼진 DLL 이 나가는데,
+        #   그러면 로그인은 된 것처럼 보이면서 마켓·프리셋이 통째로 빈다(1.8.3 사고).
+        #   각인은 source/sherbet_auth.cpp 의 enabled() 안에 volatile 로 박혀 있다.
+        if AUTH_GATE not in data:
+            print(f"  X {name}: 온라인 인증이 **꺼진** 빌드입니다(각인 없음).")
+            print("     릴리스 스크립트로 다시 빌드하세요 — 생 msbuild 는 인증이 꺼집니다.")
             return 1
         print(f"  OK {name}: size={size} sha256={sha}")
         builds[arch] = {"url": url, "size": size, "sha256": sha}

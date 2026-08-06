@@ -38,7 +38,25 @@ namespace
 
 bool sherbet::auth::enabled()
 {
-	return SHERBET_ONLINE_AUTH != 0;
+#if SHERBET_ONLINE_AUTH
+	// ★ 배포 게이트 각인. tools/publish_manifest.py 가 **릴리스에서 내려받은 바이트**에
+	//   이 문자열이 있는지 본다. 없으면 인증이 꺼진 빌드이므로 발행을 거부한다.
+	//
+	//   왜 필요한가: SHERBET_ONLINE_AUTH 의 기본값은 0(개발) 이고, 배포 빌드는
+	//   release.yml(또는 로컬 릴리스 스크립트)이 **헤더를 고쳐서** 1 로 만든다.
+	//   그래서 그 스크립트를 안 거치고 그냥 msbuild 를 돌리면 인증이 꺼진 DLL 이
+	//   조용히 나간다 — 로그인은 된 것처럼 보이는데(enabled() 가 거짓이면
+	//   is_authed() 가 항상 참) 서버 통신을 아예 안 해서 마켓·프리셋이 통째로
+	//   비어 버린다. 1.8.3 을 그렇게 내보냈다.
+	//
+	//   ⚠️ volatile 이라 최적화로 사라지지 않는다. 인증 엔드포인트 문자열들은
+	//      꺼진 빌드에도 그대로 남아서 판별에 쓸 수 없었다(실제로 확인했다).
+	static volatile const char gate[] = "SHERBET-BUILD-ONLINE-AUTH-ON";
+	(void)gate[0];
+	return true;
+#else
+	return false;
+#endif
 }
 
 sherbet::auth::controller::controller() {}
