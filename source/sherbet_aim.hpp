@@ -258,11 +258,24 @@ namespace sherbet
 			float off_v = 0.0f;
 			float vu = 0.0f;       // 도/초
 			float vv = 0.0f;
+			// 거리 배율. 1 = 기준, 작을수록 멀다(작게 보이고 실제로 맞히기 어렵다).
+			float scale = 1.0f;
 		};
 
 		// 표적이 생성 위치에서 벗어날 수 있는 최대 각거리. 넘으면 속도를 뒤집는다.
 		// 안 묶으면 이동 난이도에서 표적이 화면 밖으로 유유히 나가버린다.
 		constexpr float kWanderLimitDeg = 4.0f;
+
+		// ── 깊이 ─────────────────────────────────────────────────────────────
+		// 표적마다 거리를 다르게 준다. 구면 위에서 "멀다" 는 곧 **각크기가 작다** 는 뜻이라,
+		// 반지름에 배율을 곱하는 것이 정확히 원근이 하는 일이다(눈속임이 아니다).
+		//
+		// ⚠️ 명중 판정도 **같은 배율**을 쓴다. 작아 보이는데 판정만 크면 그건 거짓말이다.
+		//    그래서 멀리 뜬 표적은 실제로 더 어렵다.
+		// ⚠️ 평균이 1 근처가 되게 잡는다. 한쪽으로 치우치면 난이도가 통째로 달라져
+		//    예전 리더보드 기록과 비교가 안 된다. 판당 30~60개면 편차는 평균으로 눌린다.
+		constexpr float kDepthFar = 0.75f;   // 가장 멀리(작게)
+		constexpr float kDepthNear = 1.30f;  // 가장 가까이(크게)
 
 		// ── 진행 단계 ────────────────────────────────────────────────────────
 		enum class phase
@@ -424,7 +437,8 @@ namespace sherbet
 
 				_stats.shots++;
 				const float d = angular_distance(cam_yaw, cam_pitch, _target.yaw, _target.pitch);
-				const bool hit = d <= _tuning.radius_deg;
+				// 거리 배율을 판정에도 그대로 쓴다 — 보이는 크기와 맞는 크기가 같아야 한다.
+				const bool hit = d <= target_radius_deg();
 				if (hit)
 				{
 					_stats.hits++;
@@ -449,6 +463,9 @@ namespace sherbet
 			level current_level() const { return _level; }
 			duration current_duration() const { return _duration; }
 			const tuning &current_tuning() const { return _tuning; }
+			// 지금 표적의 **실제** 각반지름. 거리 배율이 곱해진 값이다 —
+			// 그리기도 판정도 반드시 이걸 쓴다(tuning.radius_deg 를 직접 쓰면 어긋난다).
+			float target_radius_deg() const { return _tuning.radius_deg * _target.scale; }
 			bool last_shot_hit() const { return _last_hit_ok; }
 			// 판 시작 방향. 표적은 이 주위 원뿔 안에서만 뜬다.
 			float anchor_yaw() const { return _anchor_yaw; }
@@ -475,7 +492,9 @@ namespace sherbet
 				// ⚠️ 조준은 항상 **직전 표적 위**에 있다(방금 맞췄으니까). 그러니 최악의 경우
 				//    원뿔 양 끝 사이 거리 = 2×반경 이 화면 안에 들어와야 한다.
 				float cone = _tuning.cone_deg;
-				const float edge = (_fov * 0.5f - _tuning.radius_deg - 1.0f) * 0.5f;
+				// 여백은 **가장 커질 수 있는** 표적 기준으로 잡는다 — 평균으로 잡으면
+				// 가까이 뜬(큰) 표적이 화면 가장자리에서 잘린다.
+				const float edge = (_fov * 0.5f - _tuning.radius_deg * kDepthNear - 1.0f) * 0.5f;
 				if (cone > edge) cone = edge;
 				if (cone < 0.5f) cone = 0.5f;
 
@@ -504,6 +523,7 @@ namespace sherbet
 				_has_target = true;
 				_target.off_u = 0.0f;
 				_target.off_v = 0.0f;
+				_target.scale = _rng.range(kDepthFar, kDepthNear);
 
 				if (_tuning.move_speed_deg > 0.0f)
 				{

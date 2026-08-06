@@ -380,6 +380,11 @@ static void test_spawn_rules()
 
 			assert(t.pitch <= kPitchLimit + 1e-3f && t.pitch >= -kPitchLimit - 1e-3f);
 
+			// ★ 거리 배율 — 표적마다 크기가 다르되 정해진 범위 안이어야 한다.
+			assert(t.scale >= kDepthFar - 1e-3f && t.scale <= kDepthNear + 1e-3f);
+			// ★ 보이는 크기와 맞는 크기가 같아야 한다. 판정 반지름은 배율이 곱해진 값이다.
+			assert(feq(s.target_radius_deg(), tn.radius_deg * t.scale, 1e-3f));
+
 			prev_y = t.yaw; prev_p = t.pitch; have_prev = true;
 			cam_y = t.yaw; cam_p = t.pitch;
 			assert(s.shoot(cam_y, cam_p)); // 표적 위에서 쏘면 반드시 명중
@@ -435,18 +440,20 @@ static void test_shooting()
 {
 	session s;
 	arm(s, level::easy, duration::s60, 2024u);
-	const tuning tn = tuning_for(level::easy);
 	const target t = s.current_target();
+	// 판정 반지름은 거리 배율이 곱해진 값이다 — tuning.radius_deg 를 직접 쓰면
+	// 멀리 뜬 표적에서 어긋난다.
+	const float rad = s.target_radius_deg();
 
 	// 표적 밖을 쏘면 빗나가고, 클릭은 분모에 남고, 표적은 그대로다.
-	const float far_yaw = wrap_deg(t.yaw + tn.radius_deg * 4.0f);
+	const float far_yaw = wrap_deg(t.yaw + rad * 4.0f);
 	assert(!s.shoot(far_yaw, t.pitch));
 	assert(s.result().shots == 1);
 	assert(s.result().hits == 0);
 	assert(feq(s.current_target().yaw, t.yaw, 1e-4f)); // 빗나가면 표적이 안 바뀐다
 
 	// 가장자리 안쪽은 명중.
-	assert(s.shoot(wrap_deg(t.yaw + tn.radius_deg * 0.8f), t.pitch));
+	assert(s.shoot(wrap_deg(t.yaw + rad * 0.8f), t.pitch));
 	assert(s.result().hits == 1);
 	assert(s.result().shots == 2);
 	// 명중하면 다음 표적이 뜬다.
