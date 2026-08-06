@@ -47,4 +47,7 @@ tools/sherbet_codegen
 
 # 홈서버 운영 파일 — 킬스위치 조작이 리포 사본과 어긋나면 안 된다(스펙 §3.2)
 server/content/update.json
+# 사격 훈련 리더보드 — 서버 런타임 데이터다. 레포에 들어오면 배포할 때마다
+# 구매자 기록을 덮어쓴다(content/ 를 rsync 하면 상품 목록이 날아가는 것과 같은 사고).
+server/content/aim_scores.json
 tools/__pycache__/
