@@ -6839,8 +6839,18 @@ void reshade::runtime::sherbet_aim_frame(float dt, int raw_dx, int raw_dy, bool 
 	_sherbet_aim_cam_yaw = sherbet::aim::wrap_deg(
 		_sherbet_aim_cam_yaw + static_cast<float>(raw_dx) * _sherbet_aim_dpc);
 	// 마우스를 아래로 내리면(raw_dy +) 시야도 내려간다.
-	_sherbet_aim_cam_pitch = sherbet::aim::clamp_pitch(
-		_sherbet_aim_cam_pitch - static_cast<float>(raw_dy) * _sherbet_aim_dpc);
+	//
+	// ⚠️ **수평 모드는 세로 입력을 아예 안 받는다.** 이 모드는 세로를 무시하는 것이
+	//    목적이라 세로를 쌓아 봐야 쓸 데가 없고, 쌓으면 오히려 해롭다:
+	//    반동을 잡느라 마우스를 계속 내리면 우리 가상 카메라만 아래로 밀리는데
+	//    (반동으로 올라간 것은 마우스 입력이 아니라서 우리는 못 본다), 시야가
+	//    수평선에서 멀어질수록 구면 왜곡이 커져서 **세로로 까딱한 것이 표적의 가로
+	//    위치를 흔든다.** 실측: 시야 -40° 에서 세로 1° 흔들림 = 가로 3.3px
+	//    (헬 반지름의 40%), -60° 에서는 54%. 수평선 근처면 0.02px 로 무시할 수준이다.
+	//    세로를 안 받으면 시야가 수평선에 머물러 그 왜곡이 원천적으로 0 이 된다.
+	if (_sherbet_aim.current_mode() != sherbet::aim::mode::level)
+		_sherbet_aim_cam_pitch = sherbet::aim::clamp_pitch(
+			_sherbet_aim_cam_pitch - static_cast<float>(raw_dy) * _sherbet_aim_dpc);
 
 	// ⚠️ 사격을 tick 보다 **먼저** 판정한다. 사용자가 클릭한 순간 화면에 있던 표적은
 	//    지난 프레임에 그려진 위치다 — 먼저 움직이고 판정하면 안 보이던 자리로 채점한다.
