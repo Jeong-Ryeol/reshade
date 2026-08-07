@@ -2806,14 +2806,6 @@ void reshade::runtime::draw_sherbet_update_card(bool compact)
 		const std::string st = uc.status_text();
 		if (!st.empty())
 			ImGui::TextDisabled("%s", st.c_str());
-
-		// 확인은 5분마다 저절로 돈다. 이 버튼은 그걸 안 기다리고 지금 물어보는 길이다 —
-		// 연속으로 배포하는 동안 쓰라고 둔다. compact(스플래시 한 줄)에는 넣지 않는다.
-		if (!compact)
-		{
-			if (sherbet::pill_button(ICON_FK_REFRESH "  \xEC\xA7\x80\xEA\xB8\x88 \xED\x99\x95\xEC\x9D\xB8", false)) // "지금 확인"
-				uc.recheck_now();
-		}
 	}
 
 	sherbet::end_card();
@@ -2823,6 +2815,25 @@ void reshade::runtime::draw_gui_home()
 {
 	// (a) 홈 탭 최상단 — 오버레이를 여는 구매자가 가장 먼저 보는 자리
 	draw_sherbet_update_card(false);
+
+	// 현재 버전 + [지금 확인].
+	// ⚠️ **카드 안에 넣으면 안 된다.** draw_sherbet_update_card 는 보여줄 것이 없으면
+	//    통째로 조기 반환한다(평상시 홈에 빈 카드가 뜨지 않게 하려는 것이고, 그 동작이
+	//    맞다). 새 버전이 없는 평상시가 바로 그 경우라 카드 안에 둔 버튼은 영영 안
+	//    그려진다 — 1.8.8 에 그렇게 나갔다.
+	// 확인은 5분마다 저절로 돌므로 이 버튼은 그걸 안 기다리는 길일 뿐이다.
+	{
+		sherbet::update::controller &huc = sherbet::update::instance();
+		// 제안·진행·완료 상태에서는 위 카드가 이미 그 이야기를 하고 있다. 또 물어볼 이유가 없다.
+		if (!huc.has_offer() && !huc.busy() && !huc.need_restart())
+		{
+			ImGui::TextDisabled("Sherbet v%s", SHERBET_VERSION);
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_REFRESH "  \xEC\x97\x85\xEB\x8D\xB0\xEC\x9D\xB4\xED\x8A\xB8 \xED\x99\x95\xEC\x9D\xB8", false)) // "업데이트 확인"
+				huc.recheck_now();
+			ImGui::Spacing();
+		}
+	}
 
 	// (b) 프리셋 줄 — 아래 이펙트 목록을 하나씩 만지기 전에 "통째로 바꾸는" 길을 먼저 보여준다.
 	//     아래 스톡 프리셋 바(파일명·저장·새로 만들기)는 그대로 둔다 — 직접 만들어 쓰는 사람의
