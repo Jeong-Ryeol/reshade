@@ -514,6 +514,9 @@ namespace sherbet
 						// 시작 버튼을 누를 때가 아니라 **첫 표적이 뜨는 순간**의 시야가 기준이다.
 						_anchor_yaw = wrap_deg(cam_yaw);
 						_anchor_pitch = clamp_pitch(cam_pitch);
+						_free_center_pitch = _anchor_pitch;
+						_recoil_est = 0.0f;
+						_since_shot = -1.0f;
 						_cam_pitch_now = clamp_pitch(cam_pitch);
 						_cam_yaw_now = wrap_deg(cam_yaw);
 						_has_target = false;
@@ -536,6 +539,8 @@ namespace sherbet
 				//    반동 표류는 여기서 처리할 문제가 아니다 — 자유 모드는 표적마다 세로를
 				//    다시 맞추므로 매 명중마다 저절로 리셋된다. 세로를 안 맞추는 수평
 				//    모드에서만 누적되고, 그쪽은 표적 높이를 시야에 묶어서 끊는다.
+				follow_free_center(dt);
+
 				move_target(dt);
 				// 수평 모드는 이동이 없는 난이도에서도 높이를 다시 맞춰야 한다 —
 				// move_target 은 이동 속도가 0 이면 아무것도 안 하고 돌아간다.
@@ -557,6 +562,9 @@ namespace sherbet
 			bool shoot(float cam_yaw, float cam_pitch)
 			{
 				_cam_pitch_now = cam_pitch; // 다음 표적이 이 높이에 뜬다
+				// 반동 보정량 측정 시작 — 명중이든 빗나감이든 총은 나갔으므로 반동은 있다.
+				_shot_pitch = clamp_pitch(cam_pitch);
+				_since_shot = 0.0f;
 				_cam_yaw_now = wrap_deg(cam_yaw);
 				if (_phase != phase::running)
 					return false;
@@ -683,7 +691,14 @@ namespace sherbet
 						const float v = dist * std::sin(ang * kDeg2Rad) * kVerticalSquash;
 						const float d2 = std::sqrt(u * u + v * v);
 						const float a2 = std::atan2(v, u) * kRad2Deg;
-						direction_at(_anchor_yaw, _anchor_pitch, d2, a2, ty, tp);
+						// ⚠️ 세로 중심은 앵커가 아니라 **지금 시야**다(가로는 앵커 그대로).
+						//    반동을 잡느라 마우스를 계속 내리면 우리 가상 카메라만 아래로
+						//    밀린다 — 반동으로 올라간 것은 마우스 입력이 아니라 우리가 못 본다.
+						//    앵커에 고정해 두면 표적 무리가 조준선보다 **항상 위**에 있게 되어
+						//    "위로만 뜨고 아래로는 안 뜬다" 가 된다(사용자 보고).
+						//    세로 폭을 kVerticalSquash 로 좁혀 놔서 편향이 폭보다 커진 상태였다.
+						//    가로까지 시야를 따라가게 하면 판이 통째로 떠내려가므로 세로만 한다.
+						direction_at(_anchor_yaw, _free_center_pitch, d2, a2, ty, tp);
 					}
 					if (!have_prev || angular_distance(ty, tp, prev_yaw, prev_pitch) >= gap)
 						break;
@@ -745,6 +760,56 @@ namespace sherbet
 					_target.off_v = nv * kWanderLimitDeg;
 				}
 				recompute_target();
+			}
+
+			// 자유 모드 표적의 **세로 중심**을 지금 시야 쪽으로 천천히 끌어당긴다.
+			//
+			// 왜 따라가야 하는가: 반동 보정이 우리 카메라를 한 방향으로만 민다. 세로 중심을
+			//   앵커에 고정하면 표적이 조준선 **위에만** 뜬다(사용자 보고: "계속 올라가기만
+			//   하고 내려오는 구가 없다").
+			// ⚠️ **매 프레임** 해야 한다. 표적이 뜨는 순간(= 명중하는 순간)에만 맞추면
+			//   소용없다 — 반동 보정은 그 **직후**에 일어나므로 기준에 안 들어가고 편향이
+			//   그대로 남는다. 한 번 그렇게 짰다가 테스트에서 잡혔다.
+			// 왜 느린가: 표적을 향해 튕기는 조준(0.2~0.5초)보다 느려야 조준 자체는 안
+			//   따라가고, 한 방향으로만 쌓이는 반동 성분만 걸러진다.
+			// 왜 묶는가: 완전히 자유롭게 두면 절대 높이가 흘러 pitch 한계(±89)에 박히고,
+			//   그 전에 이미 구면 왜곡이 커져 세로로 까딱한 것이 표적의 가로 위치를
+			//   흔든다(수평 모드에서 실측한 그 문제). 30도면 한 판 분량을 흡수한다.
+			void follow_free_center(float dt)
+			{
+				// 반동 보정량 측정. 쏜 직후 짧은 창에서 시야가 **아래로** 내려간 양이
+				// 곧 그 사람이 반동을 잡아 누른 양이다. 발당 한 번씩 재므로 초당 1발이든
+				// 3발이든 똑같이 동작한다 — 시간 기반 추종으로는 이게 안 된다.
+				// 초당 3발(0.33초 간격)에서도 조준 동작과 안 섞이게 창을 짧게 잡는다.
+				constexpr float kWindowSec = 0.06f;
+				constexpr float kEma = 0.15f;       // 발당 15% 씩만 반영 — 한 발의 튐에 안 흔들린다
+				constexpr float kMaxRecoilDeg = 12.0f;
+				if (_since_shot >= 0.0f)
+				{
+					_since_shot += dt;
+					if (_since_shot >= kWindowSec)
+					{
+						// 창 안에 다음 표적으로 튕기는 조준이 섞일 수 있다. 그건 위아래
+						// 대칭이라 여러 발을 평균하면 상쇄되고, 한 방향으로만 쌓이는
+						// 반동만 남는다. 위로 올라간 경우(음수)는 반동이 아니므로 0 으로 본다.
+						float d = _shot_pitch - clamp_pitch(_cam_pitch_now);
+						if (d < 0.0f) d = 0.0f;
+						if (d > kMaxRecoilDeg) d = kMaxRecoilDeg;
+						_recoil_est += (d - _recoil_est) * kEma;
+						_since_shot = -1.0f;
+					}
+				}
+
+				// 잰 만큼 표적 무리를 통째로 내린다. 그래야 쏜 뒤 내려간 조준선을 기준으로
+				// 표적이 위아래 **양쪽**에 고르게 뜬다(사용자 보고: 위로만 뜨고 아래가 없다).
+				// 앵커에서 너무 멀어지지는 않게 묶는다 — 구면 왜곡이 커지면 세로로 까딱한
+				// 것이 표적의 가로 위치를 흔든다(수평 모드에서 실측한 문제).
+				constexpr float kCenterBandDeg = 30.0f;
+				float c = _anchor_pitch - _recoil_est;
+				const float lo = _anchor_pitch - kCenterBandDeg, hi = _anchor_pitch + kCenterBandDeg;
+				if (c < lo) c = lo;
+				if (c > hi) c = hi;
+				_free_center_pitch = clamp_pitch(c);
 			}
 
 			// 각거리 dist 에 해당하는 yaw 차이. 위도선 위에서는 1도를 돌아도 실제 각거리가
@@ -816,6 +881,12 @@ namespace sherbet
 			// 반동으로 우리 카메라가 밀려도 표적이 눈높이를 따라오게 하기 위해서다.
 			float _cam_pitch_now = 0.0f;
 			float _cam_yaw_now = 0.0f;
+			// 자유 모드 세로 중심. 앵커에서 **잰 반동 보정량만큼 내린** 자리다.
+			// 안 내리면 표적이 조준선 위에만 뜬다(쏜 직후 시야가 내려가 있으므로).
+			float _free_center_pitch = 0.0f;
+			float _recoil_est = 0.0f;   // 잰 반동 보정량(도). 발마다 갱신
+			float _shot_pitch = 0.0f;   // 마지막 사격 순간의 시야
+			float _since_shot = -1.0f;  // 음수 = 측정 중 아님
 			float _since_finish = 0.0f; // 판 종료 후 경과(초)
 			target _target;
 			stats _stats;

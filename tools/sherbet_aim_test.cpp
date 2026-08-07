@@ -386,6 +386,8 @@ static void test_level_mode()
 	advance(f, kCountdownSeconds + 0.1f);
 	bool saw_pitch = false;
 	float max_dy = 0.0f, max_dp = 0.0f;
+	// 여기서는 반동이 없다(쏜 뒤 시야가 안 움직인다). 그러면 잰 반동 보정량이 0 이라
+	// 세로 중심 = 앵커다. 그래서 앵커 기준으로 재는 것이 맞다.
 	for (int i = 0; i < 400; ++i)
 	{
 		const target t = f.current_target();
@@ -402,6 +404,59 @@ static void test_level_mode()
 	assert(max_dp < max_dy);
 	assert(max_dp < max_dy * (kVerticalSquash * 1.6f));
 	assert(max_dp > max_dy * (kVerticalSquash * 0.4f));
+
+	// ★★★ 자유 모드: 반동 보정으로 시야가 계속 내려가는 동안에도 표적이 조준선
+	//     **위아래 양쪽**에 떠야 한다. 사용자 보고 그대로다 —
+	//     "자유모드는 계속 올라가기만 하고 내려오는 구는 없네?"
+	//     앵커에 세로를 고정해 두면 표적 무리가 화면에서 위로만 밀린다.
+	{
+		const float fov3 = 90.0f, sw3 = 1920.0f, sh3 = 1080.0f;
+		session r;
+		r.start(level::normal, duration::s60, 4711u, 0.0f, 0.0f, fov3, 0.0f, mode::free);
+		advance(r, kCountdownSeconds + 0.1f);
+		// ⚠️ **발사 속도를 바꿔 가며** 돌린다. 빠른 사람은 초당 2~3발을 쏜다(사용자).
+		//    시간 기반 추종으로는 그 속도에서 반동과 조준을 구분할 수 없어서, 반동을
+		//    발당 직접 재는 방식으로 갔다. 세 속도 전부에서 같아야 그게 증명된다.
+		for (int fps_shot = 1; fps_shot <= 3; ++fps_shot)
+		{
+			const int frames_per_shot = 60 / fps_shot; // 60/30/20 프레임 = 1/2/3발 per second
+			const int aim_frames = frames_per_shot / 2, after_frames = frames_per_shot - aim_frames;
+			session q;
+			q.start(level::normal, duration::s60, 4711u, 0.0f, 0.0f, fov3, 0.0f, mode::free);
+			advance(q, kCountdownSeconds + 0.1f);
+
+			float cam_y = 0.0f, cam_p = 0.0f;
+			int above = 0, below = 0, shots = 0;
+			for (int i = 0; i < 60 * fps_shot; ++i)
+			{
+				const target t = q.current_target();
+				float sx = 0.0f, sy = 0.0f;
+				assert(project_from(cam_y, cam_p, t.yaw, t.pitch, fov3, sw3, sh3, sx, sy));
+				// 화면 위쪽이 y 작은 쪽. 앞 15발은 반동 추정이 자리를 잡는 구간이라 뺀다.
+				if (i >= 15)
+				{
+					if (sy < sh3 * 0.5f - 4.0f) ++above;
+					else if (sy > sh3 * 0.5f + 4.0f) ++below;
+				}
+
+				cam_y = t.yaw; cam_p = t.pitch; // 조준을 맞춘다
+				for (int k = 0; k < aim_frames; ++k)
+					q.tick(1.0f / 60.0f, cam_y, cam_p);
+				if (q.current_phase() != phase::running)
+					break;
+				assert(q.shoot(cam_y, cam_p));
+				++shots;
+				// 반동 보정 — 한 발마다 시야가 아래로 밀린다(우리는 내려 당긴 것만 본다).
+				cam_p = clamp_pitch(cam_p - 1.0f);
+				for (int k = 0; k < after_frames; ++k)
+					q.tick(1.0f / 60.0f, cam_y, cam_p);
+			}
+			assert(shots > 30);
+			// 양쪽에 고르게 떠야 한다. 한쪽이 0 이면 그게 바로 사용자가 본 증상이다.
+			assert(above > 5);
+			assert(below > 5);
+		}
+	}
 
 	// ★★ 자유 모드 앵커는 판이 끝날 때까지 **절대 안 움직인다**. 시야가 아무리
 	//    돌아가고 밀려도 그대로여야 한다. 여기가 새면 표적 무리가 시야를 따라다니며
