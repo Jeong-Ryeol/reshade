@@ -304,11 +304,45 @@ static void test_level_mode()
 		assert(s.current_phase() == phase::running);
 		assert(s.current_mode() == mode::level);
 
+		// ★★★ 이 모드의 계약: 표적은 **화면 세로 정중앙**에 있어야 한다.
+		//     각도로 검사하면 안 잡힌다 — 표적 pitch 를 카메라 pitch 에 맞추면 각도상은
+		//     '같은 높이' 라 통과하지만, 좌우로 벌어진 표적은 위도선 곡률 때문에 화면에서
+		//     위아래로 휜다. 카메라가 수평선을 벗어날수록 커지고, 사용자가 그걸 쫓아
+		//     올라가면 표적이 따라 올라가 끝없이 도망간다(1.8.4 까지 실제로 그랬다).
+		//     그래서 **투영까지 통과시켜** 픽셀로 검사한다.
+		{
+			const float fov = 90.0f, sw = 1920.0f, sh = 1080.0f;
+			for (float cp : { 0.0f, -8.0f, -22.0f, -45.0f, -68.0f, -85.0f, 17.0f, 52.0f, 80.0f })
+			{
+				for (float cy : { 0.0f, 37.0f, -120.0f, 175.0f })
+				{
+					session q;
+					q.start(lv, duration::s60, 31337u, cy, cp, fov, 0.0f, mode::level);
+					advance(q, kCountdownSeconds + 0.1f, cy, cp);
+					for (int i = 0; i < 40; ++i)
+					{
+						q.tick(1.0f / 60.0f, cy, cp);
+						if (q.current_phase() != phase::running)
+							break;
+						const target t = q.current_target();
+						float sx = 0.0f, sy = 0.0f;
+						assert(project_from(cy, cp, t.yaw, t.pitch, fov, sw, sh, sx, sy));
+						assert(std::fabs(sy - sh * 0.5f) < 1.0f); // 세로 정중앙(±1px)
+						// 좌우로만 맞춰도 명중해야 한다. 정렬한 뒤 한 프레임 돌린다 —
+						// 그 사이 표적이 조준선 높이로 수렴한다.
+						q.tick(1.0f / 60.0f, t.yaw, cp);
+						assert(q.shoot(t.yaw, cp));
+					}
+				}
+			}
+		}
+
 		// ★★ 반동 표류 방어 — 이 모드의 핵심이다.
 		//    게임에서 실제로 쏘면 반동으로 화면이 위로 튀는데 우리 가상 카메라는 마우스만
-		//    봐서 내려 당긴 것만 본다. 그래서 우리 카메라 pitch 가 계속 내려가고, 표적
-		//    높이를 고정해 두면 화면에서 표적이 끝없이 위로 올라간다(실제로 겪었다).
-		//    표적 높이는 **지금 시야**를 매 프레임 따라와야 한다.
+		//    봐서 내려 당긴 것만 본다. 그래서 우리 카메라 pitch 가 계속 내려간다.
+		//    그 와중에도 표적은 **화면 세로 정중앙**을 지켜야 한다.
+		//    ⚠️ pitch 로 비교하지 마라 — 그게 1.8.4 까지 틀렸던 계약이다. 반드시 투영으로.
+		const float fov2 = 90.0f, sw2 = 1920.0f, sh2 = 1080.0f;
 		float cam_y = 0.0f, cam_p = 12.0f;
 		for (int i = 0; i < 120; ++i)
 		{
@@ -318,22 +352,29 @@ static void test_level_mode()
 			s.tick(1.0f / 60.0f, cam_y, cam_p);
 
 			const target t = s.current_target();
-			// 높이가 **지금 시야**와 같아야 한다. 여기가 벌어지면 화면에서 표적이 뜬다.
-			assert(feq(t.pitch, cam_p, 0.2f));
+			float sx = 0.0f, sy = 0.0f;
+			assert(project_from(cam_y, cam_p, t.yaw, t.pitch, fov2, sw2, sh2, sx, sy));
+			assert(std::fabs(sy - sh2 * 0.5f) < 1.0f); // 화면에서 안 뜬다
 
+			// 좌우로만 맞춘다. 정렬 뒤 한 프레임 돌리면 표적이 조준선으로 수렴한다.
 			cam_y = t.yaw;
+			s.tick(1.0f / 60.0f, cam_y, cam_p);
 			assert(s.shoot(cam_y, cam_p)); // 세로를 안 맞춰도 맞아야 한다
-			// 이동 난이도에서도, 이동이 없는 난이도에서도 계속 붙어 있어야 한다.
+			// 이동 난이도에서도, 이동이 없는 난이도에서도 계속 정중앙이어야 한다.
 			for (int k = 0; k < 30; ++k)
 			{
 				cam_p = clamp_pitch(cam_p - 0.01f);
 				s.tick(1.0f / 60.0f, cam_y, cam_p);
 			}
-			assert(feq(s.current_target().pitch, cam_p, 0.2f));
+			// ⚠️ 위상 검사가 단언보다 **먼저**다. 60초 판은 이 루프 도중에 끝나고,
+			//    끝난 판은 표적을 갱신하지 않으므로 그 뒤 단언은 의미가 없다.
 			if (s.current_phase() != phase::running)
 				break;
+			const target t2 = s.current_target();
+			assert(project_from(cam_y, cam_p, t2.yaw, t2.pitch, fov2, sw2, sh2, sx, sy));
+			assert(std::fabs(sy - sh2 * 0.5f) < 1.0f);
 		}
-		// 실제로 시야가 꽤 내려갔는데도 끝까지 붙어 있었다는 뜻이다.
+		// 실제로 시야가 꽤 내려갔는데도 끝까지 정중앙을 지켰다는 뜻이다.
 		assert(cam_p < -20.0f);
 	}
 

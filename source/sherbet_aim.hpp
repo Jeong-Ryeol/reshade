@@ -426,6 +426,27 @@ namespace sherbet
 			return true;
 		}
 
+		// 수평 모드용 — 표적이 **화면 세로 정중앙**에 오도록 pitch 를 푼다.
+		//
+		// ⚠️⚠️ "같은 pitch" 는 "같은 화면 높이" 가 **아니다**. 좌우로 벌어진 표적은
+		//    카메라가 수평선을 벗어나는 순간 화면에서 위아래로 휜다(위도선 곡률).
+		//    그래서 표적 pitch 를 카메라 pitch 에 그냥 맞추면:
+		//      반동으로 시야가 수평선을 벗어남 → 표적이 화면에서 뜸 → 사용자가 쫓아
+		//      올라감 → 표적 pitch 가 따라 올라감 → 더 뜸 → **끝없이 도망간다.**
+		//    맞출 수가 없다. 1.8.4 까지 실제로 그랬다(사용자 보고: 총알 빼고 쏘면
+		//    멀쩡한데 넣고 쏘면 계속 올라간다 — 반동이 있고 없고의 차이였다).
+		//
+		// project_from 의 out_y 는 카메라 up 성분 uu 로 결정된다. uu = 0 을 풀면
+		//   sin(tp)·cos(cp) = cos(tp)·sin(cp)·cos(Δyaw)  →  tan(tp) = tan(cp)·cos(Δyaw)
+		// Δyaw=0 이면 tp=cp(정면), cp=0 이면 tp=0(수평선) 으로 자연스럽게 떨어진다.
+		inline float level_pitch(float cam_pitch, float dyaw_deg)
+		{
+			constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+			constexpr float kRad2Deg = 180.0f / 3.14159265358979323846f;
+			const float cp = clamp_pitch(cam_pitch) * kDeg2Rad;
+			return clamp_pitch(std::atan(std::tan(cp) * std::cos(dyaw_deg * kDeg2Rad)) * kRad2Deg);
+		}
+
 		// ── 판 ───────────────────────────────────────────────────────────────
 		// 카메라 방향은 **밖에서** 준다. 이 헤더는 마우스도 감도도 모른다 —
 		// 호출부가 raw 델타에 감도를 곱해 카메라를 굴리고, 그 결과만 넘긴다.
@@ -457,6 +478,7 @@ namespace sherbet
 				_anchor_yaw = wrap_deg(cam_yaw);
 				_anchor_pitch = clamp_pitch(cam_pitch);
 					_cam_pitch_now = clamp_pitch(cam_pitch);
+			_cam_yaw_now = wrap_deg(cam_yaw);
 				_has_target = false;
 				spawn();
 			}
@@ -473,6 +495,7 @@ namespace sherbet
 			void tick(float dt, float cam_yaw, float cam_pitch)
 			{
 				_cam_pitch_now = cam_pitch; // 수평 모드가 표적 높이를 여기에 맞춘다
+				_cam_yaw_now = wrap_deg(cam_yaw);   // Δyaw 를 알아야 화면 정중앙을 풀 수 있다
 				if (dt < 0.0f || !(dt == dt)) // 음수·NaN 방어(알트탭·디버거 정지)
 					dt = 0.0f;
 				if (dt > 0.25f)
@@ -492,6 +515,7 @@ namespace sherbet
 						_anchor_yaw = wrap_deg(cam_yaw);
 						_anchor_pitch = clamp_pitch(cam_pitch);
 						_cam_pitch_now = clamp_pitch(cam_pitch);
+						_cam_yaw_now = wrap_deg(cam_yaw);
 						_has_target = false;
 						spawn();
 					}
@@ -533,6 +557,7 @@ namespace sherbet
 			bool shoot(float cam_yaw, float cam_pitch)
 			{
 				_cam_pitch_now = cam_pitch; // 다음 표적이 이 높이에 뜬다
+				_cam_yaw_now = wrap_deg(cam_yaw);
 				if (_phase != phase::running)
 					return false;
 
@@ -638,8 +663,14 @@ namespace sherbet
 						//    앵커 고정이면 표적이 화면에서 계속 위로 올라간다(실제로 겪음).
 						//    매번 지금 시야 높이에 맞추면 그 누적이 사라진다.
 						//    yaw 는 여전히 앵커 기준이라 좌우로 떠내려가지는 않는다.
-						ty = wrap_deg(_anchor_yaw + (_rng.unit() < 0.5f ? -yaw_span(dist) : yaw_span(dist)));
-						tp = clamp_pitch(_cam_pitch_now);
+						// ⚠️ 여기서 yaw 에 dist/cos(pitch) 를 더하면 안 된다 — 그 보정은
+						//    **소각 근사**라 dist 가 크거나 시야가 가파르면 완전히 깨진다
+						//    (pitch -85° 에서 17° 오프셋이 yaw 195° 로 튀어 표적이 뒤로 갔다).
+						//    접평면 회전으로 각거리 dist 를 정확히 만든 뒤,
+						//    높이만 화면 정중앙 조건으로 다시 푼다.
+						const float azim = (_rng.unit() < 0.5f) ? 180.0f : 0.0f; // 왼쪽 / 오른쪽
+						direction_at(_anchor_yaw, clamp_pitch(_cam_pitch_now), dist, azim, ty, tp);
+						tp = level_pitch(_cam_pitch_now, wrap_deg(ty - _cam_yaw_now));
 					}
 					else
 					{
@@ -720,6 +751,9 @@ namespace sherbet
 			// cos(pitch) 배로 줄어들기 때문에 나눠서 보정한다. 극 근처에서 폭주하지 않게 자른다.
 			// ⚠️ 기준은 앵커가 아니라 **표적이 실제로 놓이는 높이**(= 지금 시야)다.
 			//    앵커를 쓰면 반동으로 시야가 내려간 뒤 좌우 간격이 어긋난다.
+			// ⚠️⚠️ **소각 근사다.** 이동분(±kWanderLimitDeg = 4°) 처럼 작은 값에만 쓸 것.
+			//    표적을 놓는 거리(원뿔 반경 최대 17°)에 쓰면 가파른 시야에서 깨진다 —
+			//    생성 지점은 direction_at 으로 정확히 만든다.
 			float yaw_span(float dist) const
 			{
 				constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
@@ -736,15 +770,14 @@ namespace sherbet
 				//    걸려 높이 재조정이 통째로 건너뛰어진다.
 				if (_mode == mode::level)
 				{
-					// ⚠️ 높이를 **매 프레임** 지금 시야에 맞춘다. 뜨는 순간에만 맞추면,
-					//    표적을 맞히기 전에 빗나간 사격이 쌓이는 동안 반동 누적으로
-					//    표적이 위로 올라간다(실제로 겪음 — 1.8.2 의 반쪽 수정).
-					//    우리 가상 카메라는 마우스만 봐서 반동을 못 보므로, 그 오차를
-					//    없애려면 세로를 아예 시야에 묶는 수밖에 없다.
-					//    이 모드는 애초에 세로 조준을 시키지 않는 것이 목적이라 맞는 선택이다.
-					_target.home_pitch = clamp_pitch(_cam_pitch_now);
+					// **매 프레임** 다시 푼다. 카메라가 위아래로 움직이면(= 반동을 잡느라
+					// 시야가 밀리면) 화면 정중앙 조건도 같이 바뀌기 때문이다.
+					// yaw 는 앵커 기준이라 좌우로 떠내려가지 않는다 — 표적을 향해 돌리면
+					// Δyaw 가 줄고 level_pitch 는 카메라 pitch 로 수렴해서, 정렬되는
+					// 순간 표적이 정확히 조준선 위에 온다.
 					_target.yaw = wrap_deg(_target.home_yaw + yaw_span(_target.off_u));
-					_target.pitch = _target.home_pitch;
+					_target.pitch = level_pitch(_cam_pitch_now, wrap_deg(_target.yaw - _cam_yaw_now));
+					_target.home_pitch = _target.pitch;
 					return;
 				}
 				// 자유 모드: 오프셋이 없으면 생성 위치 그대로다.
@@ -782,6 +815,7 @@ namespace sherbet
 			// 마지막으로 받은 카메라 pitch. 수평 모드가 표적 높이를 여기에 맞춘다 —
 			// 반동으로 우리 카메라가 밀려도 표적이 눈높이를 따라오게 하기 위해서다.
 			float _cam_pitch_now = 0.0f;
+			float _cam_yaw_now = 0.0f;
 			float _since_finish = 0.0f; // 판 종료 후 경과(초)
 			target _target;
 			stats _stats;
