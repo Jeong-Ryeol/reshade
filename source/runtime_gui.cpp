@@ -2806,6 +2806,14 @@ void reshade::runtime::draw_sherbet_update_card(bool compact)
 		const std::string st = uc.status_text();
 		if (!st.empty())
 			ImGui::TextDisabled("%s", st.c_str());
+
+		// 확인은 5분마다 저절로 돈다. 이 버튼은 그걸 안 기다리고 지금 물어보는 길이다 —
+		// 연속으로 배포하는 동안 쓰라고 둔다. compact(스플래시 한 줄)에는 넣지 않는다.
+		if (!compact)
+		{
+			if (sherbet::pill_button(ICON_FK_REFRESH "  \xEC\xA7\x80\xEA\xB8\x88 \xED\x99\x95\xEC\x9D\xB8", false)) // "지금 확인"
+				uc.recheck_now();
+		}
 	}
 
 	sherbet::end_card();

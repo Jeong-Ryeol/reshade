@@ -97,8 +97,11 @@ namespace sherbet
 
 			// 런타임 생성 시 1회(두 번 불러도 안전하다). self_path 는 g_reshade_dll_path.
 			void init(const std::wstring &self_path);
-			// 렌더 스레드에서 매 프레임. 워커 회수와 최초 매니페스트 페치를 여기서 한다.
-			void tick();
+			// 렌더 스레드에서 매 프레임. 워커 회수와 매니페스트 페치를 여기서 한다.
+			// dt_seconds 로 주기적 재확인 시각을 센다 — 프레임 수로 세면 fps 마다 주기가 달라진다.
+			void tick(float dt_seconds);
+			// 사용자가 [지금 확인] 을 눌렀을 때. 다음 tick() 이 즉시 다시 페치한다.
+			void recheck_now();
 
 			bool has_offer() const;          // 배너를 띄울까(세션 닫기가 반영된다)
 			bool is_mandatory() const;       // min_version 미달 — 빨간 배너
@@ -138,6 +141,7 @@ namespace sherbet
 			std::atomic<bool> _busy{ false };
 			std::atomic<bool> _inited{ false };
 			std::atomic<bool> _fetch_started{ false };
+			float _since_check = 0.0f;   // 렌더 스레드 전용 — 주기적 재확인 타이머
 			std::atomic<bool> _has_offer{ false };
 			std::atomic<bool> _mandatory{ false };
 			std::atomic<bool> _dismissed{ false };

@@ -870,7 +870,10 @@ void reshade::runtime::on_present()
 	// ⚠️ runtime_gui.cpp 의 `_sherbet_auth.tick()` 옆이 아니라 **여기**서 부른다.
 	//    그 블록은 `if (_show_overlay)` 안이라, Home 키를 안 누르는 구매자에게는
 	//    페치 자체가 영영 돌지 않아 스플래시 한 줄 배너도 뜨지 않는다.
-	sherbet::update::instance().tick();
+	// ⚠️ 프레임 수가 아니라 **시간**을 넘긴다. 프레임으로 세면 60fps 인 사람과 144fps 인
+	//    사람의 '5분' 이 달라진다(코드베이스 관례 — 카운트다운·알람도 같다).
+	sherbet::update::instance().tick(
+		std::chrono::duration_cast<std::chrono::duration<float>>(_last_frame_duration).count());
 
 	// SHERBET: 부팅 성공 래치(스펙 §5.3). 여기까지 왔으면 이 빌드는 실제로 렌더링 중이다.
 	// ⚠️ **위치가 규약이다.** runtime_gui.cpp 의 `_sherbet_auth.tick()` 옆에 두면 그 블록이

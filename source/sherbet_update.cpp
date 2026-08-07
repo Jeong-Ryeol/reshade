@@ -59,6 +59,12 @@ namespace
 	// 로그인 실패는 제품이 죽는다.
 	constexpr wchar_t kHost[] = L"wonryeol.asuscomm.com";
 	constexpr const char *kManifestPath = "/sherbet-auth/update/manifest";
+
+// 주기적 재확인 간격(초). 5분.
+// 1분으로 해도 서버는 멀쩡하지만(응답 1KB 미만) 체감이 똑같다 — 어차피 적용에는
+// 재시작이 필요해서 '1분 안에 아는 것' 과 '5분 안에 아는 것' 의 차이가 없다.
+// 즉시 보고 싶으면 「정보」 탭의 [지금 확인] 을 누르면 된다.
+constexpr float kRecheckSeconds = 300.0f;
 #ifdef _WIN64
 	constexpr const char *kArch = "x64";
 #else
@@ -1034,10 +1040,30 @@ bool sherbet::update::controller::personalized() const
 	return sherbet::has_owner() || SHERBET_NODELOCK != 0;
 }
 
-void sherbet::update::controller::tick()
+void sherbet::update::controller::tick(float dt_seconds)
 {
 	if (!_inited.load())
 		return;
+
+	// ── 주기적 재확인 ────────────────────────────────────────────────────────
+	// 원래 확인은 **게임 켤 때 딱 한 번**이었다(_fetch_started 가 한 번 켜지면 안 내려감).
+	// 그래서 게임을 켜 둔 채로 새 버전이 올라와도 그 세션에는 영영 안 떴다 —
+	// 구매자가 알림을 받으려면 껐다 켜는 수밖에 없었다(사용자 보고).
+	//
+	// 비용: 워커 스레드에서 도는 GET 하나, 응답 1KB 미만. 렌더 스레드는 안 막는다.
+	// ⚠️ 여기서 받는 것은 **매니페스트뿐**이다. 11MB DLL 다운로드는 사용자가
+	//    [업데이트] 를 눌러야만 시작한다(begin_update). 몰래 받는 일은 없다.
+	// ⚠️ 이미 찾았거나(_has_offer) 이미 교체해 재시작만 남았으면(_need_restart)
+	//    다시 물어볼 이유가 없다. _dismissed 는 건드리지 않으므로 "이번 판은 됐어요"
+	//    를 누른 사람에게 다시 뜨지도 않는다.
+	if (dt_seconds > 0.0f && dt_seconds < 10.0f) // 알트탭·디버거 정지에서 튀는 값 방어
+		_since_check += dt_seconds;
+	if (_since_check >= kRecheckSeconds &&
+		!_has_offer.load() && !_need_restart.load() && !_busy.load())
+	{
+		_since_check = 0.0f;
+		_fetch_started = false; // 아래 페치 경로가 다시 열린다
+	}
 
 	// 창이 둘이면 렌더 스레드도 둘이다 — 워커 시작 경로 전체를 직렬화한다.
 	const std::lock_guard<std::mutex> guard(_worker_mtx);
@@ -1136,6 +1162,19 @@ void sherbet::update::controller::run_fetch(const std::string &bad_ver, const st
 	reshade::log::message(reshade::log::level::info,
 		"[sherbet-update] \xEC\x83\x88 \xEB\xB2\x84\xEC\xA0\x84 %s (\xED\x98\x84\xEC\x9E\xAC %s)%s",
 		found.version.c_str(), SHERBET_VERSION, mandatory ? " [mandatory]" : "");
+}
+
+void sherbet::update::controller::recheck_now()
+{
+	// 주기(5분)를 기다리지 않고 지금 다시 물어본다. 연속 배포 중일 때 쓰는 길이다.
+	// ⚠️ _dismissed 는 건드리지 않는다 — "이번 판은 됐어요" 를 누른 상태에서 눌러도
+	//    같은 버전이 다시 튀어나오면 안 된다. 새 버전이면 _has_offer 가 다시 서고
+	//    그때는 배너가 뜬다.
+	if (_busy.load() || _need_restart.load())
+		return;
+	_since_check = 0.0f;
+	_has_offer = false;
+	_fetch_started = false;
 }
 
 void sherbet::update::controller::begin_update()
