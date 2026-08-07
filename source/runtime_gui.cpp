@@ -2798,6 +2798,13 @@ void reshade::runtime::draw_sherbet_update_card(bool compact)
 			ImGui::SameLine();
 			ImGui::TextLinkOpenURL(ICON_FK_COMMENTS "  \xEB\x94\x94\xEC\x8A\xA4\xEC\xBD\x94\xEB\x93\x9C \xEB\xAC\xB8\xEC\x9D\x98", SHERBET_DISCORD_URL); // "디스코드 문의"
 		}
+
+		// ⚠️ 제안 화면에서도 상태 문구를 그린다. begin_update() 가 조용히 돌아가는 경우가
+		//    있는데(페치 워커가 재시도 대기 중 등), 여기서 안 그리면 사용자는 버튼을
+		//    눌러도 화면에 아무 일도 안 일어나는 것으로 보인다 — 실제 신고를 받았다.
+		const std::string st_offer = uc.status_text();
+		if (!st_offer.empty())
+			ImGui::TextDisabled("%s", st_offer.c_str());
 	}
 
 	// 실패 사유 등(제안도 진행도 아닌데 문구가 남아 있는 경우)
