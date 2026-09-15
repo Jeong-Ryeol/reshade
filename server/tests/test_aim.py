@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.aim as aim_module
 from app.aim import (
+    DISPLAY_NAME_OVERRIDES,
     DURATIONS,
     LEVELS,
     board_key,
@@ -129,6 +130,30 @@ def test_ranking_and_ties():
 
     # 상위 N 만.
     assert len(public_rows(rows, limit=2)) == 2
+
+
+def test_display_name_override(monkeypatch):
+    """표시 이름 교체는 **보여줄 때만** 일어난다.
+
+    저장된 name 까지 바꾸면 되돌리기가 기록 수정이 되고, 본인이 다음 판을 올리는
+    순간 원래 이름이 다시 덮어써서 교체가 풀린다. 그래서 ranked_entries() 에서만
+    갈아 끼우고 aim_scores.json 은 건드리지 않는다.
+    """
+    monkeypatch.setitem(DISPLAY_NAME_OVERRIDES, "u1", "살수")
+
+    data = {}
+    upsert_score(data, "easy", "s30", "u1", "z1xmxn", 20, 25, now=100.0)
+    upsert_score(data, "easy", "s30", "u2", "그대로", 10, 10, now=110.0)
+
+    rows = ranked_entries(data, "easy", "s30")
+    assert [r["name"] for r in rows] == ["살수", "그대로"]
+
+    # 저장본은 그대로다 — 표에서 한 줄 지우면 원래 이름으로 돌아온다.
+    assert data["easy:s30"]["u1"]["name"] == "z1xmxn"
+
+    # 새 기록을 올려도 계속 교체된 이름이다(제출된 이름이 이기지 않는다).
+    upsert_score(data, "easy", "s30", "u1", "z1xmxn", 25, 25, now=120.0)
+    assert ranked_entries(data, "easy", "s30")[0]["name"] == "살수"
 
 
 def test_save_load_roundtrip(tmp_path):

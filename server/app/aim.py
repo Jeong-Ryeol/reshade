@@ -158,15 +158,34 @@ def upsert_score(data: dict, level: str, duration: str, user_id: str,
     return True
 
 
+# 리더보드에 **보여줄 때만** 이름을 갈아 끼운다(디스코드 user id -> 표시 이름).
+#
+# ⚠️ 저장된 기록(aim_scores.json)은 건드리지 않는다. 여기서 갈아 끼우는 이유:
+#    (1) 되돌리기가 이 표에서 한 줄 지우는 것으로 끝난다
+#    (2) 본인이 다시 기록을 내도 원래 이름으로 되돌아가지 않는다
+#        (제출 시점에 바꾸면 다음 제출이 덮어써서 원래 이름이 다시 올라온다)
+# 사용자 요청으로 넣었다.
+DISPLAY_NAME_OVERRIDES: dict[str, str] = {
+    "294863662819049472": "뒷방노인네",   # 지녕
+    "897608745385857054": "하데스",       # 2002_3
+    "1338184381709418553": "정렬",        # JWR
+    "374550330169491459": "살수",         # z1xmxn
+}
+
+
 def ranked_entries(data: dict, level: str, duration: str, mode: str = "free") -> list[dict]:
     """점수 내림차순. 동점이면 먼저 낸 사람이 위다 — 나중에 온 사람이 동점으로
     앞지르면 앞 사람은 아무것도 안 했는데 순위가 밀린다."""
     board = data.get(board_key(level, duration, mode), {})
     rows = []
     for uid, e in board.items():
+        # 표시 이름만 갈아 끼운다. 저장된 name 은 그대로 둔다 —
+        # 이미 올라간 기록도 여기를 거치므로 소급해서 바뀌고,
+        # 앞으로 새로 내는 기록도 제출된 이름과 무관하게 계속 이 이름으로 뜬다.
+        shown = DISPLAY_NAME_OVERRIDES.get(uid, str(e.get("name", "")))
         rows.append({
             "user_id": uid,
-            "name": str(e.get("name", ""))[:MAX_NAME],
+            "name": shown[:MAX_NAME],
             "hits": int(e.get("hits", 0)),
             "shots": int(e.get("shots", 0)),
             "ts": float(e.get("ts", 0.0)),
