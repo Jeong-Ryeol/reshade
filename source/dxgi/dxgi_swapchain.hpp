@@ -108,7 +108,7 @@ public:
 private:
 	void on_init([[maybe_unused]] bool resize);
 	void on_reset([[maybe_unused]] bool resize);
-	void on_present(UINT flags, [[maybe_unused]] const DXGI_PRESENT_PARAMETERS *params = nullptr);
+	void on_present(UINT flags, [[maybe_unused]] const DXGI_PRESENT_PARAMETERS *params = nullptr, UINT sync_interval = UINT_MAX);
 	void on_finish_present(HRESULT hr);
 
 	IUnknown *const _direct3d_device;

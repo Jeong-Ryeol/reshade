@@ -257,7 +257,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::GetDevice(REFIID riid, void **ppDevice)
 
 HRESULT STDMETHODCALLTYPE DXGISwapChain::Present(UINT SyncInterval, UINT Flags)
 {
-	on_present(Flags);
+	on_present(Flags, nullptr, SyncInterval);
 
 	assert(!g_in_dxgi_runtime);
 	g_in_dxgi_runtime = true;
@@ -550,7 +550,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapChain::Present1(UINT SyncInterval, UINT Presen
 {
 	assert(_interface_version >= 1);
 
-	on_present(PresentFlags, pPresentParameters);
+	on_present(PresentFlags, pPresentParameters, SyncInterval);
 
 	assert(!g_in_dxgi_runtime);
 	g_in_dxgi_runtime = true;
@@ -941,7 +941,7 @@ void DXGISwapChain::on_reset([[maybe_unused]] bool resize)
 	_is_initialized = false;
 }
 
-void DXGISwapChain::on_present(UINT flags, [[maybe_unused]] const DXGI_PRESENT_PARAMETERS *params)
+void DXGISwapChain::on_present(UINT flags, [[maybe_unused]] const DXGI_PRESENT_PARAMETERS *params, UINT sync_interval)
 {
 	// Some D3D11 games test presentation for timing and composition purposes
 	// These calls are not rendering related, but rather a status request for the D3D runtime and as such should be ignored
@@ -954,6 +954,12 @@ void DXGISwapChain::on_present(UINT flags, [[maybe_unused]] const DXGI_PRESENT_P
 	assert(!_was_still_drawing_last_frame);
 
 	assert(_is_initialized);
+
+	// SHERBET: 게임이 넘긴 SyncInterval 을 런타임에 알린다(「최적화」 탭 상한 진단).
+	// 위 DXGI_PRESENT_TEST 가드 **아래**여야 한다 — 테스트 호출은 대개 SyncInterval 0 이라,
+	// 위에서 받으면 수직동기를 켠 사람이 꺼진 것으로 뜬다. 애드온 오버라이드(_sync_interval)는
+	// 판매 빌드에서 항상 UINT_MAX 라 여기서 보면 전원 "모름" 이 된다 — 게임이 준 원값을 본다.
+	reshade::sherbet_note_present_sync_interval(_impl, sync_interval);
 
 	// Synchronize access to effect runtime to avoid race conditions between 'load_effects' and 'destroy_effects' causing crashes
 	// This is necessary because Resident Evil 3 calls D3D11 and DXGI functions simultaneously from multiple threads

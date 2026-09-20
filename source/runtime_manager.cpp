@@ -76,3 +76,9 @@ void reshade::present_effect_runtime(api::swapchain *swapchain)
 	if (const auto runtime = swapchain->get_private_data<reshade::runtime>())
 		runtime->on_present();
 }
+
+void reshade::sherbet_note_present_sync_interval(api::swapchain *swapchain, unsigned int sync_interval)
+{
+	if (const auto runtime = swapchain->get_private_data<reshade::runtime>())
+		runtime->sherbet_note_present_sync_interval(sync_interval);
+}
