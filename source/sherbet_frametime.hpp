@@ -61,6 +61,9 @@ namespace sherbet
 			void clear() { _head = 0; _count = 0; }
 			std::size_t size() const { return _count; }
 
+			// i 번째로 **오래된** 프레임(0 = 가장 오래된 것). 파형처럼 순서가 필요한 곳용.
+			float at(std::size_t i) const { return _buf[(_head + kCapacity - _count + i) % kCapacity]; }
+
 			// 통째로 복사한다. 순서는 버린다 — 통계에 순서는 필요 없고, 꽉 찬 링은
 			// [0, kCapacity) 전부가 유효하며 덜 찬 링은 [0, _count) 가 유효하므로 둘 다 이 한 줄이다.
 			void copy_to(std::vector<float> &out) const { out.assign(_buf, _buf + _count); }

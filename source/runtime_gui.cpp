@@ -1127,6 +1127,7 @@ void reshade::runtime::draw_gui()
 
 	_ignore_shortcuts = false;
 	_gather_gpu_statistics = false;
+	_sherbet_engine_wanted = false; // SHERBET: 엔진룸 탭이 이 프레임에 그려지면 다시 true 가 된다
 	_effects_expanded_state &= 2;
 
 	// SHERBET: 「스프레이 트레이너가 지금 살아 있는가」 — 이 프레임 단 한 번의 판정.
@@ -2458,6 +2459,7 @@ void reshade::runtime::draw_gui()
 				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5 },
 				{ "##tab_aimlab", ICON_FK_BULLSEYE, 7 },
 				{ "##tab_optimize", ICON_FK_DASHBOARD, 6 },
+				{ "##tab_engine", ICON_FK_BOLT, 8 },
 				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
 				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
 				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
@@ -2465,14 +2467,14 @@ void reshade::runtime::draw_gui()
 			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다.
 			// ⚠️ 배열에 항목을 추가하면 **반드시 여기도 같이 늘린다** — 안 그러면 마지막
 			//    탭이 조용히 사라진다(에임 탭 때 실제로 겪었다).
-			//    에임 4→5, 최적화 5→6, 에임 랩 6→7.
-			int item_count = 7;
+			//    에임 4→5, 최적화 5→6, 에임 랩 6→7, 엔진룸 7→8.
+			int item_count = 8;
 #if RESHADE_ADDON
 			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
 			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
 			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external || !info.file.empty()) { item_count = 8; break; }
+				if (info.external || !info.file.empty()) { item_count = 9; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
@@ -2506,6 +2508,7 @@ void reshade::runtime::draw_gui()
 		case 5: draw_gui_aim(); break;
 		case 6: draw_gui_optimize(); break;
 		case 7: draw_gui_aimlab(); break;
+		case 8: draw_gui_engine(); break;
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
@@ -4957,6 +4960,70 @@ void reshade::runtime::draw_gui_optimize()
 	sherbet::end_card();
 	ImGui::Spacing();
 
+	// ── 효과별 비용 ───────────────────────────────────────────────────────
+	// 위 총액을 효과별로 쪼갠다. "뭘 끄면 되나" 는 이 표가 답한다 — 끄는 건 홈 탭에서 한다
+	// (여기엔 버튼이 없다. 판매자 결정: 상태판은 상태판으로 둔다).
+	// GPU ms 는 _gather_gpu_statistics 가 켜진 뒤 몇 프레임 지나야 들어온다 — 그 전엔 CPU ms 로
+	// 줄을 세우고 그렇다고 적는다. 0 을 "공짜" 로 보여주지 않는다.
+	sherbet::begin_card("##opt_cost");
+	{
+		ImGui::TextUnformatted(ICON_FK_SLIDERS "  " "\xED\x9A\xA8\xEA\xB3\xBC\xEB\xB3\x84 \xEB\xB9\x84\xEC\x9A\xA9" /* 효과별 비용 */);
+		ImGui::Spacing();
+
+		struct cost_row { std::string name; float gpu_ms; float cpu_ms; };
+		std::vector<cost_row> rows;
+		if (!is_loading() && _effects_enabled)
+		{
+			for (const technique &tech : _techniques)
+			{
+				if (!tech.enabled || tech.hidden || tech.effect_index >= _effects.size() || !_effects[tech.effect_index].compiled)
+					continue;
+				const std::string_view label = tech.annotation_as_string("ui_label");
+				rows.push_back({ std::string(label.empty() ? std::string_view(tech.name) : label), tech.average_gpu_duration * 1e-6f, tech.average_cpu_duration * 1e-6f });
+			}
+		}
+
+		if (rows.empty())
+		{
+			ImGui::TextDisabled("%s", "\xEC\xBC\x9C\xEC\xA7\x84 \xED\x9A\xA8\xEA\xB3\xBC\xEA\xB0\x80 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94" /* 켜진 효과가 없어요 */);
+		}
+		else
+		{
+			const bool have_gpu = std::any_of(rows.begin(), rows.end(), [](const cost_row &r) { return r.gpu_ms > 0.0f; });
+			std::sort(rows.begin(), rows.end(), [have_gpu](const cost_row &a, const cost_row &b) {
+				return have_gpu ? a.gpu_ms > b.gpu_ms : a.cpu_ms > b.cpu_ms; });
+			if (!have_gpu)
+				ImGui::TextWrapped("%s", "GPU \xEC\x8B\x9C\xEA\xB0\x84\xEC\x9D\x80 \xEC\x9D\xB4 \xED\x83\xAD\xEC\x9D\x84 \xEC\x97\xB0 \xEB\x92\xA4 \xEB\xAA\x87 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xA7\x80\xEB\x82\x98\xEC\x95\xBC \xEB\x93\xA4\xEC\x96\xB4\xEC\x99\x80\xEC\x9A\x94. \xEC\xBC\x9C\xEC\xA7\x84 \xED\x9A\xA8\xEA\xB3\xBC\xEB\xA7\x8C, \xEB\xB9\x84\xEC\x8B\xBC \xEC\x88\x9C\xEC\x84\x9C\xEC\x98\x88\xEC\x9A\x94." /* GPU 시간은 이 탭을 연 뒤 몇 프레임 지나야 들어와요. 켜진 효과만, 비싼 순서예요. */);
+
+			const sherbet::theme &t = sherbet::active_theme();
+			ImDrawList *const dl = ImGui::GetWindowDrawList();
+			const float lh = ImGui::GetTextLineHeight();
+			const float max_ms = ImMax(have_gpu ? rows[0].gpu_ms : rows[0].cpu_ms, 0.001f);
+			const float bar_w = ImMax(40.0f, ImGui::GetContentRegionAvail().x - value_x - 7.0f * ImGui::GetFontSize());
+			const int shown = ImMin(static_cast<int>(rows.size()), 16);
+			for (int i = 0; i < shown; ++i)
+			{
+				const cost_row &r = rows[i];
+				const float ms = have_gpu ? r.gpu_ms : r.cpu_ms;
+				const ImVec2 rp = ImGui::GetCursorScreenPos();
+				// 이름은 값 자리 앞에서 잘라 그린다 — 긴 이름이 막대 위로 넘치지 않게
+				const ImVec4 clip(rp.x, rp.y, rp.x + value_x - 8.0f, rp.y + lh);
+				dl->AddText(nullptr, 0.0f, rp, t.text_dim, r.name.c_str(), nullptr, 0.0f, &clip);
+				dl->AddRectFilled(ImVec2(rp.x + value_x, rp.y + lh * 0.2f), ImVec2(rp.x + value_x + bar_w * (ms / max_ms), rp.y + lh * 0.8f), sherbet::with_alpha(t.accent, 200), 3.0f);
+				ImFormatString(buf, IM_ARRAYSIZE(buf), have_gpu ? "%.3f ms" : "%.3f ms CPU", static_cast<double>(ms));
+				dl->AddText(ImVec2(rp.x + value_x + bar_w + 8.0f, rp.y), t.text, buf);
+				ImGui::Dummy(ImVec2(0.0f, lh + 3.0f));
+			}
+			if (static_cast<int>(rows.size()) > shown)
+			{
+				ImFormatString(buf, IM_ARRAYSIZE(buf), "+ %d\xEA\xB0\x9C \xEB\x8D\x94" /* + %d개 더 */, static_cast<int>(rows.size()) - shown);
+				ImGui::TextDisabled("%s", buf);
+			}
+		}
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
 	// ── 게임 중 프레임 ────────────────────────────────────────────────────
 	// 위 「성능」의 fps 는 메뉴를 그리는 동안의 값이다. 이 카드는 반대로 **메뉴가 닫힌 동안**
 	// 런타임이 모아 둔 프레임(runtime.cpp on_present 의 링)만 본다 — "메뉴 열면 멀쩡한데
@@ -5123,6 +5190,352 @@ void reshade::runtime::draw_gui_optimize()
 			sherbet_stat_row("\xEA\xB7\xB8\xEB\x9E\x98\xED\x94\xBD API" /* 그래픽 API */, value_x, col_val, api_name);
 	}
 	sherbet::end_card();
+}
+
+// SHERBET: 「엔진룸」 탭 — Sherbet 이 매 프레임 하는 일을 3D 로. 데이터 출처와 계약은
+// sherbet_engine.hpp 머리 주석. 여기는 그리기와 입력뿐이다.
+//
+// ⚠️ **탭이 열려 있을 때만 돈다.** 이 함수는 탭 switch 에서만 불리고, 성운 리드백은 여기서
+//    세우는 _sherbet_engine_wanted 로만 켜진다. 닫으면 다음 프레임부터 복사도 입자도 없다.
+// ⚠️ 잠긴 경로는 최적화 탭과 같은 판매 카드를 보여주고 **런타임 필드를 한 개도 읽지 않는다** —
+//    _sherbet_engine_wanted 도 안 세우므로 리드백이 켜지지 않는다.
+// ⚠️ 판정(프레임 상한)의 정렬은 4Hz 캐시로만 — 매 프레임 8192개를 정렬하지 않는다.
+void reshade::runtime::draw_gui_engine()
+{
+	using namespace sherbet::engine;
+
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_BOLT "  " "\xEC\x97\x94\xEC\xA7\x84\xEB\xA3\xB8" /* 엔진룸 */);
+	ImGui::PopFont();
+	ImGui::Spacing();
+
+	if (!sherbet::paid::show_real_stats(sherbet_feature_unlocked("optimize")))
+	{
+		if (const sherbet::paid::feature *const opt_f = sherbet::paid::find("optimize"))
+		{
+			sherbet_draw_optimize_lock_card(*opt_f);
+			return;
+		}
+	}
+
+	_sherbet_engine_wanted = true;  // 다음 프레임에 성운 리드백을 건다
+	_gather_gpu_statistics = true;  // 고리 크기 = GPU ms
+
+	ImGui::TextWrapped("%s", "Sherbet \xEC\x9D\xB4 \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9D\xB4 PC \xEC\x97\x90\xEC\x84\x9C \xEB\xA7\xA4 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xED\x95\x98\xEB\x8A\x94 \xEC\x9D\xBC\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94. \xEC\xA0\x84\xEB\xB6\x80 \xEC\x8B\xA4\xEC\xB8\xA1\xEC\x9D\xB4\xEA\xB3\xA0, \xEC\x9D\xB4 \xED\x83\xAD\xEC\x9D\x84 \xEB\x8B\xAB\xEC\x9C\xBC\xEB\xA9\xB4 \xEA\xB7\xB8\xEB\xA6\xAC\xEC\xA7\x80\xEB\x8F\x84 \xEC\x9E\xAC\xEC\xA7\x80\xEB\x8F\x84 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94." /* Sherbet 이 지금 이 PC 에서 매 프레임 하는 일이에요. 전부 실측이고, 이 탭을 닫으면 그리지도 재지도 않아요. */);
+	ImGui::Spacing();
+
+	const sherbet::theme &t = sherbet::active_theme();
+	const ImGuiIO &io = ImGui::GetIO();
+	const double now_d = ImGui::GetTime();
+	const float now = static_cast<float>(now_d);
+	const float line_h = ImGui::GetTextLineHeight();
+
+	// 다시 열었으면 입자를 비운다 — 닫혀 있던 동안의 프레임은 여기 없다.
+	if (_frame_count != _sherbet_engine_last_drawn + 1)
+		_sherbet_engine_particles.clear();
+	_sherbet_engine_last_drawn = _frame_count;
+	// 이 프레임의 입자. 오버레이가 열려 있어도 프레임은 흐르므로 그대로 실측이다.
+	_sherbet_engine_particles.spawn(now, std::chrono::duration<float, std::milli>(_last_frame_duration).count());
+	_sherbet_engine_particles.prune(now);
+
+	// ── 캔버스 + 입력 ─────────────────────────────────────────────────────
+	const float legend_h = ImGui::GetTextLineHeightWithSpacing() * 3.0f + 12.0f;
+	const ImVec2 c0 = ImGui::GetCursorScreenPos();
+	const float cw = ImMax(64.0f, ImGui::GetContentRegionAvail().x);
+	const float ch = ImMax(240.0f, ImGui::GetContentRegionAvail().y - legend_h);
+	const ImVec2 c1(c0.x + cw, c0.y + ch);
+
+	ImGui::InvisibleButton("##engine_canvas", ImVec2(cw, ch), ImGuiButtonFlags_MouseButtonLeft);
+	ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY); // 휠을 가져간다 — 안 그러면 확대하면서 창까지 스크롤된다
+	const bool hovered = ImGui::IsItemHovered();
+	if (ImGui::IsItemActive() && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f))
+		_sherbet_engine_cam.orbit(io.MouseDelta.x, io.MouseDelta.y);
+	if (hovered && io.MouseWheel != 0.0f)
+		_sherbet_engine_cam.zoom(io.MouseWheel);
+	if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+		_sherbet_engine_cam.reset();
+	_sherbet_engine_cam.spin(io.DeltaTime);
+
+	ImDrawList *const dl = ImGui::GetWindowDrawList();
+	dl->PushClipRect(c0, c1, true);
+	dl->AddRectFilled(c0, c1, sherbet::with_alpha(t.bg0, 235), 12.0f);
+
+	const camera &cam = _sherbet_engine_cam;
+	const viewport vp { (c0.x + c1.x) * 0.5f, (c0.y + c1.y) * 0.5f + ch * 0.04f, ch * 0.5f };
+	const ImU32 col_warn = ImGui::ColorConvertFloat4ToU32(sherbet::status_color(sherbet::status::warn));
+	const ImU32 col_bad = ImGui::ColorConvertFloat4ToU32(sherbet::status_color(sherbet::status::bad));
+	const ImU32 col_ok = ImGui::ColorConvertFloat4ToU32(sherbet::status_color(sherbet::status::good));
+
+	// 월드 → 화면. 카메라 뒤면 false(그리지 않는다).
+	const auto proj = [&](vec3 p, ImVec2 &out, float &sc) -> bool {
+		float d;
+		return project(cam, p, vp, out.x, out.y, d, sc);
+	};
+	const auto text_centered = [&](const ImVec2 &at, ImU32 col, const char *s) {
+		const ImVec2 ts = ImGui::CalcTextSize(s);
+		dl->AddText(ImVec2(at.x - ts.x * 0.5f, at.y), col, s);
+	};
+
+	ImVec2 sp; float sc;
+
+	// ── 성운: 지금 화면의 색 (뒤에 깐다) ──────────────────────────────────
+	{
+		const float hs = kNebulaSize * 0.5f;
+		const vec3 corners[8] = {
+			{ -hs, kNebulaCenterY - hs, -hs }, { hs, kNebulaCenterY - hs, -hs }, { -hs, kNebulaCenterY + hs, -hs }, { hs, kNebulaCenterY + hs, -hs },
+			{ -hs, kNebulaCenterY - hs,  hs }, { hs, kNebulaCenterY - hs,  hs }, { -hs, kNebulaCenterY + hs,  hs }, { hs, kNebulaCenterY + hs,  hs } };
+		static const int edges[12][2] = { { 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 }, { 4, 5 }, { 5, 7 }, { 7, 6 }, { 6, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+		ImVec2 pc[8]; bool ok[8];
+		for (int i = 0; i < 8; ++i)
+			ok[i] = proj(corners[i], pc[i], sc);
+		for (const int (&e)[2] : edges)
+			if (ok[e[0]] && ok[e[1]])
+				dl->AddLine(pc[e[0]], pc[e[1]], sherbet::with_alpha(t.text_dim, 55), 1.0f);
+
+		// 효과 전(회색) 먼저, 효과 후(색) 위에. 점 크기는 거리에 따라 1~2.5px.
+		const auto cloud = [&](const std::vector<float> &pts, std::size_t n, bool gray, ImU32 alpha) {
+			for (std::size_t i = 0; i < n; ++i)
+			{
+				const float r = pts[i * 3], g = pts[i * 3 + 1], b = pts[i * 3 + 2];
+				if (!proj(nebula_pos(r, g, b), sp, sc))
+					continue;
+				const float s = ImClamp(sc * 0.018f, 0.75f, 2.5f);
+				ImU32 col;
+				if (gray)
+				{
+					const int l = static_cast<int>((0.299f * r + 0.587f * g + 0.114f * b) * 255.0f);
+					col = IM_COL32(l, l, l, alpha);
+				}
+				else
+				{
+					col = IM_COL32(static_cast<int>(r * 255.0f), static_cast<int>(g * 255.0f), static_cast<int>(b * 255.0f), alpha);
+				}
+				dl->AddRectFilled(ImVec2(sp.x - s, sp.y - s), ImVec2(sp.x + s, sp.y + s), col);
+			}
+		};
+		const bool has_pre = _effects_enabled && _sherbet_engine_pre_n > 0;
+		if (has_pre)
+			cloud(_sherbet_engine_pre, _sherbet_engine_pre_n, true, 70);
+		cloud(_sherbet_engine_post, _sherbet_engine_post_n, false, 210);
+
+		if (proj({ -hs, kNebulaCenterY + hs + 0.15f, -hs }, sp, sc))
+		{
+			dl->AddText(ImVec2(sp.x, sp.y - line_h * (has_pre ? 2.0f : 1.0f)), sherbet::with_alpha(t.text, 210), "\xEC\xA7\x80\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xEC\x83\x89" /* 지금 화면의 색 */);
+			if (has_pre)
+				dl->AddText(ImVec2(sp.x, sp.y - line_h), sherbet::with_alpha(t.text_dim, 210), "\xED\x9A\x8C\xEC\x83\x89 = \xED\x9A\xA8\xEA\xB3\xBC \xEC\xA0\x84" /* 회색 = 효과 전 */);
+		}
+	}
+
+	// ── 바닥: 최근 게임 중 프레임 시간 ────────────────────────────────────
+	{
+		constexpr int kBuckets = 96;
+		float wf[kBuckets];
+		const int nb = waveform(_sherbet_frames, kBuckets, wf);
+		ImVec2 a, b;
+		if (proj({ kPipeStart, kFloorY, 0.0f }, a, sc) && proj({ kPipeEnd, kFloorY, 0.0f }, b, sc))
+			dl->AddLine(a, b, sherbet::with_alpha(t.text_dim, 90), 1.0f);
+		if (nb > 0)
+		{
+			// 높이 기준: 칸 최대값 중 가장 작은 것(= 평소 프레임)의 4배가 천장. 끊김이 산처럼 솟는다.
+			float ref = wf[0];
+			for (int i = 1; i < nb; ++i)
+				ref = ImMin(ref, wf[i]);
+			if (ref <= 0.0f)
+				ref = 1.0f;
+			ImVec2 prev; bool prev_ok = false;
+			for (int i = 0; i < nb; ++i)
+			{
+				const float x = kPipeStart + (kPipeEnd - kPipeStart) * (static_cast<float>(i) / static_cast<float>(nb - 1));
+				const float h = ImClamp(wf[i] / (ref * 4.0f), 0.0f, 1.0f) * kFloorHeight;
+				const bool spike = h > kFloorHeight * 0.5f;
+				const bool ok = proj({ x, kFloorY + h, 0.0f }, sp, sc);
+				if (ok && prev_ok)
+					dl->AddLine(prev, sp, sherbet::with_alpha(spike ? col_warn : t.accent2, 200), 1.5f);
+				if (ok && spike && proj({ x, kFloorY, 0.0f }, a, sc))
+					dl->AddLine(a, sp, sherbet::with_alpha(col_warn, 90), 1.0f);
+				prev = sp; prev_ok = ok;
+			}
+		}
+		if (proj({ kPipeStart, kFloorY - 0.35f, 0.0f }, sp, sc))
+			dl->AddText(sp, sherbet::with_alpha(t.text_dim, 200), nb > 0
+				? "\xEC\xB5\x9C\xEA\xB7\xBC \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x8B\x9C\xEA\xB0\x84" /* 최근 게임 중 프레임 시간 */
+				: "\xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 \xED\x94\x8C\xEB\xA0\x88\xEC\x9D\xB4\xED\x95\x98\xEB\xA9\xB4 \xEC\xB1\x84\xEC\x9B\x8C\xEC\xA0\xB8\xEC\x9A\x94" /* 메뉴를 닫고 플레이하면 채워져요 */);
+	}
+
+	// ── 파이프 축 + 양끝 라벨 ─────────────────────────────────────────────
+	{
+		ImVec2 a, b;
+		if (proj({ kPipeStart, 0.0f, 0.0f }, a, sc) && proj({ kPipeEnd, 0.0f, 0.0f }, b, sc))
+			dl->AddLine(a, b, sherbet::with_alpha(t.text_dim, 70), 1.0f);
+		if (proj({ kPipeStart, 0.35f, 0.0f }, a, sc))
+			text_centered(ImVec2(a.x, a.y - line_h), sherbet::with_alpha(t.text, 220), "\xEA\xB2\x8C\xEC\x9E\x84" /* 게임 */);
+		if (proj({ kPipeEnd, 0.35f, 0.0f }, b, sc))
+			text_centered(ImVec2(b.x, b.y - line_h), sherbet::with_alpha(t.text, 220), "\xEB\xAA\xA8\xEB\x8B\x88\xED\x84\xB0" /* 모니터 */);
+	}
+
+	// ── 고리: 켜진 효과(실행 순서). 크기·발광 = GPU ms ───────────────────
+	{
+		struct ring_item { std::string label; float gpu_ms; float cpu_ms; };
+		std::vector<ring_item> items;
+		if (!is_loading() && _effects_enabled)
+		{
+			for (size_t ti : _technique_sorting)
+			{
+				const technique &tech = _techniques[ti];
+				if (!tech.enabled || tech.hidden || tech.effect_index >= _effects.size() || !_effects[tech.effect_index].compiled)
+					continue;
+				const std::string_view lbl = tech.annotation_as_string("ui_label");
+				items.push_back({ std::string(lbl.empty() ? std::string_view(tech.name) : lbl), tech.average_gpu_duration * 1e-6f, tech.average_cpu_duration * 1e-6f });
+			}
+		}
+		const int n = static_cast<int>(items.size());
+		if (n == 0)
+		{
+			if (proj({ 0.0f, 0.6f, 0.0f }, sp, sc))
+				text_centered(sp, sherbet::with_alpha(t.text_dim, 200), "\xEC\xBC\x9C\xEC\xA7\x84 \xED\x9A\xA8\xEA\xB3\xBC\xEA\xB0\x80 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94" /* 켜진 효과가 없어요 */);
+		}
+		else
+		{
+			std::vector<float> ms(n);
+			for (int i = 0; i < n; ++i)
+				ms[i] = items[i].gpu_ms;
+			std::vector<ring_slot> slots(n);
+			layout_rings(ms.data(), n, slots.data());
+
+			// 먼 것부터 그린다(가까운 고리가 위에 오게)
+			std::vector<std::pair<float, int>> order(n);
+			for (int i = 0; i < n; ++i)
+			{
+				float d = 0.0f;
+				project(cam, { slots[i].x, 0.0f, 0.0f }, vp, sp.x, sp.y, d, sc);
+				order[i] = { d, i };
+			}
+			std::sort(order.begin(), order.end(), [](const std::pair<float, int> &a, const std::pair<float, int> &b) { return a.first > b.first; });
+
+			constexpr int kSeg = 40;
+			ImVec2 pts[kSeg];
+			for (const std::pair<float, int> &o : order)
+			{
+				const ring_slot &rs = slots[o.second];
+				bool all_ok = true;
+				for (int k = 0; k < kSeg && all_ok; ++k)
+				{
+					const float ang = 6.2831853f * static_cast<float>(k) / static_cast<float>(kSeg);
+					all_ok = proj({ rs.x, std::cos(ang) * rs.radius, std::sin(ang) * rs.radius }, pts[k], sc);
+				}
+				if (!all_ok)
+					continue;
+				// 글로우 세 겹 — ImGui 는 가산 블렌딩이 없어서 굵고 옅은 선을 겹쳐 흉내 낸다.
+				dl->AddPolyline(pts, kSeg, sherbet::with_alpha(t.accent, 25u + static_cast<ImU32>(60.0f * rs.glow)), ImDrawFlags_Closed, 7.0f + 7.0f * rs.glow);
+				dl->AddPolyline(pts, kSeg, sherbet::with_alpha(t.accent, 70u + static_cast<ImU32>(90.0f * rs.glow)), ImDrawFlags_Closed, 3.0f);
+				dl->AddPolyline(pts, kSeg, sherbet::with_alpha(t.text, 230), ImDrawFlags_Closed, 1.2f);
+
+				// 라벨: 고리 위에 이름, 그 아래 ms. 이름은 UTF-8 경계에서 자른다.
+				if (proj({ rs.x, rs.radius + 0.18f, 0.0f }, sp, sc))
+				{
+					const ring_item &it = items[o.second];
+					std::size_t cut = ImMin<std::size_t>(it.label.size(), 22);
+					while (cut > 0 && cut < it.label.size() && (static_cast<unsigned char>(it.label[cut]) & 0xC0) == 0x80)
+						--cut;
+					char lbl[64];
+					ImFormatString(lbl, IM_ARRAYSIZE(lbl), "%.*s", static_cast<int>(cut), it.label.c_str());
+					text_centered(ImVec2(sp.x, sp.y - line_h * 2.0f), sherbet::with_alpha(t.text, 220), lbl);
+					char msb[32];
+					if (it.gpu_ms > 0.0f)
+						ImFormatString(msb, IM_ARRAYSIZE(msb), "%.2f ms", static_cast<double>(it.gpu_ms));
+					else
+						ImFormatString(msb, IM_ARRAYSIZE(msb), "%.2f ms CPU", static_cast<double>(it.cpu_ms));
+					text_centered(ImVec2(sp.x, sp.y - line_h), sherbet::with_alpha(t.text_dim, 210), msb);
+				}
+			}
+		}
+	}
+
+	// ── 게이트: 프레임 상한 ───────────────────────────────────────────────
+	{
+		static sherbet::frametime::stats gate_stat;
+		static bool gate_ok = false;
+		static int gate_hz = 0;
+		static double gate_t = -1.0;
+		if (gate_t < 0.0 || now_d - gate_t >= 0.25)
+		{
+			gate_t = now_d;
+			gate_ok = sherbet::frametime::compute(_sherbet_frames, gate_stat);
+			gate_hz = sherbet_monitor_refresh_hz(get_hwnd());
+		}
+		const sherbet::frametime::diagnosis d = gate_ok
+			? sherbet::frametime::diagnose(gate_stat, gate_hz, _sherbet_present_sync_interval)
+			: sherbet::frametime::diagnosis {};
+
+		ImU32 col; char word[48];
+		switch (d.verdict)
+		{
+		case sherbet::frametime::cap::vsync:
+			col = col_ok;
+			ImFormatString(word, IM_ARRAYSIZE(word), "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0 %.0f" /* 수직동기 %.0f */, static_cast<double>(d.target_fps));
+			break;
+		case sherbet::frametime::cap::vsync_divided:
+			col = col_warn;
+			ImFormatString(word, IM_ARRAYSIZE(word), "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0 1/%d" /* 수직동기 1/%d */, d.divisor);
+			break;
+		case sherbet::frametime::cap::vsync_other:
+		case sherbet::frametime::cap::other:
+			col = col_warn;
+			ImFormatString(word, IM_ARRAYSIZE(word), "\xEC\xA0\x9C\xED\x95\x9C %.0f" /* 제한 %.0f */, static_cast<double>(d.fps));
+			break;
+		case sherbet::frametime::cap::none:
+			col = col_ok;
+			ImFormatString(word, IM_ARRAYSIZE(word), "%s", "\xEC\x97\x86\xEC\x9D\x8C" /* 없음 */);
+			break;
+		default:
+			col = t.text_dim;
+			ImFormatString(word, IM_ARRAYSIZE(word), "%s", "\xED\x91\x9C\xEB\xB3\xB8 \xEB\xB6\x80\xEC\xA1\xB1" /* 표본 부족 */);
+			break;
+		}
+
+		const float g = 0.9f;
+		ImVec2 q[4];
+		if (proj({ kGateX, g, 0.0f }, q[0], sc) && proj({ kGateX, 0.0f, g }, q[1], sc) && proj({ kGateX, -g, 0.0f }, q[2], sc) && proj({ kGateX, 0.0f, -g }, q[3], sc))
+		{
+			dl->AddPolyline(q, 4, sherbet::with_alpha(col, 60), ImDrawFlags_Closed, 6.0f);
+			dl->AddPolyline(q, 4, sherbet::with_alpha(col, 220), ImDrawFlags_Closed, 1.5f);
+		}
+		if (proj({ kGateX, g + 0.2f, 0.0f }, sp, sc))
+		{
+			text_centered(ImVec2(sp.x, sp.y - line_h * 2.0f), sherbet::with_alpha(t.text, 220), "\xEC\x83\x81\xED\x95\x9C" /* 상한 */);
+			text_centered(ImVec2(sp.x, sp.y - line_h), sherbet::with_alpha(col, 230), word);
+		}
+	}
+
+	// ── 입자: 프레임. 간격 = 프레임 시간, 빨강 = 끊김 ─────────────────────
+	{
+		const particle_stream &ps = _sherbet_engine_particles;
+		for (int i = 0; i < ps.count(); ++i)
+		{
+			const particle &p = ps.at(i);
+			const float pr = particle_stream::progress(p, now);
+			if (!proj({ particle_stream::x_of(pr), p.lane_y, p.lane_z }, sp, sc))
+				continue;
+			const float rad = ImClamp(sc * 0.045f, 1.5f, 5.0f);
+			if (p.late)
+			{
+				dl->AddCircleFilled(sp, rad * 3.0f, sherbet::with_alpha(col_bad, 60));
+				dl->AddCircleFilled(sp, rad * 1.6f, sherbet::with_alpha(col_bad, 230));
+			}
+			else
+			{
+				dl->AddCircleFilled(sp, rad * 2.2f, sherbet::with_alpha(t.accent2, 45));
+				dl->AddCircleFilled(sp, rad, sherbet::with_alpha(t.text, 235));
+			}
+		}
+	}
+
+	dl->PopClipRect();
+
+	// ── 범례 ──────────────────────────────────────────────────────────────
+	ImGui::TextDisabled("%s", "\xEA\xB3\xA0\xEB\xA6\xAC = \xEC\xBC\x9C\xEC\xA7\x84 \xED\x9A\xA8\xEA\xB3\xBC (\xED\x81\xAC\xEA\xB8\xB0 = GPU ms)   \xC2\xB7   \xEC\x9E\x85\xEC\x9E\x90 = \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 (\xEB\xB9\xA8\xEA\xB0\x95 = \xEB\x81\x8A\xEA\xB9\x80)   \xC2\xB7   \xEA\xB2\x8C\xEC\x9D\xB4\xED\x8A\xB8 = \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x83\x81\xED\x95\x9C" /* 고리 = 켜진 효과 (크기 = GPU ms) · 입자 = 프레임 (빨강 = 끊김) · 게이트 = 프레임 상한 */);
+	ImGui::TextDisabled("%s", "\xEC\x84\xB1\xEC\x9A\xB4 = \xEC\xA7\x80\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xEC\x83\x89 (\xED\x9A\x8C\xEC\x83\x89 = \xED\x9A\xA8\xEA\xB3\xBC \xEC\xA0\x84)   \xC2\xB7   \xEB\xB0\x94\xEB\x8B\xA5 = \xEC\xB5\x9C\xEA\xB7\xBC \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x8B\x9C\xEA\xB0\x84" /* 성운 = 지금 화면의 색 (회색 = 효과 전) · 바닥 = 최근 게임 중 프레임 시간 */);
+	ImGui::TextDisabled("%s", "\xEB\x93\x9C\xEB\x9E\x98\xEA\xB7\xB8 \xED\x9A\x8C\xEC\xA0\x84  \xC2\xB7  \xED\x9C\xA0 \xED\x99\x95\xEB\x8C\x80  \xC2\xB7  \xEB\x8D\x94\xEB\xB8\x94\xED\x81\xB4\xEB\xA6\xAD \xEC\x9B\x90\xEC\x9C\x84\xEC\xB9\x98" /* 드래그 회전 · 휠 확대 · 더블클릭 원위치 */);
 }
 
 // SHERBET: 커스텀 사진 배경 잠금 카드 — 「설정」 탭.

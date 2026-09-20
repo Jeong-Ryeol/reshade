@@ -18,6 +18,7 @@
 #include "sherbet_xhmarket.hpp"
 #include "sherbet_motion.hpp"
 #include "sherbet_frametime.hpp"
+#include "sherbet_engine.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -269,6 +270,15 @@ namespace reshade
 		bool sherbet_magnifier_create_pipeline();
 		void sherbet_magnifier_release_pipeline();
 		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
+
+		// SHERBET: 「엔진룸」 성운 — 지금 화면의 색을 읽는 리드백. **탭이 그려진 프레임의 다음
+		// 프레임에만** 돈다(_sherbet_engine_wanted). 안 그려지면 복사도 매핑도 없고 4프레임 뒤에
+		// 리소스를 놓는다 — "켜 두면 렉" 을 막는 계약이 이 게이트다.
+		// 효과 전 = render_effects 안(반반 비교 스냅샷 옆), 효과 후 = on_present(돋보기 옆).
+		// 슬롯 3개 링에 두 프레임 전 것을 읽는다(sherbet_motion_tick 과 같은 이유 — 매핑 스톨 회피).
+		void sherbet_engine_capture(api::command_list *cmd_list, int stream, api::resource src, api::resource_usage src_state);
+		void sherbet_engine_readback(); // 두 프레임 전 슬롯을 매핑해 성운 점을 만든다
+		void sherbet_engine_release();
 
 		api::swapchain *const _swapchain;
 		api::device *const _device;
@@ -538,6 +548,25 @@ namespace reshade
 		bool _sherbet_frames_prev_skip = true; // 직전 프레임을 건너뛰었는가 — 전환 직후 한 프레임도 뺀다
 		unsigned int _sherbet_present_sync_interval = sherbet::frametime::kSyncUnknown;
 
+		// SHERBET: 「엔진룸」 탭 상태. 자세한 것은 sherbet_engine.hpp 머리 주석.
+		static constexpr unsigned int kSherbetEngineCrop = 256;      // 백버퍼 가운데 256×256 만 읽는다
+		static constexpr int kSherbetEngineStep = 4;                 // 4픽셀 간격 → 64×64 = 4096점
+		static constexpr std::size_t kSherbetEngineMaxPoints = 4096;
+		static constexpr int kSherbetEngineSlots = 3;
+		bool _sherbet_engine_wanted = false; // 이 프레임에 탭이 그려졌다. draw_gui 첫머리에서 매 프레임 false
+		api::resource _sherbet_engine_stage[2][kSherbetEngineSlots] = {}; // [0]=효과 전 [1]=효과 후
+		bool _sherbet_engine_slot_full[2][kSherbetEngineSlots] = {};
+		unsigned int _sherbet_engine_crop = 0;
+		api::format _sherbet_engine_format = api::format::unknown;
+		int _sherbet_engine_kind = 0; // sherbet::engine::pixel_kind
+		int _sherbet_engine_state = 0; // 0=아직 · 1=동작 · 2=포맷 미지원 · 3=리소스 생성 실패(재시도 안 함)
+		uint64_t _sherbet_engine_last_write = 0;
+		std::vector<float> _sherbet_engine_pre, _sherbet_engine_post; // r,g,b × N
+		std::size_t _sherbet_engine_pre_n = 0, _sherbet_engine_post_n = 0;
+		sherbet::engine::particle_stream _sherbet_engine_particles;
+		sherbet::engine::camera _sherbet_engine_cam;
+		uint64_t _sherbet_engine_last_drawn = 0; // 탭을 마지막으로 그린 _frame_count — 다시 열면 입자를 비운다
+
 		// SHERBET(실험): 화면 이동 추정 스파이크. 백버퍼 가운데를 잘라 CPU 로 리드백하고
 		// 프레임 간 이동을 1D 투영 매칭으로 재서, 마우스 이동을 빼 **게임의 실제 반동**을
 		// 추정한다(화면 = 반동 + 마우스 → 반동 = 화면 − 마우스).
@@ -699,6 +728,7 @@ namespace reshade
 		bool draw_gui_spray_trainer();
 		void sherbet_draw_spray_lock_card(const sherbet::paid::feature &f);
 		void draw_gui_optimize();
+		void draw_gui_engine(); // SHERBET: 「엔진룸」 — 매 프레임 하는 일을 3D 로. 탭이 열려 있을 때만 돈다
 		// SHERBET: 「최적화」 탭이 통째로 잠겼을 때의 판매 카드. 런타임 실측 필드를 한 개도
 		// 읽지 않는다 — 실측 코드와 다른 함수로 갈라 둔 것이 그 규칙의 구조적 보장이다.
 		void sherbet_draw_optimize_lock_card(const sherbet::paid::feature &f);

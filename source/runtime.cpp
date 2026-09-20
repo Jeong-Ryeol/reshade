@@ -655,6 +655,7 @@ exit_failure:
 	_sherbet_before_srv = {};
 
 	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
+	sherbet_engine_release(); // SHERBET: 엔진룸 성운 리드백 링
 
 	_device->destroy_resource(_sherbet_crosshair_tex);
 	_sherbet_crosshair_tex = {};
@@ -729,6 +730,7 @@ void reshade::runtime::on_reset()
 	_sherbet_before_srv = {};
 
 	sherbet_motion_release(); // SHERBET(실험): 화면 이동 추정 리드백 링
+	sherbet_engine_release(); // SHERBET: 엔진룸 성운 리드백 링
 	sherbet_magnifier_release(); // SHERBET: 돋보기 잘라내기 텍스처(해상도가 바뀌면 크기도 달라진다)
 	sherbet_magnifier_release_pipeline(); // 파이프라인도 디바이스 리셋 때 놓는다
 
@@ -860,6 +862,16 @@ void reshade::runtime::on_present()
 		sherbet_magnifier_capture(cmd_list,
 			mag_resolved ? _back_buffer_resolved : _swapchain->get_current_back_buffer(),
 			mag_resolved ? api::resource_usage::render_target : api::resource_usage::present);
+	}
+
+	// SHERBET: 「엔진룸」 성운 — 효과 **후** 화면 색. 돋보기와 같은 소스 선택·상태(위 주석 참고).
+	// 탭이 안 그려진 프레임엔 함수 첫 줄에서 돌아오고, 몇 프레임 지나면 리소스도 놓는다.
+	{
+		const bool eng_resolved = _back_buffer_resolved != 0;
+		sherbet_engine_capture(cmd_list, 1,
+			eng_resolved ? _back_buffer_resolved : _swapchain->get_current_back_buffer(),
+			eng_resolved ? api::resource_usage::render_target : api::resource_usage::present);
+		sherbet_engine_readback();
 	}
 
 	if (_should_save_screenshot)
@@ -4003,6 +4015,165 @@ void reshade::runtime::sherbet_motion_release()
 	_sherbet_motion.drop_prev();
 }
 
+// SHERBET: 「엔진룸」 성운 리드백 — 선언부(runtime.hpp) 주석 참고. 구조는 sherbet_motion_tick 과 같다:
+// 원하는 프레임에만 크롭을 슬롯 링에 복사하고, 두 프레임 전 슬롯을 매핑해 읽는다.
+void reshade::runtime::sherbet_engine_release()
+{
+	for (int s = 0; s < 2; ++s)
+	{
+		for (int i = 0; i < kSherbetEngineSlots; ++i)
+		{
+			if (_sherbet_engine_stage[s][i] != 0)
+				_device->destroy_resource(_sherbet_engine_stage[s][i]);
+			_sherbet_engine_stage[s][i] = {};
+			_sherbet_engine_slot_full[s][i] = false;
+		}
+	}
+	_sherbet_engine_crop = 0;
+	_sherbet_engine_format = api::format::unknown;
+	_sherbet_engine_state = 0;
+	_sherbet_engine_pre_n = _sherbet_engine_post_n = 0;
+}
+
+void reshade::runtime::sherbet_engine_capture(api::command_list *cmd_list, int stream, api::resource src, api::resource_usage src_state)
+{
+	// ⚠️ 기본 경로. 탭이 안 그려졌으면 복사도 매핑도 없다 — 렌더 경로가 그대로다.
+	//    마지막 복사에서 몇 프레임 지나면 링(1.5 MiB)을 놓는다. 바로 놓지 않는 이유는 GPU 가
+	//    아직 그 복사를 처리 중일 수 있어서다(D3D12/Vulkan 에서 문제가 된다).
+	//    효과 후(stream 1) 경로는 on_present 에서 무조건 불리므로 놓는 판정은 거기서만 한다.
+	if (!_sherbet_engine_wanted)
+	{
+		if (stream == 1 && _sherbet_engine_stage[0][0] != 0 && _frame_count > _sherbet_engine_last_write + 4)
+			sherbet_engine_release();
+		return;
+	}
+	// 실패가 확정된 상태(포맷 미지원·리소스 생성 실패)는 매 프레임 다시 시도하지 않는다.
+	if (_sherbet_engine_state >= 2 || src == 0)
+		return;
+
+	const api::resource_desc src_desc = _device->get_resource_desc(src);
+
+	unsigned int crop = kSherbetEngineCrop;
+	if (crop > src_desc.texture.width)
+		crop = src_desc.texture.width;
+	if (crop > src_desc.texture.height)
+		crop = src_desc.texture.height;
+	crop &= ~1u;
+	if (crop < 64)
+		return;
+
+	const api::format fmt = api::format_to_default_typed(src_desc.texture.format, 0);
+
+	// 바이트 순서가 포맷마다 다르다 — 파엠은 B8G8R8A8 이라 RGBA 로 읽으면 하늘이 주황이 된다.
+	// (tools/sherbet_engine_test.cpp 가 그 차이를 단언한다)
+	int kind;
+	switch (fmt)
+	{
+	case api::format::r8g8b8a8_unorm:
+	case api::format::r8g8b8a8_unorm_srgb:
+	case api::format::r8g8b8x8_unorm:
+	case api::format::r8g8b8x8_unorm_srgb:
+		kind = static_cast<int>(sherbet::engine::pixel_kind::rgba8);
+		break;
+	case api::format::b8g8r8a8_unorm:
+	case api::format::b8g8r8a8_unorm_srgb:
+	case api::format::b8g8r8x8_unorm:
+	case api::format::b8g8r8x8_unorm_srgb:
+		kind = static_cast<int>(sherbet::engine::pixel_kind::bgra8);
+		break;
+	case api::format::r10g10b10a2_unorm:
+		kind = static_cast<int>(sherbet::engine::pixel_kind::rgb10a2);
+		break;
+	case api::format::b10g10r10a2_unorm:
+		kind = static_cast<int>(sherbet::engine::pixel_kind::bgr10a2);
+		break;
+	default:
+		// HDR float 등. 성운만 빠지고 나머지(고리·입자·게이트·바닥)는 그대로 그린다.
+		_sherbet_engine_state = 2;
+		return;
+	}
+
+	// 크기나 포맷이 바뀌었으면(해상도 변경 등) 링을 다시 만든다.
+	if (_sherbet_engine_stage[0][0] == 0 || _sherbet_engine_crop != crop || _sherbet_engine_format != fmt)
+	{
+		sherbet_engine_release();
+
+		for (int s = 0; s < 2; ++s)
+		{
+			for (int i = 0; i < kSherbetEngineSlots; ++i)
+			{
+				if (!_device->create_resource(
+						api::resource_desc(crop, crop, 1, 1, fmt, 1, api::memory_heap::readback, api::resource_usage::copy_dest),
+						nullptr, api::resource_usage::copy_dest, &_sherbet_engine_stage[s][i]))
+				{
+					log::message(log::level::error, "Failed to create Sherbet engine readback texture!");
+					sherbet_engine_release();
+					_sherbet_engine_state = 3;
+					return;
+				}
+
+				_device->set_resource_name(_sherbet_engine_stage[s][i], "Sherbet engine readback");
+			}
+		}
+
+		_sherbet_engine_crop = crop;
+		_sherbet_engine_format = fmt;
+		_sherbet_engine_kind = kind;
+		_sherbet_engine_state = 1;
+	}
+
+	// 효과 전/후는 같은 프레임(같은 _frame_count)에 복사되므로 같은 슬롯에 들어간다.
+	const int slot = static_cast<int>(_frame_count % kSherbetEngineSlots);
+	const uint32_t x0 = (src_desc.texture.width - crop) / 2;
+	const uint32_t y0 = (src_desc.texture.height - crop) / 2;
+	const api::subresource_box box = { x0, y0, 0, x0 + crop, y0 + crop, 1 };
+
+	// ⚠️ 원래 상태(src_state)로 반드시 되돌린다 — 돋보기와 같은 이유. on_present 뒤쪽이
+	//    그 리소스의 상태를 전제로 배리어를 건다.
+	cmd_list->barrier(src, src_state, api::resource_usage::copy_source);
+	cmd_list->copy_texture_region(src, 0, &box, _sherbet_engine_stage[stream][slot], 0, nullptr);
+	cmd_list->barrier(src, api::resource_usage::copy_source, src_state);
+
+	_sherbet_engine_slot_full[stream][slot] = true;
+	_sherbet_engine_last_write = _frame_count;
+}
+
+void reshade::runtime::sherbet_engine_readback()
+{
+	if (_sherbet_engine_state != 1)
+		return;
+
+	// (f + 1) % 3 == (f - 2) % 3 — 두 프레임 전에 복사를 건 슬롯. 매핑이 GPU 를 기다리지 않는다.
+	const int slot = static_cast<int>((_frame_count + 1) % kSherbetEngineSlots);
+	for (int s = 0; s < 2; ++s)
+	{
+		std::size_t &n = s == 0 ? _sherbet_engine_pre_n : _sherbet_engine_post_n;
+		if (!_sherbet_engine_slot_full[s][slot])
+		{
+			// 효과가 꺼져 있으면 render_effects 가 일찍 돌아와 '효과 전' 은 안 찍힌다 — 그러면
+			// 회색 구름도 없어야 한다(같은 그림 두 번이 아니라 "전이 없다" 가 사실이다).
+			if (s == 0 && _sherbet_engine_slot_full[1][slot])
+				n = 0;
+			continue;
+		}
+		_sherbet_engine_slot_full[s][slot] = false;
+
+		std::vector<float> &dst = s == 0 ? _sherbet_engine_pre : _sherbet_engine_post;
+		dst.resize(kSherbetEngineMaxPoints * 3);
+
+		api::subresource_data mapped = {};
+		if (_device->map_texture_region(_sherbet_engine_stage[s][slot], 0, nullptr, api::map_access::read_only, &mapped) && mapped.data != nullptr)
+		{
+			n = sherbet::engine::sample_colors(mapped.data,
+				static_cast<int>(_sherbet_engine_crop), static_cast<int>(_sherbet_engine_crop), mapped.row_pitch,
+				static_cast<sherbet::engine::pixel_kind>(_sherbet_engine_kind), kSherbetEngineStep,
+				dst.data(), kSherbetEngineMaxPoints);
+
+			_device->unmap_texture_region(_sherbet_engine_stage[s][slot], 0);
+		}
+	}
+}
+
 // SHERBET(실험): 화면 이동 추정 한 프레임.
 //
 //   화면 이동 = 게임 반동 + 내 마우스 이동   →   반동 = 화면 이동 − 마우스 이동
@@ -4371,6 +4542,10 @@ void reshade::runtime::render_effects(api::command_list *cmd_list, api::resource
 		cmd_list->barrier(_sherbet_before_tex, api::resource_usage::copy_dest, api::resource_usage::shader_resource);
 		cmd_list->barrier(compare_src, api::resource_usage::copy_source, api::resource_usage::render_target);
 	}
+
+	// SHERBET: 「엔진룸」 성운 — 효과 **전** 화면 색. 위 반반 비교 스냅샷과 같은 자리·같은 소스다.
+	// 탭이 안 그려진 프레임엔 함수 첫 줄에서 돌아온다(리소스 조회조차 하지 않는다).
+	sherbet_engine_capture(cmd_list, 0, _device->get_resource_from_view(rtv), api::resource_usage::render_target);
 
 	// SHERBET(실험): 화면 이동 추정. 위 반반 비교와 같은 자리·같은 방식이다 — 효과가
 	// 적용되기 전, ImGui 가 그려지기 전의 렌더 타깃에서 뜬다(효과의 노이즈·그레인과
