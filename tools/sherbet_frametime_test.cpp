@@ -75,12 +75,31 @@ static void test_insufficient_samples()
 	fill_flat(r, 6.944f, kMinFrames - 1);
 	stats st;
 	assert(!compute(r, st));
-	assert(st.frames == kMinFrames - 1); // "지금까지 N 프레임" 을 보여주려면 이건 채워져야 한다
+	assert(st.frames == kMinFrames - 1); // "지금까지 N초 · M프레임" 을 보여주려면 이 둘은 채워져야 한다
+	assert(feq(st.seconds, 6.944f * (kMinFrames - 1) / 1000.0f, 0.05f));
 	assert(diagnose(st, 144, 1).verdict == cap::insufficient);
 
+	// ★ 프레임 수만 넘겨선 안 된다. 144fps 에서 600프레임은 4초 — 접속 직후 히치 몇 개가
+	//   1% low 를 통째로 정한다(실기에서 4.5초 표본에 41fps 가 찍혔다). 10초가 차야 낸다.
 	r.push(6.944f);
-	assert(compute(r, st));
+	assert(st.frames + 1 == kMinFrames);
+	assert(!compute(r, st));
 	assert(st.frames == kMinFrames);
+	assert(st.seconds < kMinSeconds);
+
+	while (st.seconds < kMinSeconds)
+	{
+		r.push(6.944f);
+		compute(r, st);
+	}
+	assert(compute(r, st));
+	assert(st.frames >= kMinFrames && st.seconds >= kMinSeconds);
+
+	// 반대로 60fps 에서는 10초 ≈ 600프레임이라 둘이 거의 같이 찬다(지터 때문에 정확히 600 은 9.99초).
+	ring slow;
+	fill_flat(slow, 1000.0f / 60.0f, kMinFrames + 10);
+	assert(compute(slow, st));
+	assert(st.seconds >= kMinSeconds && st.seconds < kMinSeconds + 0.5f);
 }
 
 static void test_stats_known_distribution()

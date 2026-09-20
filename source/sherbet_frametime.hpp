@@ -35,9 +35,12 @@ namespace sherbet
 		// push 는 렌더 스레드에서 매 프레임 불리므로 힙을 만지지 않는다.
 		constexpr std::size_t kCapacity = 8192;
 
-		// 통계를 내는 최소 표본. 600 = 60fps 10초, 144fps 4초.
-		// 이보다 적으면 "가장 느린 1%" 가 대여섯 프레임으로 정해져 최악값과 구분이 안 된다.
+		// 통계를 내는 최소 표본 — 프레임 수와 시간 **둘 다** 넘어야 한다.
+		// 600프레임: 이보다 적으면 "가장 느린 1%" 가 대여섯 프레임으로 정해져 최악값과 구분이 안 된다.
+		// 10초: 144fps 에서 600프레임은 4초라, 접속 직후 스트리밍 히치 몇 개가 1% low 를 통째로
+		//       정해 버린다(실기에서 4.5초 표본에 1% low 41 이 찍혔다). 시간이 있어야 평소 프레임이 섞인다.
 		constexpr std::size_t kMinFrames = 600;
+		constexpr float kMinSeconds = 10.0f;
 
 		// SyncInterval 을 아직 모른다(DXGI 가 아니거나 첫 Present 전).
 		constexpr unsigned int kSyncUnknown = std::numeric_limits<unsigned int>::max();
@@ -80,25 +83,34 @@ namespace sherbet
 			float iqr_ratio = 0.0f;   // (p75 − p25) / 중앙값. 작을수록 평평하다
 		};
 
-		// 표본이 kMinFrames 미만이면 false 를 돌려주고 out.frames 만 채운다.
+		// 표본이 통계를 낼 만큼 모였는가. 못 모였으면 화면에는 "지금까지 N초 · M프레임" 만 나간다.
+		inline bool enough(const stats &st)
+		{
+			return st.frames >= kMinFrames && st.seconds >= kMinSeconds;
+		}
+
+		// 표본이 모자라면 false 를 돌려주고 out.frames / out.seconds 만 채운다.
 		// ⚠️ 정렬 때문에 힙을 쓴다. 렌더 경로에서 매 프레임 부르지 말 것 — 탭이 열려 있을 때
 		//    4Hz 로만 부른다(호출부 규약).
 		inline bool compute(const ring &r, stats &out)
 		{
 			out = stats();
 			out.frames = r.size();
-			if (out.frames < kMinFrames)
+			if (out.frames == 0)
 				return false;
 
 			std::vector<float> v;
 			r.copy_to(v);
-			std::sort(v.begin(), v.end());
 			const std::size_t n = v.size();
 
 			double sum = 0.0;
 			for (float ms : v)
 				sum += ms;
 			out.seconds = static_cast<float>(sum / 1000.0);
+			if (!enough(out))
+				return false;
+
+			std::sort(v.begin(), v.end());
 			out.avg_fps = out.seconds > 0.0f ? static_cast<float>(n) / out.seconds : 0.0f;
 
 			out.median_ms = v[n / 2];
@@ -155,7 +167,7 @@ namespace sherbet
 		inline diagnosis diagnose(const stats &st, int refresh_hz, unsigned int sync_interval)
 		{
 			diagnosis d;
-			if (st.frames < kMinFrames)
+			if (!enough(st))
 				return d;
 			d.fps = st.median_ms > 0.0f ? 1000.0f / st.median_ms : 0.0f;
 
