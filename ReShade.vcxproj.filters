@@ -806,6 +806,9 @@
     <ClInclude Include="source\sherbet_crosshair.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_frametime.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_xhmarket.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>

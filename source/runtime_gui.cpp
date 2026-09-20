@@ -4710,6 +4710,27 @@ static void sherbet_stat_row(const char *label, float value_x, const ImVec4 &col
 	ImGui::TextColored(color, "%s", value);
 }
 
+// SHERBET: 게임 창이 떠 있는 모니터의 주사율(Hz). 0 = 못 읽음(그 줄은 뺀다).
+// EnumDisplaySettingsW 는 드라이버까지 내려가는 조회라 공짜가 아니다 — 호출부가 4Hz 로만 부른다.
+static int sherbet_monitor_refresh_hz(void *hwnd)
+{
+	if (hwnd == nullptr)
+		return 0;
+	const HMONITOR mon = MonitorFromWindow(static_cast<HWND>(hwnd), MONITOR_DEFAULTTONEAREST);
+	if (mon == nullptr)
+		return 0;
+	MONITORINFOEXW mi = {};
+	mi.cbSize = sizeof(mi);
+	if (!GetMonitorInfoW(mon, &mi))
+		return 0;
+	DEVMODEW dm = {};
+	dm.dmSize = sizeof(dm);
+	if (!EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm))
+		return 0;
+	// 0 과 1 은 "하드웨어 기본값" 이라는 뜻이지 주사율이 아니다.
+	return dm.dmDisplayFrequency > 1 ? static_cast<int>(dm.dmDisplayFrequency) : 0;
+}
+
 // SHERBET: 「최적화」 탭 잠금 카드 — 탭 하나가 통째로 상품일 때의 진열대.
 //
 // 여기서도 말 대신 화면을 보여준다: 실제 탭과 **같은 sherbet_stat_row 줄 모양**으로
@@ -4806,6 +4827,23 @@ void reshade::runtime::draw_gui_optimize()
 	const float value_x = 11.0f * ImGui::GetFontSize();
 	char buf[256];
 
+	// 4Hz 표시 캐시. 숫자가 매 프레임 바뀌면 읽을 수가 없다.
+	// (표시용 캐시일 뿐이라 함수 지역 static 으로 둔다 — 이 파일의 다른 탭들과 같은 방식)
+	// 게임 중 통계(정렬 한 번)와 주사율 조회(드라이버 호출)도 같은 박자로만 한다.
+	static float shown_fps = 0.0f, shown_ms = 0.0f;
+	static sherbet::frametime::stats shown_stat;
+	static bool shown_stat_ok = false;
+	static int shown_hz = 0;
+	static double last_sample = -1.0;
+	if (const double now = ImGui::GetTime(); last_sample < 0.0 || now - last_sample >= 0.25)
+	{
+		last_sample = now;
+		shown_fps = _imgui_context->IO.Framerate;
+		shown_ms = shown_fps > 0.0f ? 1000.0f / shown_fps : 0.0f;
+		shown_stat_ok = sherbet::frametime::compute(_sherbet_frames, shown_stat);
+		shown_hz = sherbet_monitor_refresh_hz(get_hwnd());
+	}
+
 	// ── 지금 적용된 것 ────────────────────────────────────────────────────
 	sherbet::begin_card("##opt_applied");
 	{
@@ -4886,33 +4924,10 @@ void reshade::runtime::draw_gui_optimize()
 		ImGui::TextUnformatted(ICON_FK_CHART_LINE "  " "\xEC\x84\xB1\xEB\x8A\xA5" /* 성능 */);
 		ImGui::Spacing();
 
-		// 숫자가 매 프레임 바뀌면 읽을 수가 없다. 4Hz 로만 갱신한다.
-		// (표시용 캐시일 뿐이라 함수 지역 static 으로 둔다 — 이 파일의 다른 탭들과 같은 방식)
-		static float shown_fps = 0.0f, shown_ms = 0.0f, shown_worst_ms = 0.0f;
-		static double last_sample = -1.0;
-		const double now = ImGui::GetTime();
-		if (last_sample < 0.0 || now - last_sample >= 0.25)
-		{
-			last_sample = now;
-			shown_fps = _imgui_context->IO.Framerate;
-			shown_ms = shown_fps > 0.0f ? 1000.0f / shown_fps : 0.0f;
-			// 최악 프레임은 ImGui 가 **이미 매 프레임 유지하는** 60프레임 링을 그대로 읽는다.
-			// 평균만 보면 끊김이 안 보이므로, 구매자에게는 이쪽이 더 정직한 숫자다.
-			float worst = 0.0f;
-			for (int i = 0; i < _imgui_context->FramerateSecPerFrameCount; ++i)
-				if (_imgui_context->FramerateSecPerFrame[i] > worst)
-					worst = _imgui_context->FramerateSecPerFrame[i];
-			shown_worst_ms = worst * 1000.0f;
-		}
-
+		// ImGui 가 **메뉴를 그리는 동안** 잰 값이다. 게임 중 숫자는 아래 「게임 중 프레임」 카드다.
+		// (예전의 "최근 60프레임 최악" 은 ImGui 링이라 메뉴 열린 프레임만 들어 있었다 — 그래서 뺐다)
 		ImFormatString(buf, IM_ARRAYSIZE(buf), "%.0f fps  ·  %.2f ms", static_cast<double>(shown_fps), static_cast<double>(shown_ms));
 		sherbet_stat_row("\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84" /* 프레임 */, value_x, col_val, buf);
-
-		if (shown_worst_ms > 0.0f)
-		{
-			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.2f ms", static_cast<double>(shown_worst_ms));
-			sherbet_stat_row("\xEC\xB5\x9C\xEA\xB7\xBC 60\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xB5\x9C\xEC\x95\x85" /* 최근 60프레임 최악 */, value_x, shown_worst_ms > shown_ms * 2.0f ? col_warn : col_val, buf);
-		}
 
 		// 후처리 비용 — 켜져 있는 기법들의 이동평균 합. 기법을 끄면 그 값은 clear() 되므로
 		// 꺼진 기법이 합계를 부풀리지 않는다.
@@ -4937,6 +4952,113 @@ void reshade::runtime::draw_gui_optimize()
 		{
 			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.3f ms", gpu_ns * 1e-6);
 			sherbet_stat_row("\xED\x9B\x84\xEC\xB2\x98\xEB\xA6\xAC \xEB\xB9\x84\xEC\x9A\xA9 (GPU)" /* 후처리 비용 (GPU) */, value_x, col_val, buf);
+		}
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// ── 게임 중 프레임 ────────────────────────────────────────────────────
+	// 위 「성능」의 fps 는 메뉴를 그리는 동안의 값이다. 이 카드는 반대로 **메뉴가 닫힌 동안**
+	// 런타임이 모아 둔 프레임(runtime.cpp on_present 의 링)만 본다 — "메뉴 열면 멀쩡한데
+	// 게임하면 렉 걸려요" 에 답하는 건 이쪽이다.
+	sherbet::begin_card("##opt_frames");
+	{
+		ImGui::TextUnformatted(ICON_FK_PLAY "  " "\xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84" /* 게임 중 프레임 */);
+		ImGui::Spacing();
+
+		if (!shown_stat_ok)
+		{
+			// 표본이 모자라면 숫자를 내지 않는다. 대여섯 프레임으로 낸 1% low 는 거짓말이다.
+			ImGui::TextWrapped("\xEC\xA7\x80\xEA\xB8\x88\xEA\xB9\x8C\xEC\xA7\x80 %zu\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xE2\x80\x94 \xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEA\xB3\xA0 30\xEC\xB4\x88\xEC\xAF\xA4 \xED\x94\x8C\xEB\xA0\x88\xEC\x9D\xB4\xED\x95\x9C \xEB\x92\xA4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x97\xB4\xEC\x96\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94. \xEB\xA9\x94\xEB\x89\xB4\xEA\xB0\x80 \xEB\x8B\xAB\xED\x9E\x8C \xEB\x8F\x99\xEC\x95\x88\xEC\x9D\x98 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEB\xA7\x8C \xEC\x85\x89\xEB\x8B\x88\xEB\x8B\xA4." /* 지금까지 %zu프레임 — 메뉴를 닫고 30초쯤 플레이한 뒤 다시 열어 주세요. 메뉴가 닫힌 동안의 프레임만 셉니다. */, shown_stat.frames);
+		}
+		else
+		{
+			// 「30초」 같은 고정 문구를 쓰지 않는다 — 링이 실제로 덮는 시간을 찍는다(fps 에 따라 다르다).
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.1f\xEC\xB4\x88  \xC2\xB7  %zu\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84" /* %.1f초 · %zu프레임 */, static_cast<double>(shown_stat.seconds), shown_stat.frames);
+			sherbet_stat_row("\xEC\xB8\xA1\xEC\xA0\x95 \xEA\xB5\xAC\xEA\xB0\x84" /* 측정 구간 */, value_x, col_val, buf);
+
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.0f fps", static_cast<double>(shown_stat.avg_fps));
+			sherbet_stat_row("\xED\x8F\x89\xEA\xB7\xA0" /* 평균 */, value_x, col_val, buf);
+
+			// 평균의 절반 밑이면 "평균은 좋은데 끊긴다" 는 뜻이다.
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%.0f fps", static_cast<double>(shown_stat.low1_fps));
+			sherbet_stat_row("1% low", value_x, shown_stat.low1_fps < shown_stat.avg_fps * 0.5f ? col_warn : col_val, buf);
+
+			// 끊김 = 중앙값의 2배를 넘은 프레임. 0.5% 를 넘으면 눈에 띄는 수준이다.
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%zu\xED\x9A\x8C  \xC2\xB7  \xEC\xB5\x9C\xEC\x95\x85 %.1f ms" /* %zu회 · 최악 %.1f ms */, shown_stat.stutters, static_cast<double>(shown_stat.worst_ms));
+			sherbet_stat_row("\xEB\x81\x8A\xEA\xB9\x80" /* 끊김 */, value_x, shown_stat.stutters * 200 > shown_stat.frames ? col_warn : col_val, buf);
+		}
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// ── 프레임 상한 ───────────────────────────────────────────────────────
+	// "왜 이 숫자인가" 에 답하는 카드. 실측 셋(주사율·SyncInterval·게임 중 fps)을 먼저 놓고,
+	// 판정은 그 셋의 해석으로만 한 줄 붙인다. 못 읽은 값은 줄을 뺀다 — 지어내지 않는다.
+	// ⚠️ 판정에 평탄도를 AND 로 거는 이유는 sherbet_frametime.hpp 머리 주석 참조
+	//    (GPU 바운드 72 도 144 의 절반이다).
+	sherbet::begin_card("##opt_cap");
+	{
+		ImGui::TextUnformatted(ICON_FK_BOLT "  " "\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x83\x81\xED\x95\x9C" /* 프레임 상한 */);
+		ImGui::Spacing();
+
+		if (shown_hz > 0)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "%d Hz", shown_hz);
+			sherbet_stat_row("\xEB\xAA\xA8\xEB\x8B\x88\xED\x84\xB0 \xEC\xA3\xBC\xEC\x82\xAC\xEC\x9C\xA8" /* 모니터 주사율 */, value_x, col_val, buf);
+		}
+
+		// 게임이 Present 에 넘긴 값 그대로다. 인게임 설정이 아니라 실제로 넘어온 값이라,
+		// 설정은 껐는데 드라이버가 강제한 경우도 여기서는 켜짐으로 나온다.
+		const unsigned int sync = _sherbet_present_sync_interval;
+		const bool sync_known = sync != sherbet::frametime::kSyncUnknown;
+		if (sync_known && sync == 0)
+		{
+			sherbet_stat_row("\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0" /* 수직동기 */, value_x, col_val, "\xEA\xBA\xBC\xEC\xA7\x90" /* 꺼짐 */);
+		}
+		else if (sync_known)
+		{
+			ImFormatString(buf, IM_ARRAYSIZE(buf), "\xEC\xBC\x9C\xEC\xA7\x90  (SyncInterval %u)" /* 켜짐 (SyncInterval %u) */, sync);
+			sherbet_stat_row("\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0" /* 수직동기 */, value_x, col_val, buf);
+		}
+
+		if (shown_stat_ok)
+		{
+			const sherbet::frametime::diagnosis d = sherbet::frametime::diagnose(shown_stat, shown_hz, sync);
+			const double dev = static_cast<double>(shown_stat.iqr_ratio) * 100.0; // 편차(%) — 판정 근거를 같이 보여준다
+			const auto say = [](const ImVec4 &col, const char *fmt, auto... args)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, col);
+				ImGui::TextWrapped(fmt, args...);
+				ImGui::PopStyleColor();
+			};
+			ImGui::Spacing();
+			switch (d.verdict)
+			{
+			case sherbet::frametime::cap::none:
+				say(col_ok, "\xEC\x83\x81\xED\x95\x9C\xEC\x97\x90 \xEB\xAC\xB6\xEC\x97\xAC \xEC\x9E\x88\xEC\xA7\x80 \xEC\x95\x8A\xEC\x95\x84\xEC\x9A\x94 \xE2\x80\x94 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 \xEB\xB6\x80\xED\x95\x98\xEC\x97\x90 \xEB\x94\xB0\xEB\x9D\xBC \xEC\x9B\x80\xEC\xA7\x81\xEC\x97\xAC\xEC\x9A\x94 (\xED\x8E\xB8\xEC\xB0\xA8 %.1f%%)." /* 상한에 묶여 있지 않아요 — 프레임이 부하에 따라 움직여요 (편차 %.1f%%). */, dev);
+				break;
+			case sherbet::frametime::cap::vsync:
+				say(col_val, "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEA\xB3\xA0 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 \xEC\xA3\xBC\xEC\x82\xAC\xEC\x9C\xA8 %.0f \xEC\x97\x90 \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9D\xB4 \xEB\xAA\xA8\xEB\x8B\x88\xED\x84\xB0\xEA\xB0\x80 \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA4\x84 \xEC\x88\x98 \xEC\x9E\x88\xEB\x8A\x94 \xEC\xB5\x9C\xEB\x8C\x80\xEC\x98\x88\xEC\x9A\x94." /* 수직동기가 켜져 있고 프레임이 주사율 %.0f 에 붙어 있어요 — 이 모니터가 보여줄 수 있는 최대예요. */, static_cast<double>(d.target_fps));
+				break;
+			case sherbet::frametime::cap::vsync_divided:
+				// 판매자가 처음 본 증상 그대로 — 144 를 못 지켜 72 로 반토막.
+				say(col_warn, "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEA\xB3\xA0 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 \xEC\xA3\xBC\xEC\x82\xAC\xEC\x9C\xA8\xEC\x9D\x98 1/%d (%.0f) \xEC\x97\x90 \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94. \xEA\xB2\x8C\xEC\x9E\x84\xEC\x9D\xB4 %d \xEB\xA5\xBC \xEB\xAA\xBB \xEC\xA7\x80\xED\x82\xA4\xEB\xA9\xB4 \xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEA\xB0\x80 \xEC\x9D\xB4\xEB\xA0\x87\xEA\xB2\x8C \xEB\x82\x98\xEB\x88\xA0 \xEB\x96\xA8\xEC\x96\xB4\xEB\x9C\xA8\xEB\xA0\xA4\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB2\x8C\xEC\x9E\x84 \xEA\xB7\xB8\xEB\x9E\x98\xED\x94\xBD \xEC\x84\xA4\xEC\xA0\x95\xEC\x97\x90\xEC\x84\x9C \xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEB\xA5\xBC \xEB\x81\x84\xEB\xA9\xB4 \xED\x92\x80\xEB\xA0\xA4\xEC\x9A\x94." /* 수직동기가 켜져 있고 프레임이 주사율의 1/%d (%.0f) 에 붙어 있어요. 게임이 %d 를 못 지키면 수직동기가 이렇게 나눠 떨어뜨려요 — 게임 그래픽 설정에서 수직동기를 끄면 풀려요. */,
+					d.divisor, static_cast<double>(d.target_fps), static_cast<int>(d.target_fps * static_cast<float>(d.divisor) + 0.5f));
+				break;
+			case sherbet::frametime::cap::vsync_other:
+				say(col_warn, "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEA\xB3\xA0 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 %.0f \xEC\x97\x90 \xED\x8F\x89\xED\x8F\x89\xED\x95\x98\xEA\xB2\x8C \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEB\x8A\x94\xEB\x8D\xB0(\xED\x8E\xB8\xEC\xB0\xA8 %.1f%%) \xEC\xA3\xBC\xEC\x82\xAC\xEC\x9C\xA8\xEA\xB3\xBC\xEB\x8A\x94 \xEC\x95\x88 \xEB\xA7\x9E\xEC\x95\x84\xEC\x9A\x94 \xE2\x80\x94 \xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0 \xEB\xA7\x90\xEA\xB3\xA0 \xEB\x8B\xA4\xEB\xA5\xB8 \xEC\x83\x81\xED\x95\x9C(\xEB\x93\x9C\xEB\x9D\xBC\xEC\x9D\xB4\xEB\xB2\x84 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xA0\x9C\xED\x95\x9C\xC2\xB7\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x83\x9D\xEC\x84\xB1 \xEB\xAA\xA9\xED\x91\x9C\xEC\xB9\x98)\xEC\x9D\xB4 \xEB\x8D\x94 \xEB\x82\xAE\xEA\xB2\x8C \xEA\xB1\xB8\xEB\xA0\xA4 \xEC\x9E\x88\xEC\x9D\x84 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94." /* 수직동기가 켜져 있고 프레임이 %.0f 에 평평하게 붙어 있는데(편차 %.1f%%) 주사율과는 안 맞아요 — 수직동기 말고 다른 상한(드라이버 프레임 제한·프레임 생성 목표치)이 더 낮게 걸려 있을 수 있어요. */, static_cast<double>(d.fps), dev);
+				break;
+			case sherbet::frametime::cap::other:
+				// 판매자의 진짜 원인이 이 칸이었다 — 수직동기는 꺼져 있고 프레임 생성 목표치 142÷2.
+				if (sync_known)
+					say(col_warn, "\xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xEB\x8A\x94 \xEA\xBA\xBC\xEC\xA0\xB8 \xEC\x9E\x88\xEB\x8A\x94\xEB\x8D\xB0 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 %.0f \xEC\x97\x90 \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94(\xED\x8E\xB8\xEC\xB0\xA8 %.1f%%) \xE2\x80\x94 NVIDIA \xEC\xA0\x9C\xEC\x96\xB4\xED\x8C\x90\xEC\x9D\x98 \xEC\xB5\x9C\xEB\x8C\x80 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x86\x8D\xEB\x8F\x84, \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x83\x9D\xEC\x84\xB1 \xEB\xAA\xA9\xED\x91\x9C\xEC\xB9\x98, \xEC\x9D\xB8\xEA\xB2\x8C\xEC\x9E\x84 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xA0\x9C\xED\x95\x9C\xEC\x9D\x84 \xED\x99\x95\xEC\x9D\xB8\xED\x95\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94." /* 수직동기는 꺼져 있는데 프레임이 %.0f 에 붙어 있어요(편차 %.1f%%) — NVIDIA 제어판의 최대 프레임 속도, 프레임 생성 목표치, 인게임 프레임 제한을 확인해 보세요. */, static_cast<double>(d.fps), dev);
+				else
+					say(col_warn, "\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xEC\x9D\xB4 %.0f \xEC\x97\x90 \xEB\xB6\x99\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94(\xED\x8E\xB8\xEC\xB0\xA8 %.1f%%) \xE2\x80\x94 \xEC\x88\x98\xEC\xA7\x81\xEB\x8F\x99\xEA\xB8\xB0\xC2\xB7\xEB\x93\x9C\xEB\x9D\xBC\xEC\x9D\xB4\xEB\xB2\x84 \xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\xA0\x9C\xED\x95\x9C\xC2\xB7\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84 \xEC\x83\x9D\xEC\x84\xB1 \xEB\xAA\xA9\xED\x91\x9C\xEC\xB9\x98\xEB\xA5\xBC \xED\x99\x95\xEC\x9D\xB8\xED\x95\xB4 \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94." /* 프레임이 %.0f 에 붙어 있어요(편차 %.1f%%) — 수직동기·드라이버 프레임 제한·프레임 생성 목표치를 확인해 보세요. */, static_cast<double>(d.fps), dev);
+				break;
+			default:
+				break;
+			}
 		}
 	}
 	sherbet::end_card();

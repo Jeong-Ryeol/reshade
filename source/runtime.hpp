@@ -17,6 +17,7 @@
 #include "sherbet_crosshair.hpp"
 #include "sherbet_xhmarket.hpp"
 #include "sherbet_motion.hpp"
+#include "sherbet_frametime.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -49,6 +50,10 @@ namespace reshade
 		bool on_init();
 		void on_reset();
 		void on_present();
+
+		// SHERBET: 게임이 Present 에 넘긴 SyncInterval. dxgi 프록시가 매 프레임 알려 주고
+		// 「최적화」 탭의 상한 진단이 읽는다. 쓰고 읽는 쪽이 전부 렌더 스레드라 아토믹이 아니다.
+		void sherbet_note_present_sync_interval(unsigned int v) { _sherbet_present_sync_interval = v; }
 
 		uint64_t get_native() const final { return _swapchain->get_native(); }
 
@@ -521,6 +526,17 @@ namespace reshade
 		// true 라, 판매자가 정작 제일 중요한 화면(잠긴 상태)을 한 번도 볼 수 없다.
 		// 구매 내역과는 무관하며 끄면 즉시 원래대로 돌아온다.
 		bool _sherbet_lock_preview = false;
+
+		// SHERBET: 게임 중 프레임 시간 링(「최적화」 탭의 통계·상한 진단). **오버레이가 닫힌
+		// 프레임만** 들어온다 — 메뉴를 열어 놓고 잰 숫자는 게임 프레임이 아니다.
+		// 채우는 곳은 runtime.cpp on_present 의 _last_frame_duration 갱신 직후(무조건 실행).
+		// ⚠️ draw_gui() 밑에 두면 안 된다 — 오버레이가 닫히면 그 아래는 통째로 return 이라
+		//    정작 재야 할 프레임이 한 개도 안 들어온다(CLAUDE.md 의 사고 사례 그 자체).
+		// 비용은 프레임당 float 저장 하나다. 잠긴 구매자에게도 돌지만 통계 계산(정렬)은
+		// 탭이 열려 있고 잠금이 풀린 경로에서만 한다.
+		sherbet::frametime::ring _sherbet_frames;
+		bool _sherbet_frames_prev_skip = true; // 직전 프레임을 건너뛰었는가 — 전환 직후 한 프레임도 뺀다
+		unsigned int _sherbet_present_sync_interval = sherbet::frametime::kSyncUnknown;
 
 		// SHERBET(실험): 화면 이동 추정 스파이크. 백버퍼 가운데를 잘라 CPU 로 리드백하고
 		// 프레임 간 이동을 1D 투영 매칭으로 재서, 마우스 이동을 빼 **게임의 실제 반동**을

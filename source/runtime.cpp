@@ -598,6 +598,9 @@ bool reshade::runtime::on_init()
 
 	// Reset frame count to zero so effects are loaded in 'update_effects'
 	_frame_count = 0;
+	// SHERBET: 해상도·전체화면·디바이스가 바뀌었다. 그 전 프레임은 다른 조건의 숫자다.
+	_sherbet_frames.clear();
+	_sherbet_frames_prev_skip = true;
 
 	_is_initialized = true;
 	_last_reload_time = std::chrono::high_resolution_clock::now(); // Intentionally set to current time, so that duration to last reload is valid even when there is no reload on init
@@ -865,6 +868,22 @@ void reshade::runtime::on_present()
 	_frame_count++;
 	const auto current_time = std::chrono::high_resolution_clock::now();
 	_last_frame_duration = current_time - _last_present_time; _last_present_time = current_time;
+
+	// SHERBET: 게임 중 프레임 링. 오버레이가 닫힌 프레임만 넣는다 — 열려 있는 동안은 ImGui
+	// 비용이 섞이고, 사용자가 알고 싶은 것도 "메뉴 열어 놓은 프레임" 이 아니라 게임 프레임이다.
+	// 효과 컴파일 중은 통째로 비운다(그 전 프레임은 다른 효과 구성의 숫자다). 건너뛰기가
+	// 끝난 직후 한 프레임(폰트 아틀라스·컴파일 마무리)도 뺀다.
+	// ⚠️ **자리가 규약이다.** 아래 draw_gui() 는 오버레이가 닫히면 통째로 return 한다 —
+	//    거기 두면 재야 할 프레임이 한 개도 안 들어오는데 CI 는 전부 초록불이다.
+	{
+		const bool loading = is_loading();
+		const bool skip = loading || _show_overlay;
+		if (loading)
+			_sherbet_frames.clear();
+		else if (!skip && !_sherbet_frames_prev_skip)
+			_sherbet_frames.push(std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(_last_frame_duration).count());
+		_sherbet_frames_prev_skip = skip;
+	}
 
 	// SHERBET: 자동 업데이트 — 매 프레임 틱(워커 회수 + 최초 매니페스트 페치).
 	// ⚠️ runtime_gui.cpp 의 `_sherbet_auth.tick()` 옆이 아니라 **여기**서 부른다.

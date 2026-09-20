@@ -269,8 +269,10 @@ static void test_demo_optimize_rows_are_constant()
 		assert(r.value != nullptr && r.value[0] != '\0');
 		// ★ 포맷 지정자가 없다 = 런타임 값이 끼어들 자리가 없다.
 		//   누가 "%.0f fps" 로 바꿔 실측 프레임을 끼워 넣는 순간 여기서 죽는다.
-		assert(std::strchr(r.label, '%') == nullptr);
-		assert(std::strchr(r.value, '%') == nullptr);
+		//   "1% low" 처럼 '%' 뒤가 공백이면 지정자가 아니다(이 줄들은 어차피 "%s" 로 그려진다).
+		for (const char *s : { r.label, r.value })
+			for (const char *p = std::strchr(s, '%'); p != nullptr; p = std::strchr(p + 1, '%'))
+				assert(p[1] == ' ' || p[1] == '\0');
 	}
 
 	// 같은 배열을 계속 돌려준다(어디선가 값을 채워 넣고 있지 않다는 뜻).
