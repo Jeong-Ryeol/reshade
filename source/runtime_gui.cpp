@@ -408,6 +408,42 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	}
 	config.get("OVERLAY", "SherbetMagAnchor", _sherbet_mag_anchor);
 	config.get("OVERLAY", "SherbetMagCapRes", _sherbet_mag_cap_res);
+	// SHERBET: 돋보기 위치 프리셋 + 멀티키 단축키. 손으로 고친 ini 여도 화면 밖·배율 0·
+	// 못 쓰는 키가 들어오지 않게 하나하나 정리해서 받는다.
+	{
+		unsigned int fx[sherbet::hotkey::kMaxKeys] = {};
+		config.get("INPUT", "SherbetKeyEffects", fx);
+		_sherbet_fx_key = sherbet::hotkey::sanitize(fx);
+
+		int count = 0;
+		config.get("OVERLAY", "SherbetMagPresetCount", count);
+		count = std::clamp(count, 0, sherbet::mag::kMaxPresets);
+		_sherbet_mag_presets.clear();
+		for (int i = 0; i < count; ++i)
+		{
+			const std::string k = "SherbetMagPreset" + std::to_string(i);
+			sherbet::mag::preset p;
+			config.get("OVERLAY", k + "Name", p.name);
+			p.name = sherbet::mag::clean_name(p.name, sherbet::mag::default_preset_name(i + 1));
+			float r[4] = { p.r.x, p.r.y, p.r.w, p.r.h };
+			config.get("OVERLAY", k + "Rect", r);
+			p.r = sherbet::mag::sanitize(sherbet::mag::rect{ r[0], r[1], r[2], r[3] });
+			config.get("OVERLAY", k + "Anchor", p.anchor);
+			p.anchor[0] = sherbet::mag::clamp01(p.anchor[0]);
+			p.anchor[1] = sherbet::mag::clamp01(p.anchor[1]);
+			config.get("OVERLAY", k + "Zoom", p.zoom);
+			p.zoom = sherbet::mag::clamp_zoom(p.zoom);
+			config.get("OVERLAY", k + "CapRes", p.cap_res);
+			unsigned int key[sherbet::hotkey::kMaxKeys] = {};
+			config.get("OVERLAY", k + "Key", key);
+			p.key = sherbet::hotkey::sanitize(key);
+			_sherbet_mag_presets.push_back(std::move(p));
+		}
+		_sherbet_mag_active_preset = -1;
+		config.get("OVERLAY", "SherbetMagPresetActive", _sherbet_mag_active_preset);
+		if (_sherbet_mag_active_preset < -1 || _sherbet_mag_active_preset >= count)
+			_sherbet_mag_active_preset = -1;
+	}
 	// 손으로 고친 ini 가 23:99 여도 '절대 안 울리는' 상태가 되지 않게 여기서 자른다.
 	sherbet::alarm::clamp_time(_sherbet_alarm_hour, _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
@@ -639,6 +675,23 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	}
 	config.set("OVERLAY", "SherbetMagAnchor", _sherbet_mag_anchor);
 	config.set("OVERLAY", "SherbetMagCapRes", _sherbet_mag_cap_res);
+	// SHERBET: 돋보기 위치 프리셋 + 멀티키 단축키. 개수를 먼저 적는다 — 프리셋을 지워 개수가
+	// 줄면 뒤쪽 번호 키가 ini 에 남지만, 읽을 때 개수까지만 읽으므로 되살아나지 않는다.
+	config.set("INPUT", "SherbetKeyEffects", _sherbet_fx_key.k);
+	config.set("OVERLAY", "SherbetMagPresetCount", static_cast<int>(_sherbet_mag_presets.size()));
+	for (size_t i = 0; i < _sherbet_mag_presets.size(); ++i)
+	{
+		const sherbet::mag::preset &p = _sherbet_mag_presets[i];
+		const std::string k = "SherbetMagPreset" + std::to_string(i);
+		config.set("OVERLAY", k + "Name", p.name);
+		const float r[4] = { p.r.x, p.r.y, p.r.w, p.r.h };
+		config.set("OVERLAY", k + "Rect", r);
+		config.set("OVERLAY", k + "Anchor", p.anchor);
+		config.set("OVERLAY", k + "Zoom", p.zoom);
+		config.set("OVERLAY", k + "CapRes", p.cap_res);
+		config.set("OVERLAY", k + "Key", p.key.k);
+	}
+	config.set("OVERLAY", "SherbetMagPresetActive", _sherbet_mag_active_preset);
 	config.set("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.set("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	config.set("OVERLAY", "SherbetLockPreview", _sherbet_lock_preview);
@@ -1536,6 +1589,7 @@ void reshade::runtime::draw_gui()
 			if (sherbet::mag::is_usable(pk_done, static_cast<int>(_width), static_cast<int>(_height)))
 			{
 				_sherbet_mag_rect = sherbet::mag::sanitize(pk_done);
+				_sherbet_mag_active_preset = -1; // 새로 잡았다 — 더는 그 프리셋이 아니다
 				_sherbet_mag_cap_res[0] = static_cast<int>(_width);
 				_sherbet_mag_cap_res[1] = static_cast<int>(_height);
 				_sherbet_mag_picking = false;
@@ -3221,7 +3275,12 @@ void reshade::runtime::draw_gui_home()
 
 		if (!_effects_enabled)
 		{
-			ImGui::Text(_("Effects are disabled. Press '%s' to enable them again."), input::key_name(_effects_key_data).c_str());
+			// SHERBET: 「에임」 탭의 멀티키 단축키가 있으면 그걸 알려 준다(원본 키는 비어 있는 경우가 많다).
+			if (!sherbet::hotkey::empty(_sherbet_fx_key))
+				ImGui::Text("í¨ê³¼ê° êº¼ì ¸ ìì´ì. '%s' ë¥¼ ëë¥´ë©´ ë¤ì ì¼ì ¸ì." /* 효과가 꺼져 있어요. '%s' 를 누르면 다시 켜져요. */,
+					sherbet::hotkey::name(_sherbet_fx_key, [](unsigned int vk) { return input::key_name(vk); }).c_str());
+			else
+				ImGui::Text(_("Effects are disabled. Press '%s' to enable them again."), input::key_name(_effects_key_data).c_str());
 			ImGui::Spacing();
 		}
 
@@ -3388,6 +3447,77 @@ static void sherbet_hint(const char *text)
 	ImGui::PushTextWrapPos(0.0f);
 	ImGui::TextDisabled("%s", text);
 	ImGui::PopTextWrapPos();
+}
+
+// SHERBET: 멀티키 단축키 입력 칸. 누르고 있는 동안 조합이 실시간으로 보이고, **전부 떼는 순간**
+// 확정된다(판정은 sherbet_hotkey.hpp 의 step — 호스트 테스트로 검증). Backspace = 지우기, Esc = 취소.
+// 원본 key_input_box 와 같은 읽기 전용 입력칸을 쓰는 이유: 칸이 활성인 동안 ImGui 가 키를 가져가고
+// draw_gui 가 _ignore_shortcuts 를 세워(IsAnyItemActive) 입력 중에 다른 단축키가 터지지 않는다.
+// 한 번에 하나만 입력받으므로 상태는 함수 지역 static 하나로 충분하다.
+static bool sherbet_hotkey_box(const char *id, sherbet::hotkey::chord &key, const reshade::input &input, float width)
+{
+	namespace hk = sherbet::hotkey;
+	static hk::capture cap;
+	static ImGuiID cap_id = 0;
+	const ImGuiID my_id = ImGui::GetID(id);
+	const auto key_name = [](unsigned int vk) { return reshade::input::key_name(vk); };
+
+	const bool capturing = cap_id == my_id;
+	const std::string shown = capturing ? (cap.any ? hk::name(cap.best, key_name) : std::string()) : hk::name(key, key_name);
+	char buf[128];
+	std::snprintf(buf, sizeof(buf), "%s", shown.c_str());
+
+	ImGui::SetNextItemWidth(width);
+	ImGui::InputTextWithHint(id,
+		capturing
+			? "\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB8 \xEB\x92\xA4 \xEB\x96\xBC\xEC\x84\xB8\xEC\x9A\x94 (\xEC\xB5\x9C\xEB\x8C\x80 4\xEA\xB0\x9C)" /* 키를 누른 뒤 떼세요 (최대 4개) */
+			: "\xEB\x88\x8C\xEB\x9F\xAC\xEC\x84\x9C \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4 \xEC\xA0\x95\xED\x95\x98\xEA\xB8\xB0" /* 눌러서 단축키 정하기 */,
+		buf, sizeof(buf), ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoUndoRedo | ImGuiInputTextFlags_NoHorizontalScroll);
+
+	bool changed = false;
+	if (ImGui::IsItemActive())
+	{
+		if (!capturing)
+		{
+			cap = hk::capture();
+			cap_id = my_id;
+		}
+		unsigned int held[8];
+		int n = 0;
+		for (unsigned int vk = 1; vk < 0xFF && n < 8; ++vk)
+			if (hk::capturable(vk) && input.is_key_down(vk))
+				held[n++] = vk;
+		hk::chord out;
+		switch (hk::step(cap, held, n, input.is_key_pressed(hk::kBackspace), input.is_key_pressed(hk::kEscape), out))
+		{
+		case hk::step_result::done:
+			key = out;
+			changed = true;
+			cap_id = 0;
+			ImGui::ClearActiveID();
+			break;
+		case hk::step_result::cleared:
+			key = hk::chord();
+			changed = true;
+			cap_id = 0;
+			ImGui::ClearActiveID();
+			break;
+		case hk::step_result::cancelled:
+			cap_id = 0;
+			ImGui::ClearActiveID();
+			break;
+		default:
+			break;
+		}
+	}
+	else
+	{
+		if (capturing)
+			cap_id = 0; // 다른 곳을 눌러 칸이 꺼졌다 — 입력 취소
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+			ImGui::SetTooltip("%s", "\xEC\xB9\xB8\xEC\x9D\x84 \xEB\x88\x84\xEB\xA5\xB4\xEA\xB3\xA0 \xEC\x9B\x90\xED\x95\x98\xEB\x8A\x94 \xED\x82\xA4\xEB\xA5\xBC \xED\x95\xA8\xEA\xBB\x98 \xEB\x88\x8C\xEB\xA0\x80\xEB\x8B\xA4 \xEB\x96\xBC\xEC\x84\xB8\xEC\x9A\x94. Ctrl\xC2\xB7Shift\xC2\xB7" "Alt, \xEB\xA7\x88\xEC\x9A\xB0\xEC\x8A\xA4 \xED\x9C\xA0\xED\x81\xB4\xEB\xA6\xAD\xC2\xB7\xEC\x98\x86\xEB\xB2\x84\xED\x8A\xBC\xEA\xB9\x8C\xEC\xA7\x80 \xEC\xB5\x9C\xEB\x8C\x80 4\xEA\xB0\x9C. \xEC\xA7\x80\xEC\x9A\xB0\xEA\xB8\xB0 Backspace \xC2\xB7 \xEC\xB7\xA8\xEC\x86\x8C Esc" /* 칸을 누르고 원하는 키를 함께 눌렀다 떼세요. Ctrl·Shift·Alt, 마우스 휠클릭·옆버튼까지 최대 4개. 지우기 Backspace · 취소 Esc */);
+	}
+	return changed;
 }
 
 void reshade::runtime::sherbet_load_crosshair()
@@ -4232,6 +4362,28 @@ void reshade::runtime::draw_gui_aim()
 		//  허용하므로 겁주는 문구가 오히려 상품 신뢰를 깎는다. 되살리지 말 것.)
 	}
 	ImGui::Spacing();
+
+	// ── 리쉐이드 켜기/끄기 단축키 ────────────────────────────────────────────
+	// 판매자 요청으로 조준점 바로 아래에 둔다(게임 중에 조준점과 같이 만지는 설정이라서).
+	// 실제 처리는 runtime.cpp 의 sherbet_handle_hotkeys() — 메뉴가 닫혀 있어도 매 프레임 돈다.
+	if (_input != nullptr)
+	{
+		sherbet::begin_card("##fx_hotkey");
+		{
+			ImGui::TextUnformatted(ICON_FK_MAGIC "  " "\xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C \xEC\xBC\x9C\xEA\xB8\xB0/\xEB\x81\x84\xEA\xB8\xB0 \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4" /* 리쉐이드 켜기/끄기 단축키 */);
+			ImGui::Spacing();
+			if (sherbet_hotkey_box("##fx_key", _sherbet_fx_key, *_input, ImMax(220.0f, 12.0f * ImGui::GetFontSize())))
+				modified = true;
+			ImGui::SameLine();
+			ImGui::TextColored(sherbet::status_color(_effects_enabled ? sherbet::status::good : sherbet::status::warn), "%s",
+				_effects_enabled
+					? "\xEC\xA7\x80\xEA\xB8\x88 \xED\x9A\xA8\xEA\xB3\xBC: \xEC\xBC\x9C\xEC\xA7\x90" /* 지금 효과: 켜짐 */
+					: "\xEC\xA7\x80\xEA\xB8\x88 \xED\x9A\xA8\xEA\xB3\xBC: \xEA\xBA\xBC\xEC\xA7\x90" /* 지금 효과: 꺼짐 */);
+			sherbet_hint("\xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEC\x97\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91\xEC\x97\x90 \xEB\xB0\x94\xEB\xA1\x9C \xED\x9A\xA8\xEA\xB3\xBC \xEC\xA0\x84\xEC\xB2\xB4\xEB\xA5\xBC \xEC\xBC\x9C\xEA\xB3\xA0 \xEA\xBA\xBC\xEC\x9A\x94. \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x80 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEB\x82\xA8\xEC\x95\x84\xEC\x9A\x94." /* 메뉴를 열지 않고 게임 중에 바로 효과 전체를 켜고 꺼요. 조준점은 그대로 남아요. */);
+		}
+		sherbet::end_card();
+		ImGui::Spacing();
+	}
 
 	// ── 발로란트 조준점 ──────────────────────────────────────────────────────
 	if (ImGui::CollapsingHeader(ICON_FK_SLIDERS "  " "\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90" /* 발로란트 조준점 */, ImGuiTreeNodeFlags_DefaultOpen))
@@ -5637,6 +5789,7 @@ void reshade::runtime::draw_gui_settings()
 			_sherbet_mag_rect = sherbet::mag::rect(); // 기본값(우하단 근처)
 			_sherbet_mag_anchor[0] = 0.5f; _sherbet_mag_anchor[1] = 0.30f;
 			_sherbet_mag_cap_res[0] = _sherbet_mag_cap_res[1] = 0;
+			_sherbet_mag_active_preset = -1;
 			modified = true;
 		}
 
@@ -5653,13 +5806,123 @@ void reshade::runtime::draw_gui_settings()
 
 		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
 		if (ImGui::SliderFloat("\xEB\xB0\xB0\xEC\x9C\xA8##mag", &_sherbet_mag_zoom, 1.0f, 10.0f, "%.1fx")) // "배율"
+		{
+			_sherbet_mag_active_preset = -1; // 손으로 바꿨다 — 더는 그 프리셋이 아니다
 			modified = true;
+		}
 		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
 		if (ImGui::SliderFloat("\xED\x88\xAC\xEB\xAA\x85\xEB\x8F\x84##mag", &_sherbet_mag_opacity, 0.2f, 1.0f, "%.2f")) // "투명도"
 			modified = true;
 		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
 		if (ImGui::SliderFloat2("\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98##mag", _sherbet_mag_anchor, 0.0f, 1.0f, "%.2f")) // "표시 위치"
+		{
+			_sherbet_mag_active_preset = -1;
 			modified = true;
+		}
+
+		// ── 위치 프리셋 ──────────────────────────────────────────────────
+		// 영역·표시 위치·배율을 한 벌로 저장해 두고 단축키로 바꾼다(투명도는 공통이라 안 담는다).
+		// 단축키 처리는 runtime.cpp 의 sherbet_handle_hotkeys() — 메뉴를 닫아도 매 프레임 돈다.
+		ImGui::Spacing();
+		ImGui::TextUnformatted(ICON_FK_FLOPPY "  " "\xEC\x9C\x84\xEC\xB9\x98 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B" /* 위치 프리셋 */);
+		{
+			const bool full = static_cast<int>(_sherbet_mag_presets.size()) >= sherbet::mag::kMaxPresets;
+			ImGui::BeginDisabled(full);
+			if (sherbet::pill_button(ICON_FK_PLUS "  " "\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9C\x84\xEC\xB9\x98\xEB\xA5\xBC \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEC\xA0\x80\xEC\x9E\xA5" /* 지금 위치를 프리셋으로 저장 */, false))
+			{
+				sherbet::mag::preset p;
+				p.name = sherbet::mag::default_preset_name(static_cast<int>(_sherbet_mag_presets.size()) + 1);
+				p.r = _sherbet_mag_rect;
+				p.anchor[0] = _sherbet_mag_anchor[0]; p.anchor[1] = _sherbet_mag_anchor[1];
+				p.zoom = _sherbet_mag_zoom;
+				p.cap_res[0] = _sherbet_mag_cap_res[0]; p.cap_res[1] = _sherbet_mag_cap_res[1];
+				_sherbet_mag_presets.push_back(std::move(p));
+				_sherbet_mag_active_preset = static_cast<int>(_sherbet_mag_presets.size()) - 1; // 지금 상태 그대로다
+				modified = true;
+			}
+			ImGui::EndDisabled();
+			if (full)
+				ImGui::TextDisabled("%s", "\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9D\x80 \xEC\xB5\x9C\xEB\x8C\x80 50\xEA\xB0\x9C\xEA\xB9\x8C\xEC\xA7\x80\xEC\x98\x88\xEC\x9A\x94" /* 프리셋은 최대 50개까지예요 */);
+		}
+
+		if (_sherbet_mag_presets.empty())
+			ImGui::TextDisabled("%s", "\xEC\xA0\x80\xEC\x9E\xA5\xEB\x90\x9C \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9D\xB4 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94" /* 저장된 프리셋이 없어요 */);
+
+		int remove_at = -1;
+		const float name_w = ImMax(120.0f, 8.0f * ImGui::GetFontSize());
+		const float key_w = ImMax(150.0f, 10.0f * ImGui::GetFontSize());
+		for (size_t i = 0; i < _sherbet_mag_presets.size(); ++i)
+		{
+			sherbet::mag::preset &p = _sherbet_mag_presets[i];
+			ImGui::PushID(static_cast<int>(i));
+
+			// 지금 이 프리셋으로 켜져 있으면 표시 — 같은 키를 한 번 더 누르면 꺼진다는 걸 알 수 있게.
+			const bool active = _sherbet_mag_on && _sherbet_mag_active_preset == static_cast<int>(i);
+			if (active)
+			{
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().accent), "%s", ICON_FK_OK);
+				ImGui::SetItemTooltip("%s", "\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9D\xB4 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94" /* 지금 이 프리셋으로 켜져 있어요 */);
+			}
+			else
+			{
+				ImGui::TextDisabled("%s", ICON_FK_CIRCLE);
+			}
+			ImGui::SameLine();
+
+			char name_buf[sherbet::mag::kMaxPresetName + 16];
+			std::snprintf(name_buf, sizeof(name_buf), "%s", p.name.c_str());
+			ImGui::SetNextItemWidth(name_w);
+			if (ImGui::InputText("##pname", name_buf, sizeof(name_buf)))
+				p.name = name_buf;
+			if (ImGui::IsItemDeactivatedAfterEdit())
+			{
+				p.name = sherbet::mag::clean_name(p.name, sherbet::mag::default_preset_name(static_cast<int>(i) + 1));
+				modified = true;
+			}
+
+			ImGui::SameLine();
+			if (sherbet::pill_button("\xEC\xA0\x81\xEC\x9A\xA9" /* 적용 */, active))
+			{
+				sherbet_apply_mag_preset(i);
+				modified = true;
+			}
+
+			ImGui::SameLine();
+			if (_input != nullptr && sherbet_hotkey_box("##pkey", p.key, *_input, key_w))
+				modified = true;
+
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_FLOPPY, false))
+			{
+				p.r = _sherbet_mag_rect;
+				p.anchor[0] = _sherbet_mag_anchor[0]; p.anchor[1] = _sherbet_mag_anchor[1];
+				p.zoom = _sherbet_mag_zoom;
+				p.cap_res[0] = _sherbet_mag_cap_res[0]; p.cap_res[1] = _sherbet_mag_cap_res[1];
+				_sherbet_mag_active_preset = static_cast<int>(i);
+				modified = true;
+			}
+			ImGui::SetItemTooltip("%s  %s", "\xEB\x8D\xAE\xEC\x96\xB4\xEC\x93\xB0\xEA\xB8\xB0" /* 덮어쓰기 */,
+				"\xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA1\xEC\x9D\x80 \xEC\x98\x81\xEC\x97\xAD\xC2\xB7\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98\xC2\xB7\xEB\xB0\xB0\xEC\x9C\xA8\xEB\xA1\x9C \xEB\xB0\x94\xEA\xBF\x94 \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4\xEC\x9A\x94" /* 지금 잡은 영역·표시 위치·배율로 바꿔 저장해요 */);
+
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_TRASH, false))
+				remove_at = static_cast<int>(i);
+			ImGui::SetItemTooltip("%s", "\xEC\x9D\xB4 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B \xEC\x82\xAD\xEC\xA0\x9C" /* 이 프리셋 삭제 */);
+
+			ImGui::PopID();
+		}
+		if (remove_at >= 0)
+		{
+			_sherbet_mag_presets.erase(_sherbet_mag_presets.begin() + remove_at);
+			// 지운 것보다 뒤에 있던 '지금 프리셋' 번호는 한 칸 당긴다. 지운 게 그것이었으면 푼다.
+			if (_sherbet_mag_active_preset == remove_at)
+				_sherbet_mag_active_preset = -1;
+			else if (_sherbet_mag_active_preset > remove_at)
+				--_sherbet_mag_active_preset;
+			modified = true;
+		}
+		sherbet_hint("\xEC\x98\x81\xEC\x97\xAD\xC2\xB7\xED\x91\x9C\xEC\x8B\x9C \xEC\x9C\x84\xEC\xB9\x98\xC2\xB7\xEB\xB0\xB0\xEC\x9C\xA8\xEC\x9D\x84 \xED\x95\x9C \xEB\xB2\x8C\xEB\xA1\x9C \xEC\xA0\x80\xEC\x9E\xA5\xED\x95\xB4\xEC\x9A\x94. \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEA\xB7\xB8 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB0\x94\xEB\x80\x8C\xEA\xB3\xA0, \xEA\xB0\x99\xEC\x9D\x80 \xED\x82\xA4\xEB\xA5\xBC \xED\x95\x9C \xEB\xB2\x88 \xEB\x8D\x94 \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEA\xBA\xBC\xEC\xA0\xB8\xEC\x9A\x94." /* 영역·표시 위치·배율을 한 벌로 저장해요. 단축키를 누르면 그 프리셋으로 바뀌고, 같은 키를 한 번 더 누르면 돋보기가 꺼져요. */);
+		ImGui::Spacing();
 
 		// ⚠️ 실패를 조용히 넘기지 않는다. "안 보여요" 신고를 받았을 때 원인을 즉시 가르는 줄이다
 		//    (기능이 꺼짐 / 영역 미확정 / 캡처 자체가 안 됨 — 셋의 대응이 전부 다르다).

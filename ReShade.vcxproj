@@ -794,9 +794,11 @@
     <ClInclude Include="source\sherbet_crosshair.hpp" />
     <ClInclude Include="source\sherbet_engine.hpp" />
     <ClInclude Include="source\sherbet_frametime.hpp" />
+    <ClInclude Include="source\sherbet_hotkey.hpp" />
     <ClInclude Include="source\sherbet_http.hpp" />
     <ClInclude Include="source\sherbet_json.hpp" />
     <ClInclude Include="source\sherbet_license.hpp" />
+    <ClInclude Include="source\sherbet_magpreset.hpp" />
     <ClInclude Include="source\sherbet_motion.hpp" />
     <ClInclude Include="source\sherbet_nodelock.hpp" />
     <ClInclude Include="source\sherbet_owner.h" />

@@ -809,6 +809,12 @@
     <ClInclude Include="source\sherbet_engine.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_hotkey.hpp">
+      <Filter>coreuntime</Filter>
+    </ClInclude>
+    <ClInclude Include="source\sherbet_magpreset.hpp">
+      <Filter>coreuntime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_frametime.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>

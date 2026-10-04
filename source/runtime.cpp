@@ -942,7 +942,13 @@ void reshade::runtime::on_present()
 	// Handle keyboard shortcuts
 	if (!_ignore_shortcuts && _input != nullptr)
 	{
-		if (_input->is_key_pressed(_effects_key_data, _force_shortcut_modifiers))
+		// SHERBET: 멀티키 단축키(효과 켜기/끄기 + 돋보기 위치 프리셋). **자리가 규약이다** —
+		// draw_gui() 는 오버레이가 닫히면 통째로 return 하므로 거기 두면 게임 중에 안 먹는다.
+		// 같은 프레임에 원본 KeyEffects 까지 같은 키로 걸려 있으면 두 번 뒤집혀 아무 일도
+		// 없는 것처럼 보이므로, Sherbet 쪽이 토글했으면 원본 토글은 건너뛴다.
+		const bool sherbet_fx_toggled = sherbet_handle_hotkeys();
+
+		if (!sherbet_fx_toggled && _input->is_key_pressed(_effects_key_data, _force_shortcut_modifiers))
 		{
 #if RESHADE_ADDON
 			if (!invoke_addon_event<addon_event::reshade_set_effects_state>(this, !_effects_enabled))
@@ -4013,6 +4019,75 @@ void reshade::runtime::sherbet_motion_release()
 	_sherbet_motion_format = api::format::unknown;
 	_sherbet_motion_state = 0;
 	_sherbet_motion.drop_prev();
+}
+
+// SHERBET: 돋보기 프리셋 꺼내 쓰기. 영역·표시 위치·배율·잡을 당시 해상도를 통째로 바꾸고 켠다.
+// 영역 잡는 중이었다면 취소한다 — 잡다 만 드래그가 방금 꺼낸 영역을 덮어쓰면 안 된다.
+void reshade::runtime::sherbet_apply_mag_preset(size_t index)
+{
+	if (index >= _sherbet_mag_presets.size())
+		return;
+	const sherbet::mag::preset &p = _sherbet_mag_presets[index];
+	_sherbet_mag_rect = sherbet::mag::sanitize(p.r);
+	_sherbet_mag_anchor[0] = sherbet::mag::clamp01(p.anchor[0]);
+	_sherbet_mag_anchor[1] = sherbet::mag::clamp01(p.anchor[1]);
+	_sherbet_mag_zoom = sherbet::mag::clamp_zoom(p.zoom);
+	_sherbet_mag_cap_res[0] = p.cap_res[0];
+	_sherbet_mag_cap_res[1] = p.cap_res[1];
+	_sherbet_mag_picking = false;
+	_sherbet_mag_on = true;
+	_sherbet_mag_active_preset = static_cast<int>(index);
+}
+
+// SHERBET: 멀티키 단축키. 0번 = 효과 켜기/끄기, 1번부터 = 돋보기 프리셋.
+// 같은 프레임에 여러 개가 걸리면 키가 가장 많은 것 하나만 실행한다(sherbet_hotkey.hpp).
+// 수정키는 왼쪽/오른쪽 어느 쪽이 눌려도 같은 키로 본다 — 입력 경로에 따라 한쪽만 들어온다.
+bool reshade::runtime::sherbet_handle_hotkeys()
+{
+	namespace hk = sherbet::hotkey;
+	const input &in = *_input;
+	const auto down = [&in](unsigned int vk) {
+		switch (vk)
+		{
+		case hk::kShift: return in.is_key_down(0x10) || in.is_key_down(0xA0) || in.is_key_down(0xA1);
+		case hk::kCtrl:  return in.is_key_down(0x11) || in.is_key_down(0xA2) || in.is_key_down(0xA3);
+		case hk::kAlt:   return in.is_key_down(0x12) || in.is_key_down(0xA4) || in.is_key_down(0xA5);
+		default:         return in.is_key_down(vk);
+		}
+	};
+	const auto pressed = [&in](unsigned int vk) {
+		switch (vk)
+		{
+		case hk::kShift: return in.is_key_pressed(0x10) || in.is_key_pressed(0xA0) || in.is_key_pressed(0xA1);
+		case hk::kCtrl:  return in.is_key_pressed(0x11) || in.is_key_pressed(0xA2) || in.is_key_pressed(0xA3);
+		case hk::kAlt:   return in.is_key_pressed(0x12) || in.is_key_pressed(0xA4) || in.is_key_pressed(0xA5);
+		default:         return in.is_key_pressed(vk);
+		}
+	};
+
+	const int n = 1 + static_cast<int>(_sherbet_mag_presets.size());
+	const int hit = hk::best_match(n,
+		[this](int i) -> const hk::chord & { return i == 0 ? _sherbet_fx_key : _sherbet_mag_presets[i - 1].key; },
+		down, pressed);
+	if (hit < 0)
+		return false;
+
+	if (hit == 0)
+	{
+#if RESHADE_ADDON
+		if (!invoke_addon_event<addon_event::reshade_set_effects_state>(this, !_effects_enabled))
+#endif
+			_effects_enabled = !_effects_enabled;
+		return true;
+	}
+
+	const int idx = hit - 1;
+	if (sherbet::mag::on_hotkey(idx, _sherbet_mag_active_preset, _sherbet_mag_on) == sherbet::mag::preset_action::turn_off)
+		_sherbet_mag_on = false;
+	else
+		sherbet_apply_mag_preset(static_cast<size_t>(idx));
+	save_config();
+	return false;
 }
 
 // SHERBET: 「엔진룸」 성운 리드백 — 선언부(runtime.hpp) 주석 참고. 구조는 sherbet_motion_tick 과 같다:
