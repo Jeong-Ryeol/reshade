@@ -10,6 +10,7 @@
 // 둘 다 있으면 G+F 만 실행된다, 같은 프리셋 키를 두 번 누르면 꺼진다.
 
 #include "sherbet_magpreset.hpp"
+#include "sherbet_crosshair.hpp"
 
 #include <cassert>
 #include <cstdio>
@@ -232,8 +233,27 @@ static void test_preset_name_clean()
 	assert(cut.size() <= mag::kMaxPresetName && cut.size() % 3 == 0);
 }
 
+static void test_crosshair_toggle_remembers_mode()
+{
+	using crosshair::toggle_mode;
+	// 발로란트를 쓰다 끄고 다시 켜면 발로란트. 클래식도 마찬가지.
+	auto t = toggle_mode(2, 1);
+	assert(t.mode == 0 && t.last == 2);
+	t = toggle_mode(t.mode, t.last);
+	assert(t.mode == 2 && t.last == 2);
+	t = toggle_mode(1, 2);
+	assert(t.mode == 0 && t.last == 1);
+	t = toggle_mode(t.mode, t.last);
+	assert(t.mode == 1);
+	// 처음부터 꺼져 있고 기억도 이상하면(첫 실행·손으로 고친 ini) 발로란트로 켠다.
+	assert(toggle_mode(0, 0).mode == 2);
+	assert(toggle_mode(0, 7).mode == 2);
+	assert(toggle_mode(0, -1).last == 2);
+}
+
 int main()
 {
+	test_crosshair_toggle_remembers_mode();
 	test_add_sorts_and_dedupes();
 	test_sanitize_from_ini();
 	test_single_key_fires_once();

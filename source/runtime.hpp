@@ -273,8 +273,8 @@ namespace reshade
 		void sherbet_motion_release(); // 리드백 링 해제(on_reset / 초기화 실패 경로)
 		// SHERBET: 돋보기 프리셋 i 를 지금 상태로 꺼내 쓴다(영역·위치·배율 적용 + 켜기). 저장은 호출부가.
 		void sherbet_apply_mag_preset(size_t index);
-		// SHERBET: 멀티키 단축키 처리 — on_present 의 단축키 블록에서 매 프레임. 효과를 토글했으면 true.
-		bool sherbet_handle_hotkeys();
+		// SHERBET: 멀티키 단축키 처리 — on_present 의 단축키 블록에서 매 프레임(조준점 + 돋보기 프리셋).
+		void sherbet_handle_hotkeys();
 
 		// SHERBET: 「엔진룸」 성운 — 지금 화면의 색을 읽는 리드백. **탭이 그려진 프레임의 다음
 		// 프레임에만** 돈다(_sherbet_engine_wanted). 안 그려지면 복사도 매핑도 없고 4프레임 뒤에
@@ -499,9 +499,11 @@ namespace reshade
 		// active = 지금 켜져 있는 프리셋 번호. 손으로 영역·위치·배율을 바꾸면 -1 로 풀린다.
 		std::vector<sherbet::mag::preset> _sherbet_mag_presets;
 		int _sherbet_mag_active_preset = -1;
-		// SHERBET: 효과 전체 켜기/끄기 멀티키 단축키(「에임」 탭). 리쉐이드 원본 KeyEffects 와 별개다 —
-		// 원본은 키 1개 + Ctrl/Shift/Alt 만 담아서 "Z+X" 나 마우스 옆버튼 조합을 못 쓴다.
-		sherbet::hotkey::chord _sherbet_fx_key;
+		// SHERBET: 조준점 켜기/끄기 멀티키 단축키(「에임」 탭). 원본 단축키 형식(키 1개 + Ctrl/Shift/Alt)은
+		// "Z+X" 나 마우스 옆버튼 조합을 못 담아서 Sherbet 조합을 쓴다(sherbet_hotkey.hpp).
+		// last_mode = 단축키로 끄기 직전 모드(1=클래식 2=발로란트) — 다시 켤 때 그대로 돌린다.
+		sherbet::hotkey::chord _sherbet_xh_key;
+		int _sherbet_xh_last_mode = 2;
 		// 잘라낸 영역을 담는 텍스처. 영역 크기가 바뀌면 다시 만든다.
 		// 2단계다. ⚠️ 게임 백버퍼는 **알파가 0** 인 경우가 흔한데(게임이 알파를 안 쓴다),
 		// ImGui 는 tex*vcol 을 source_alpha 로 블렌드하므로(imgui_ps_3_0.hlsl + runtime_gui.cpp:8283)

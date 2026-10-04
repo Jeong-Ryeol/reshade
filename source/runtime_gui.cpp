@@ -411,9 +411,12 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	// SHERBET: 돋보기 위치 프리셋 + 멀티키 단축키. 손으로 고친 ini 여도 화면 밖·배율 0·
 	// 못 쓰는 키가 들어오지 않게 하나하나 정리해서 받는다.
 	{
-		unsigned int fx[sherbet::hotkey::kMaxKeys] = {};
-		config.get("INPUT", "SherbetKeyEffects", fx);
-		_sherbet_fx_key = sherbet::hotkey::sanitize(fx);
+		unsigned int xk[sherbet::hotkey::kMaxKeys] = {};
+		config.get("INPUT", "SherbetKeyCrosshair", xk);
+		_sherbet_xh_key = sherbet::hotkey::sanitize(xk);
+		// 이상한 값(손으로 고친 ini)은 toggle_mode 가 발로란트로 돌린다. 켜져 있는 상태에서 끌 땐
+		// 그 순간의 모드를 기억하므로, 여기 값은 '꺼진 채 시작했을 때' 만 쓰인다.
+		config.get("SHERBET", "CrosshairLastMode", _sherbet_xh_last_mode);
 
 		int count = 0;
 		config.get("OVERLAY", "SherbetMagPresetCount", count);
@@ -677,7 +680,8 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetMagCapRes", _sherbet_mag_cap_res);
 	// SHERBET: 돋보기 위치 프리셋 + 멀티키 단축키. 개수를 먼저 적는다 — 프리셋을 지워 개수가
 	// 줄면 뒤쪽 번호 키가 ini 에 남지만, 읽을 때 개수까지만 읽으므로 되살아나지 않는다.
-	config.set("INPUT", "SherbetKeyEffects", _sherbet_fx_key.k);
+	config.set("INPUT", "SherbetKeyCrosshair", _sherbet_xh_key.k);
+	config.set("SHERBET", "CrosshairLastMode", _sherbet_xh_last_mode);
 	config.set("OVERLAY", "SherbetMagPresetCount", static_cast<int>(_sherbet_mag_presets.size()));
 	for (size_t i = 0; i < _sherbet_mag_presets.size(); ++i)
 	{
@@ -3275,12 +3279,7 @@ void reshade::runtime::draw_gui_home()
 
 		if (!_effects_enabled)
 		{
-			// SHERBET: 「에임」 탭의 멀티키 단축키가 있으면 그걸 알려 준다(원본 키는 비어 있는 경우가 많다).
-			if (!sherbet::hotkey::empty(_sherbet_fx_key))
-				ImGui::Text("í¨ê³¼ê° êº¼ì ¸ ìì´ì. '%s' ë¥¼ ëë¥´ë©´ ë¤ì ì¼ì ¸ì." /* 효과가 꺼져 있어요. '%s' 를 누르면 다시 켜져요. */,
-					sherbet::hotkey::name(_sherbet_fx_key, [](unsigned int vk) { return input::key_name(vk); }).c_str());
-			else
-				ImGui::Text(_("Effects are disabled. Press '%s' to enable them again."), input::key_name(_effects_key_data).c_str());
+			ImGui::Text(_("Effects are disabled. Press '%s' to enable them again."), input::key_name(_effects_key_data).c_str());
 			ImGui::Spacing();
 		}
 
@@ -4355,6 +4354,8 @@ void reshade::runtime::draw_gui_aim()
 		{
 			_sherbet_crosshair_on = (xh_mode == 1);
 			_sherbet_val_on = (xh_mode == 2);
+			if (xh_mode != 0)
+				_sherbet_xh_last_mode = xh_mode; // 단축키로 다시 켤 때 이 모드로
 			modified = true;
 		}
 		ImGui::TextDisabled("%s", "\xEB\x91\x90 \xEB\xAA\xA8\xEB\x93\x9C\xEC\x9D\x98 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEB\x94\xB0\xEB\xA1\x9C \xEC\xA0\x80\xEC\x9E\xA5\xEB\x8F\xBC\xEC\x9A\x94 \xE2\x80\x94 \xEB\xB0\x94\xEA\xBF\x94\xEB\x8F\x84 \xEC\x9B\x90\xEB\x9E\x98 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\xB4 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA7\x80\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4" /* 두 모드의 설정은 따로 저장돼요 — 바꿔도 원래 설정이 사라지지 않습니다 */);
@@ -4363,23 +4364,25 @@ void reshade::runtime::draw_gui_aim()
 	}
 	ImGui::Spacing();
 
-	// ── 리쉐이드 켜기/끄기 단축키 ────────────────────────────────────────────
-	// 판매자 요청으로 조준점 바로 아래에 둔다(게임 중에 조준점과 같이 만지는 설정이라서).
+	// ── 조준점 켜기/끄기 단축키 ──────────────────────────────────────────────
+	// 판매자 요청: 게임 중에 메뉴를 안 열고 조준점만 숨겼다 다시 켠다(효과는 건드리지 않는다).
+	// 다시 켜면 마지막에 쓰던 모드(클래식/발로란트)로 돌아온다.
 	// 실제 처리는 runtime.cpp 의 sherbet_handle_hotkeys() — 메뉴가 닫혀 있어도 매 프레임 돈다.
 	if (_input != nullptr)
 	{
-		sherbet::begin_card("##fx_hotkey");
+		sherbet::begin_card("##xh_hotkey");
 		{
-			ImGui::TextUnformatted(ICON_FK_MAGIC "  " "\xEB\xA6\xAC\xEC\x89\x90\xEC\x9D\xB4\xEB\x93\x9C \xEC\xBC\x9C\xEA\xB8\xB0/\xEB\x81\x84\xEA\xB8\xB0 \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4" /* 리쉐이드 켜기/끄기 단축키 */);
+			ImGui::TextUnformatted(ICON_FK_CROSSHAIRS "  " "\xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\xBC\x9C\xEA\xB8\xB0/\xEB\x81\x84\xEA\xB8\xB0 \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4" /* 조준점 켜기/끄기 단축키 */);
 			ImGui::Spacing();
-			if (sherbet_hotkey_box("##fx_key", _sherbet_fx_key, *_input, ImMax(220.0f, 12.0f * ImGui::GetFontSize())))
+			if (sherbet_hotkey_box("##xh_key", _sherbet_xh_key, *_input, ImMax(220.0f, 12.0f * ImGui::GetFontSize())))
 				modified = true;
 			ImGui::SameLine();
-			ImGui::TextColored(sherbet::status_color(_effects_enabled ? sherbet::status::good : sherbet::status::warn), "%s",
-				_effects_enabled
-					? "\xEC\xA7\x80\xEA\xB8\x88 \xED\x9A\xA8\xEA\xB3\xBC: \xEC\xBC\x9C\xEC\xA7\x90" /* 지금 효과: 켜짐 */
-					: "\xEC\xA7\x80\xEA\xB8\x88 \xED\x9A\xA8\xEA\xB3\xBC: \xEA\xBA\xBC\xEC\xA7\x90" /* 지금 효과: 꺼짐 */);
-			sherbet_hint("\xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEC\x97\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91\xEC\x97\x90 \xEB\xB0\x94\xEB\xA1\x9C \xED\x9A\xA8\xEA\xB3\xBC \xEC\xA0\x84\xEC\xB2\xB4\xEB\xA5\xBC \xEC\xBC\x9C\xEA\xB3\xA0 \xEA\xBA\xBC\xEC\x9A\x94. \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x80 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xEB\x82\xA8\xEC\x95\x84\xEC\x9A\x94." /* 메뉴를 열지 않고 게임 중에 바로 효과 전체를 켜고 꺼요. 조준점은 그대로 남아요. */);
+			const bool xh_any = _sherbet_val_on || _sherbet_crosshair_on;
+			ImGui::TextColored(sherbet::status_color(xh_any ? sherbet::status::good : sherbet::status::warn), "%s",
+				_sherbet_val_on ? "\xEC\xA7\x80\xEA\xB8\x88: \xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90" /* 지금: 발로란트 조준점 */
+				: _sherbet_crosshair_on ? "\xEC\xA7\x80\xEA\xB8\x88: \xED\x81\xB4\xEB\x9E\x98\xEC\x8B\x9D \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90" /* 지금: 클래식 조준점 */
+				: "\xEC\xA7\x80\xEA\xB8\x88: \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEA\xBA\xBC\xEC\xA7\x90" /* 지금: 조준점 꺼짐 */);
+			sherbet_hint("\xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEC\x97\xB4\xEC\xA7\x80 \xEC\x95\x8A\xEA\xB3\xA0 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\xA4\x91\xEC\x97\x90 \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90\xEC\x9D\x84 \xEC\x88\xA8\xEA\xB2\xBC\xEB\x8B\xA4\xEA\xB0\x80 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\xBC\x9C\xEC\x9A\x94. \xEB\x8B\xA4\xEC\x8B\x9C \xEC\xBC\x9C\xEB\xA9\xB4 \xEB\xA7\x88\xEC\xA7\x80\xEB\xA7\x89\xEC\x97\x90 \xEC\x93\xB0\xEB\x8D\x98 \xEB\xAA\xA8\xEB\x93\x9C(\xED\x81\xB4\xEB\x9E\x98\xEC\x8B\x9D/\xEB\xB0\x9C\xEB\xA1\x9C\xEB\x9E\x80\xED\x8A\xB8)\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80\xEC\x9A\x94." /* 메뉴를 열지 않고 게임 중에 조준점을 숨겼다가 다시 켜요. 다시 켜면 마지막에 쓰던 모드(클래식/발로란트)로 돌아와요. */);
 		}
 		sherbet::end_card();
 		ImGui::Spacing();

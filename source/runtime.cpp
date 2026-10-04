@@ -942,13 +942,11 @@ void reshade::runtime::on_present()
 	// Handle keyboard shortcuts
 	if (!_ignore_shortcuts && _input != nullptr)
 	{
-		// SHERBET: 멀티키 단축키(효과 켜기/끄기 + 돋보기 위치 프리셋). **자리가 규약이다** —
+		// SHERBET: 멀티키 단축키(조준점 켜기/끄기 + 돋보기 위치 프리셋). **자리가 규약이다** —
 		// draw_gui() 는 오버레이가 닫히면 통째로 return 하므로 거기 두면 게임 중에 안 먹는다.
-		// 같은 프레임에 원본 KeyEffects 까지 같은 키로 걸려 있으면 두 번 뒤집혀 아무 일도
-		// 없는 것처럼 보이므로, Sherbet 쪽이 토글했으면 원본 토글은 건너뛴다.
-		const bool sherbet_fx_toggled = sherbet_handle_hotkeys();
+		sherbet_handle_hotkeys();
 
-		if (!sherbet_fx_toggled && _input->is_key_pressed(_effects_key_data, _force_shortcut_modifiers))
+		if (_input->is_key_pressed(_effects_key_data, _force_shortcut_modifiers))
 		{
 #if RESHADE_ADDON
 			if (!invoke_addon_event<addon_event::reshade_set_effects_state>(this, !_effects_enabled))
@@ -4039,10 +4037,10 @@ void reshade::runtime::sherbet_apply_mag_preset(size_t index)
 	_sherbet_mag_active_preset = static_cast<int>(index);
 }
 
-// SHERBET: 멀티키 단축키. 0번 = 효과 켜기/끄기, 1번부터 = 돋보기 프리셋.
+// SHERBET: 멀티키 단축키. 0번 = 조준점 켜기/끄기, 1번부터 = 돋보기 프리셋.
 // 같은 프레임에 여러 개가 걸리면 키가 가장 많은 것 하나만 실행한다(sherbet_hotkey.hpp).
 // 수정키는 왼쪽/오른쪽 어느 쪽이 눌려도 같은 키로 본다 — 입력 경로에 따라 한쪽만 들어온다.
-bool reshade::runtime::sherbet_handle_hotkeys()
+void reshade::runtime::sherbet_handle_hotkeys()
 {
 	namespace hk = sherbet::hotkey;
 	const input &in = *_input;
@@ -4067,27 +4065,30 @@ bool reshade::runtime::sherbet_handle_hotkeys()
 
 	const int n = 1 + static_cast<int>(_sherbet_mag_presets.size());
 	const int hit = hk::best_match(n,
-		[this](int i) -> const hk::chord & { return i == 0 ? _sherbet_fx_key : _sherbet_mag_presets[i - 1].key; },
+		[this](int i) -> const hk::chord & { return i == 0 ? _sherbet_xh_key : _sherbet_mag_presets[i - 1].key; },
 		down, pressed);
 	if (hit < 0)
-		return false;
+		return;
 
 	if (hit == 0)
 	{
-#if RESHADE_ADDON
-		if (!invoke_addon_event<addon_event::reshade_set_effects_state>(this, !_effects_enabled))
-#endif
-			_effects_enabled = !_effects_enabled;
-		return true;
+		// 끄면 쓰던 모드를 기억하고, 켜면 그 모드로 돌린다(sherbet_crosshair.hpp toggle_mode).
+		// 클래식과 발로란트는 UI 에서 3지 선택이라 둘이 동시에 켜지지 않는다 — 여기서도 지킨다.
+		const int mode = _sherbet_val_on ? 2 : (_sherbet_crosshair_on ? 1 : 0);
+		const sherbet::crosshair::mode_toggle t = sherbet::crosshair::toggle_mode(mode, _sherbet_xh_last_mode);
+		_sherbet_crosshair_on = (t.mode == 1);
+		_sherbet_val_on = (t.mode == 2);
+		_sherbet_xh_last_mode = t.last;
 	}
-
-	const int idx = hit - 1;
-	if (sherbet::mag::on_hotkey(idx, _sherbet_mag_active_preset, _sherbet_mag_on) == sherbet::mag::preset_action::turn_off)
-		_sherbet_mag_on = false;
 	else
-		sherbet_apply_mag_preset(static_cast<size_t>(idx));
+	{
+		const int idx = hit - 1;
+		if (sherbet::mag::on_hotkey(idx, _sherbet_mag_active_preset, _sherbet_mag_on) == sherbet::mag::preset_action::turn_off)
+			_sherbet_mag_on = false;
+		else
+			sherbet_apply_mag_preset(static_cast<size_t>(idx));
+	}
 	save_config();
-	return false;
 }
 
 // SHERBET: 「엔진룸」 성운 리드백 — 선언부(runtime.hpp) 주석 참고. 구조는 sherbet_motion_tick 과 같다:

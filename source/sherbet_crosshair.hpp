@@ -1722,5 +1722,17 @@ namespace sherbet
 			build_crosshair(L, cx, cy, line_error_px(L.inner, s, t), line_error_px(L.outer, s, t), out,
 				top_arm_fade(L, s, t));
 		}
+
+		// 단축키로 조준점 켜기/끄기(「에임」 탭). mode: 0=끔 1=클래식 2=발로란트.
+		// 끌 때 쓰던 모드를 last 에 기억했다가 다시 켤 때 그대로 돌린다 — 발로란트를 쓰던 사람이
+		// 단축키 두 번에 클래식으로 바뀌면 안 된다. last 가 이상하면(첫 실행·손으로 고친 ini) 발로란트.
+		struct mode_toggle { int mode; int last; };
+		inline mode_toggle toggle_mode(int mode, int last)
+		{
+			if (mode == 1 || mode == 2)
+				return { 0, mode };
+			const int back = (last == 1 || last == 2) ? last : 2;
+			return { back, back };
+		}
 	}
 }
