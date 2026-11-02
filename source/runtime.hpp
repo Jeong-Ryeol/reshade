@@ -461,6 +461,7 @@ namespace reshade
 		// (두 탭이 서로 다른 코드를 보여 주면 어느 쪽이 진짜인지 알 수 없다).
 		bool _sherbet_val_code_dirty = false;
 		int _sherbet_market_seg = 0; // 0=테마 1=프리셋 2=조준점 (저장 안 함 — 세션 한정)
+		int _sherbet_settings_seg = 0; // 설정 탭 0=화면 도구 1=알림 2=꾸미기 3=기본 설정 (config 에 저장 — 번호 재배치 금지)
 
 		// SHERBET: 커스텀 배경 이미지 — 오버레이 창 배경을 사용자 사진으로. 'custompicture' 기능 구매자 전용.
 		api::resource _sherbet_bg_tex = {};

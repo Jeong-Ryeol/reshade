@@ -401,6 +401,9 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
 	config.get("OVERLAY", "SherbetAdText", _sherbet_ad_text);
+	config.get("OVERLAY", "SherbetSettingsSeg", _sherbet_settings_seg);
+	if (_sherbet_settings_seg < 0 || _sherbet_settings_seg > 3)
+		_sherbet_settings_seg = 0;
 	config.get("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
 	config.get("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
 	config.get("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
@@ -679,6 +682,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
 	config.set("OVERLAY", "SherbetAdText", _sherbet_ad_text);
+	config.set("OVERLAY", "SherbetSettingsSeg", _sherbet_settings_seg);
 	config.set("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
 	config.set("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
 	config.set("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
@@ -1692,7 +1696,9 @@ void reshade::runtime::draw_gui()
 		const ImVec2 mg_p0(mg_vp->Pos.x + mg_x, mg_vp->Pos.y + mg_y);
 		const ImVec2 mg_p1(mg_p0.x + mg_w, mg_p0.y + mg_h);
 		const int mg_a = static_cast<int>(ImClamp(_sherbet_mag_opacity, 0.0f, 1.0f) * 255.0f);
-		ImDrawList *const mg = ImGui::GetForegroundDrawList();
+		// 메뉴가 열려 있으면 **메뉴 뒤에** 그린다. 앞(Foreground)에 그리면 배율을 키운 확대창이
+		// 메뉴를 덮어 설정을 만질 수 없었다(사용자 보고). 메뉴가 닫히면 다시 맨 앞이다.
+		ImDrawList *const mg = _show_overlay ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
 		// ⚠️ **테두리를 먼저 그린다.** 확대한 내용이 어두우면(기본 영역이 어두운 화면 구석이면
 		//    흔하다) 그림만으로는 켜졌는지조차 알 수 없다 — 실제로 "켜도 아무것도 안 뜬다" 는
 		//    신고로 나타났다. 틀이 보이면 최소한 "켜졌고 여기를 보고 있다" 는 것이 전달된다.
@@ -2599,8 +2605,8 @@ void reshade::runtime::draw_gui()
 		//    으로 취급해 스크롤 위치(ImGuiWindow::Scroll)와 GetStateStorage() 가 탭끼리 새어 넘어간다:
 		//    설정 탭을 끝까지 내린 뒤 마켓을 열면 맨 위가 아니라 중간부터 보이고, 전환 첫 프레임엔
 		//    Begin() 의 스크롤 클램프가 **직전 프레임(=이전 탭)의 ContentSize** 로 계산돼 화면이 튄다.
-		//    마켓은 세그먼트마다 내용 길이가 크게 달라 세그먼트까지 시드에 넣는다.
-		ImGui::PushID(_sherbet_tab * 10 + (_sherbet_tab == 1 ? _sherbet_market_seg : 0));
+		//    마켓·설정은 세그먼트마다 내용 길이가 크게 달라 세그먼트까지 시드에 넣는다.
+		ImGui::PushID(_sherbet_tab * 10 + (_sherbet_tab == 1 ? _sherbet_market_seg : _sherbet_tab == 2 ? _sherbet_settings_seg : 0));
 		ImGui::BeginChild("##sherbet_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoFocusOnAppearing);
 		switch (_sherbet_tab)
 		{
@@ -5808,11 +5814,6 @@ void reshade::runtime::sherbet_draw_bg_lock_card(const sherbet::paid::feature &f
 
 void reshade::runtime::draw_gui_settings()
 {
-	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
-		utils::open_explorer(_config_path);
-
-	ImGui::Spacing();
-
 	bool modified = false;
 	bool modified_custom_style = false;
 
@@ -5821,11 +5822,82 @@ void reshade::runtime::draw_gui_settings()
 	ImGui::TextDisabled("%s", ICON_FK_CROSSHAIRS " \xEC\xA1\xB0\xEC\xA4\x80\xEC\xA0\x90 \xEC\x84\xA4\xEC\xA0\x95\xEC\x9D\x80 \xEC\x99\xBC\xEC\xAA\xBD \xEC\x97\x90\xEC\x9E\x84 \xED\x83\xAD\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB2\xBC\xEC\x96\xB4\xEC\x9A\x94"); // "조준점 설정은 왼쪽 에임 탭으로 옮겼어요"
 	ImGui::Spacing();
 
+	// SHERBET: 설정 탭을 알약 세그먼트로 나눈다. 예전엔 기능 5개가 화면 폭 가득한 접이식 막대로
+	// 쌓이고 그 아래 리쉐이드 기본 설정 3묶음이 펼쳐져 있어 찾기 어려웠다(사용자 요청).
+	// 마켓 탭과 같은 알약이다. 켜져 있는 기능 수를 알약에 붙여, 들어가 보지 않아도 알 수 있게 한다.
+	// ⚠️ 번호는 config(SherbetSettingsSeg)에 저장된다 — 재배치하지 말 것.
+	{
+		const int on_tools = _sherbet_mag_on ? 1 : 0;
+		const int on_alarm = (_sherbet_alarm_on ? 1 : 0) + (_sherbet_ad_on ? 1 : 0);
+		const int on_deco = (_sherbet_bg_on && sherbet_feature_unlocked("custompicture")) ? 1 : 0;
+		const auto seg_pill = [&](int idx, const char *name, int on_count) {
+			// ### 로 ID 를 고정한다 — 개수가 바뀌어 글자가 달라져도 같은 버튼이다.
+			char lbl[96];
+			if (on_count > 0)
+				std::snprintf(lbl, sizeof(lbl), "%s \xC2\xB7 %d###sseg%d", name, on_count, idx);
+			else
+				std::snprintf(lbl, sizeof(lbl), "%s###sseg%d", name, idx);
+			if (sherbet::pill_button(lbl, _sherbet_settings_seg == idx) && _sherbet_settings_seg != idx)
+			{
+				_sherbet_settings_seg = idx;
+				modified = true;
+			}
+		};
+		seg_pill(0, ICON_FK_SEARCH "  " "\xED\x99\x94\xEB\xA9\xB4 \xEB\x8F\x84\xEA\xB5\xAC", on_tools); // "화면 도구"
+		ImGui::SameLine();
+		seg_pill(1, ICON_FK_BELL "  " "\xEC\x95\x8C\xEB\xA6\xBC", on_alarm); // "알림"
+		ImGui::SameLine();
+		seg_pill(2, ICON_FK_PICTURE "  " "\xEA\xBE\xB8\xEB\xAF\xB8\xEA\xB8\xB0", on_deco); // "꾸미기"
+		ImGui::SameLine();
+		seg_pill(3, ICON_FK_COG "  " "\xEA\xB8\xB0\xEB\xB3\xB8 \xEC\x84\xA4\xEC\xA0\x95", 0); // "기본 설정"
+		ImGui::Spacing();
+		ImGui::Spacing();
+	}
+
+	// SHERBET: 기능 카드 머리줄 — 제목 + 오른쪽 끝 켜기 토글 + 그 아래 상태 한 줄.
+	// 접는 막대는 펼쳐야만 켜졌는지 보였다. 카드는 펼치지 않아도 상태가 보이고 바로 끄고 켤 수 있다.
+	// 토글이 바뀌면 true. on 이 nullptr 이면 토글 없이 제목·상태만 그린다.
+	const auto card_head = [](const char *title, const char *toggle_id, bool *on, const char *status, bool status_on) -> bool {
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(title);
+		bool changed = false;
+		if (on != nullptr)
+		{
+			const float th = ImGui::GetFrameHeight() * 0.78f; // sherbet::toggle 트랙과 같은 식
+			const float tw = th * 1.85f;
+			ImGui::SameLine();
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, ImGui::GetContentRegionAvail().x - tw));
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (ImGui::GetFrameHeight() - th) * 0.5f);
+			changed = sherbet::toggle(toggle_id, on);
+		}
+		if (status != nullptr && status[0] != '\0')
+		{
+			if (status_on)
+				ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().accent), "%s", status);
+			else
+				ImGui::TextDisabled("%s", status);
+		}
+		ImGui::Spacing();
+		return changed;
+	};
+
 	// SHERBET: HUD 돋보기 — 화면의 한 조각(체력·방어구 막대 등)을 확대해 크게 보여준다.
 	// 게임 상태를 읽지 않는다 — 그 자리 픽셀을 확대할 뿐이다.
-	if (ImGui::CollapsingHeader(ICON_FK_SEARCH "  " "\xED\x99\x94\xEB\xA9\xB4 \xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0")) // "화면 돋보기"
+	if (_sherbet_settings_seg == 0)
 	{
-		if (ImGui::Checkbox("\xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0 \xEC\x82\xAC\xEC\x9A\xA9##mag", &_sherbet_mag_on)) // "돋보기 사용"
+	sherbet::begin_card("##set_mag");
+	{
+		char mag_st[160];
+		if (_sherbet_mag_picking)
+			std::snprintf(mag_st, sizeof(mag_st), "%s", "\xEC\x98\x81\xEC\x97\xAD \xEC\x9E\xA1\xEB\x8A\x94 \xEC\xA4\x91"); // "영역 잡는 중"
+		else if (_sherbet_mag_on && _sherbet_mag_active_preset >= 0 && _sherbet_mag_active_preset < static_cast<int>(_sherbet_mag_presets.size()))
+			std::snprintf(mag_st, sizeof(mag_st), "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 %.1f\xEB\xB0\xB0 \xC2\xB7 \xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B %s", // "켜짐 · N배 · 프리셋 이름"
+				sherbet::mag::clamp_zoom(_sherbet_mag_zoom), _sherbet_mag_presets[_sherbet_mag_active_preset].name.c_str());
+		else if (_sherbet_mag_on)
+			std::snprintf(mag_st, sizeof(mag_st), "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 %.1f\xEB\xB0\xB0", sherbet::mag::clamp_zoom(_sherbet_mag_zoom)); // "켜짐 · N배"
+		else
+			std::snprintf(mag_st, sizeof(mag_st), "%s", "\xEA\xBA\xBC\xEC\xA7\x90"); // "꺼짐"
+		if (card_head(ICON_FK_SEARCH "  " "\xED\x99\x94\xEB\xA9\xB4 \xEB\x8F\x8B\xEB\xB3\xB4\xEA\xB8\xB0", "##mag_on", &_sherbet_mag_on, mag_st, _sherbet_mag_on || _sherbet_mag_picking)) // "화면 돋보기"
 			modified = true;
 
 		// ⚠️ 영역은 **사용자가 직접 잡는다.** 우리가 좌표를 박으면 서버마다·해상도마다 어긋난다
@@ -5991,13 +6063,25 @@ void reshade::runtime::draw_gui_settings()
 
 		sherbet_hint("\xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xED\x95\x9C \xEA\xB3\xB3\xEC\x9D\x84 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xED\x81\xAC\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA4\x8D\xEB\x8B\x88\xEB\x8B\xA4. \xEC\xB2\xB4\xEB\xA0\xA5\xC2\xB7\xEB\xB0\xA9\xEC\x96\xB4\xEA\xB5\xAC \xEB\xA7\x89\xEB\x8C\x80\xEC\xB2\x98\xEB\xB0\x8D \xEC\x9E\x91\xEC\x95\x84\xEC\x84\x9C \xEC\x95\x88 \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94 \xEA\xB2\x83\xEC\x9D\x84 \xED\x81\xAC\xEA\xB2\x8C \xEB\x9D\x84\xEC\x9A\xB8 \xEB\x95\x8C \xEC\x93\xB0\xEC\x84\xB8\xEC\x9A\x94."); // "화면의 한 곳을 그대로 크게 보여줍니다. 체력·방어구 막대처럼 작아서 안 보이는 것을 크게 띄울 때 쓰세요."
 	}
-	ImGui::Spacing();
+	sherbet::end_card();
+	}
+
+	// SHERBET: 알림 세그먼트 — 일일 알림과 광고알리미. 창이 넓으면 카드 두 장을 나란히 둔다.
+	if (_sherbet_settings_seg == 1)
+	{
+	const bool alarm_two_col = ImGui::GetContentRegionAvail().x >= 40.0f * ImGui::GetFontSize() &&
+		ImGui::BeginTable("##set_alarm_grid", 2, ImGuiTableFlags_SizingStretchSame);
+	if (alarm_two_col)
+		ImGui::TableNextColumn();
 
 	// SHERBET: 일일 알림 — 정한 시각에 화면에 한 줄 띄운다(상시 표시 아님, 몇 초 뒤 사라진다).
 	// FiveM RP 는 알트탭이 곧 죽음이라 게임 밖 알림은 아무도 못 본다.
-	if (ImGui::CollapsingHeader(ICON_FK_BELL "  " "\xEC\x9D\xBC\xEC\x9D\xBC \xEC\x95\x8C\xEB\xA6\xBC")) // "일일 알림"
+	sherbet::begin_card("##set_alarm");
 	{
-		if (ImGui::Checkbox("\xEC\x95\x8C\xEB\xA6\xBC \xEC\x82\xAC\xEC\x9A\xA9##alarm", &_sherbet_alarm_on)) // "알림 사용"
+		char alarm_st[96];
+		std::snprintf(alarm_st, sizeof(alarm_st), "%s \xC2\xB7 \xEB\xA7\xA4\xEC\x9D\xBC %02d:%02d", // "켜짐/꺼짐 · 매일 HH:MM"
+			_sherbet_alarm_on ? "\xEC\xBC\x9C\xEC\xA7\x90" : "\xEA\xBA\xBC\xEC\xA7\x90", _sherbet_alarm_hour, _sherbet_alarm_min);
+		if (card_head(ICON_FK_BELL "  " "\xEC\x9D\xBC\xEC\x9D\xBC \xEC\x95\x8C\xEB\xA6\xBC", "##alarm_on", &_sherbet_alarm_on, alarm_st, _sherbet_alarm_on)) // "일일 알림"
 			modified = true;
 
 		ImGui::SetNextItemWidth(ImMax(90.0f, 4.0f * ImGui::GetFontSize()));
@@ -6028,15 +6112,37 @@ void reshade::runtime::draw_gui_settings()
 
 		sherbet_hint("\xEC\xA0\x95\xED\x95\x9C \xEC\x8B\x9C\xEA\xB0\x81\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD\xEC\x97\x90 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x9C\xB0\xEB\x8B\xA4\xEA\xB0\x80 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA0\xB8\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x95\x84 \xEB\x91\x94 \xEC\xA4\x91\xEC\x97\x90\xEB\x8F\x84 \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94."); // "정한 시각에 화면 위쪽에 잠시 떴다가 사라져요. 오버레이를 닫아 둔 중에도 보여요."
 	}
-	ImGui::Spacing();
+	sherbet::end_card();
+
+	if (alarm_two_col)
+		ImGui::TableNextColumn();
+	else
+		ImGui::Spacing();
 
 	// SHERBET: 광고알리미 — 광고 채팅 쿨타임마다 화면에 한 줄 띄운다(일일 알림과 같은 모양).
 	// 채팅을 대신 치지 않는다. 알려 주기만 한다.
-	if (ImGui::CollapsingHeader(ICON_FK_BULLHORN "  " "\xEA\xB4\x91\xEA\xB3\xA0\xEC\x95\x8C\xEB\xA6\xAC\xEB\xAF\xB8")) // "광고알리미"
+	sherbet::begin_card("##set_ad");
 	{
 		const double ad_now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
-		if (ImGui::Checkbox("\xEC\x95\x8C\xEB\xA6\xBC \xEC\x82\xAC\xEC\x9A\xA9##ad", &_sherbet_ad_on)) // "알림 사용"
+		// 상태 줄: "켜짐 · 2분마다 · 다음 알림까지 1:23" / "꺼짐 · 2분마다"
+		char ad_every[48];
+		const int ad_im = _sherbet_ad_interval / 60, ad_is = _sherbet_ad_interval % 60;
+		if (ad_im > 0 && ad_is > 0)
+			std::snprintf(ad_every, sizeof(ad_every), "%d\xEB\xB6\x84 %d\xEC\xB4\x88\xEB\xA7\x88\xEB\x8B\xA4", ad_im, ad_is); // "N분 N초마다"
+		else if (ad_im > 0)
+			std::snprintf(ad_every, sizeof(ad_every), "%d\xEB\xB6\x84\xEB\xA7\x88\xEB\x8B\xA4", ad_im); // "N분마다"
+		else
+			std::snprintf(ad_every, sizeof(ad_every), "%d\xEC\xB4\x88\xEB\xA7\x88\xEB\x8B\xA4", ad_is); // "N초마다"
+		char ad_st[128];
+		const int ad_left = sherbet::adalarm::seconds_left(_sherbet_ad, ad_now);
+		if (_sherbet_ad_on && ad_left >= 0)
+			std::snprintf(ad_st, sizeof(ad_st), "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 %s \xC2\xB7 \xEB\x8B\xA4\xEC\x9D\x8C \xEC\x95\x8C\xEB\xA6\xBC\xEA\xB9\x8C\xEC\xA7\x80 %d:%02d", // "켜짐 · N분마다 · 다음 알림까지 m:ss"
+				ad_every, ad_left / 60, ad_left % 60);
+		else
+			std::snprintf(ad_st, sizeof(ad_st), "%s \xC2\xB7 %s", _sherbet_ad_on ? "\xEC\xBC\x9C\xEC\xA7\x90" : "\xEA\xBA\xBC\xEC\xA7\x90", ad_every); // "켜짐/꺼짐 · N분마다"
+
+		if (card_head(ICON_FK_BULLHORN "  " "\xEA\xB4\x91\xEA\xB3\xA0\xEC\x95\x8C\xEB\xA6\xAC\xEB\xAF\xB8", "##ad_on", &_sherbet_ad_on, ad_st, _sherbet_ad_on)) // "광고알리미"
 		{
 			// 켜는 순간부터 센다. 오버레이가 닫혀 판정이 안 돈 사이에 남은 옛 값으로 바로 울리지 않게.
 			if (_sherbet_ad_on)
@@ -6076,38 +6182,20 @@ void reshade::runtime::draw_gui_settings()
 		if (sherbet::pill_button(ICON_FK_BULLHORN "  " "\xED\x85\x8C\xEC\x8A\xA4\xED\x8A\xB8##ad", false)) // "테스트"
 			_sherbet_ad.show.remaining = ImMax(1.0f, _sherbet_ad_secs);
 
+		// 광고를 막 올렸을 때 누른다 — 서버 쿨타임과 딱 맞춰진다(남은 시간은 머리줄 상태에 보인다).
 		if (_sherbet_ad_on)
 		{
-			const int ad_left = sherbet::adalarm::seconds_left(_sherbet_ad, ad_now);
-			if (ad_left >= 0)
-			{
-				ImGui::AlignTextToFramePadding();
-				ImGui::Text(ICON_FK_CLOCK "  " "\xEB\x8B\xA4\xEC\x9D\x8C \xEC\x95\x8C\xEB\xA6\xBC\xEA\xB9\x8C\xEC\xA7\x80 %d:%02d", ad_left / 60, ad_left % 60); // "다음 알림까지 m:ss"
-				ImGui::SameLine();
-			}
-			// 광고를 막 올렸을 때 누른다 — 서버 쿨타임과 딱 맞춰진다.
+			ImGui::SameLine();
 			if (sherbet::pill_button(ICON_FK_REFRESH "  " "\xEB\x8B\xA4\xEC\x8B\x9C \xEC\x84\xB8\xEA\xB8\xB0##ad", false)) // "다시 세기"
 				sherbet::adalarm::restart(_sherbet_ad, ad_now, _sherbet_ad_interval);
 		}
 
 		sherbet_hint("\xEC\xA0\x95\xED\x95\x9C \xEA\xB0\x84\xEA\xB2\xA9\xEB\xA7\x88\xEB\x8B\xA4 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD\xEC\x97\x90 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x96\xB4\xEB\x8B\xA4\xEA\xB0\x80 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA0\xB8\xEC\x9A\x94. \xEA\xB4\x91\xEA\xB3\xA0\xEB\xA5\xBC \xEC\x98\xAC\xEB\xA6\xB0 \xEC\xA7\x81\xED\x9B\x84 '\xEB\x8B\xA4\xEC\x8B\x9C \xEC\x84\xB8\xEA\xB8\xB0'\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\xBF\xA8\xED\x83\x80\xEC\x9E\x84\xEC\x97\x90 \xEB\x94\xB1 \xEB\xA7\x9E\xEC\xB6\xB0\xEC\xA0\xB8\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x95\x84 \xEB\x91\x94 \xEC\xA4\x91\xEC\x97\x90\xEB\x8F\x84 \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94."); // "정한 간격마다 화면 위쪽에 잠시 떴다가 사라져요. 광고를 올린 직후 '다시 세기'를 누르면 쿨타임에 딱 맞춰져요. 오버레이를 닫아 둔 중에도 보여요."
 	}
-	ImGui::Spacing();
+	sherbet::end_card();
 
-	// SHERBET: 잠금 화면 미리보기 — 유료 기능이 잠겼을 때의 판매 화면을 눈으로 확인하는 스위치.
-	// ⚠️ 이게 없으면 판매자는 **제일 중요한 화면을 한 번도 볼 수 없다.** sherbet::has_feature()
-	//    는 auth 가 꺼진 개발/데모 빌드에서 무조건 true 이고, 온라인 인증 빌드라도 판매자
-	//    본인은 역할을 전부 갖고 있어 언제나 열린 화면만 보게 된다.
-	// 켜면 유료 기능은 권한과 무관하게 잠긴 것으로 취급되고(판매 카드 표시 + 기록/측정 정지),
-	// 끄면 즉시 원래대로 돌아온다. 구매 내역과는 아무 관계가 없다.
-	if (ImGui::CollapsingHeader(ICON_FK_LOCK "  " "\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0")) // "잠금 화면 미리보기"
-	{
-		if (ImGui::Checkbox("\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0##lockpreview", &_sherbet_lock_preview)) // "잠금 화면 미리보기"
-			modified = true;
-		sherbet_hint("\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x96\xB4\xEB\x96\xBB\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94\xEC\xA7\x80 \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEC\x8A\xA4\xEC\x9C\x84\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94. \xEC\xBC\x9C\xEB\x8F\x84 \xEA\xB5\xAC\xEB\xA7\xA4 \xEB\x82\xB4\xEC\x97\xAD\xEC\x97\x90\xEB\x8A\x94 \xEC\x98\x81\xED\x96\xA5\xEC\x9D\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "유료 기능이 잠겨 있을 때 어떻게 보이는지 확인하는 스위치예요. 켜도 구매 내역에는 영향이 없고, 끄면 바로 원래대로 돌아옵니다."
-		if (_sherbet_lock_preview)
-			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB8\xB4 \xEA\xB2\x83\xEC\xB2\x98\xEB\x9F\xBC \xEB\xB3\xB4\xEC\x9D\xB4\xEA\xB3\xA0 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\x8F\x99\xEC\x9E\x91\xED\x95\x98\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "지금 잠금 화면 미리보기가 켜져 있어요 — 유료 기능이 잠긴 것처럼 보이고 실제로 동작하지 않습니다."
-		ImGui::Spacing();
+	if (alarm_two_col)
+		ImGui::EndTable();
 	}
 
 	// SHERBET: 커스텀 배경 이미지 — 오버레이 배경을 내 사진으로.
@@ -6116,7 +6204,7 @@ void reshade::runtime::draw_gui_settings()
 	//    (sherbet_paid.hpp 머리말: "안 보이는 기능은 한 개도 안 팔린다.")
 	//    이제 헤더는 **언제나** 보이고, 안쪽이 진열대냐 진짜 UI 냐만 갈린다 —
 	//    스프레이/최적화 탭이 이미 쓰던 방식과 같다.
-	if (ImGui::CollapsingHeader("\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD")) // "커스텀 배경"
+	if (_sherbet_settings_seg == 2) // 꾸미기
 	{
 	if (!sherbet_feature_unlocked("custompicture"))
 	{
@@ -6126,10 +6214,20 @@ void reshade::runtime::draw_gui_settings()
 	}
 	else
 	{
+		sherbet::begin_card("##set_bg");
 		bool bg_changed = false;
-		bg_changed |= ImGui::Checkbox("\xEB\xB0\xB0\xEA\xB2\xBD \xEC\xBC\x9C\xEA\xB8\xB0", &_sherbet_bg_on); // "배경 켜기"
-		if (bg_changed)
+		char bg_st[160];
+		if (!_sherbet_bg_on)
+			std::snprintf(bg_st, sizeof(bg_st), "%s", "\xEA\xBA\xBC\xEC\xA7\x90"); // "꺼짐"
+		else if (_sherbet_bg_file.empty())
+			std::snprintf(bg_st, sizeof(bg_st), "%s", "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 \xEC\x82\xAC\xEC\xA7\x84\xEC\x9D\x84 \xEA\xB3\xA8\xEB\x9D\xBC \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"); // "켜짐 · 사진을 골라 주세요"
+		else
+			std::snprintf(bg_st, sizeof(bg_st), "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 %s", _sherbet_bg_file.c_str()); // "켜짐 · 파일명"
+		if (card_head(ICON_FK_PICTURE "  " "\xEC\xBB\xA4\xEC\x8A\xA4\xED\x85\x80 \xEB\xB0\xB0\xEA\xB2\xBD", "##bg_on", &_sherbet_bg_on, bg_st, _sherbet_bg_on)) // "커스텀 배경"
+		{
 			_sherbet_bg_dirty = true;
+			bg_changed = true;
+		}
 
 		const std::filesystem::path bg_dir = _config_path.parent_path() / L"Sherbet-Backgrounds";
 		static std::vector<std::string> bg_files;
@@ -6181,9 +6279,16 @@ void reshade::runtime::draw_gui_settings()
 
 		if (bg_changed)
 			modified = true;
-		ImGui::Spacing();
+		sherbet::end_card();
 	}
 	}
+
+	// SHERBET: 기본 설정 세그먼트 — 폴더 열기 + 리쉐이드 원래 설정 + 잠금 화면 미리보기(판매자 확인용).
+	if (_sherbet_settings_seg == 3)
+	{
+	if (ImGui::Button(ICON_FK_FOLDER " " + _("Open base folder in explorer"), ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+		utils::open_explorer(_config_path);
+	ImGui::Spacing();
 
 	if (ImGui::CollapsingHeader(_("General"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -6635,6 +6740,26 @@ void reshade::runtime::draw_gui_settings()
 			modified |= ImGui::Checkbox("OSD \xEA\xB0\x80\xEB\xA1\x9C\xEB\xA1\x9C \xEB\xB0\xB0\xEC\xB9\x98", &_sherbet_osd_horizontal); // "OSD 가로로 배치"
 			ImGui::SetItemTooltip("\xEC\x8B\x9C\xEA\xB3\x84\xC2\xB7" "FPS" "\xC2\xB7\xED\x94\x84\xEB\xA0\x88\xEC\x9E\x84\xED\x83\x80\xEC\x9E\x84\xC2\xB7\xED\x94\x84\xEB\xA6\xAC\xEC\x85\x8B\xEB\xAA\x85\xEC\x9D\x84 \xEC\x84\xB8\xEB\xA1\x9C\xEA\xB0\x80 \xEC\x95\x84\xEB\x8B\x8C \xEA\xB0\x80\xEB\xA1\x9C \xED\x95\x9C \xEC\xA4\x84\xEB\xA1\x9C \xED\x91\x9C\xEC\x8B\x9C"); // 시계·FPS·프레임타임·프리셋명을 세로가 아닌 가로 한 줄로 표시
 		}
+	}
+
+
+	// SHERBET: 잠금 화면 미리보기 — 유료 기능이 잠겼을 때의 판매 화면을 눈으로 확인하는 스위치.
+	// ⚠️ 이게 없으면 판매자는 **제일 중요한 화면을 한 번도 볼 수 없다.** sherbet::has_feature()
+	//    는 auth 가 꺼진 개발/데모 빌드에서 무조건 true 이고, 온라인 인증 빌드라도 판매자
+	//    본인은 역할을 전부 갖고 있어 언제나 열린 화면만 보게 된다.
+	// 켜면 유료 기능은 권한과 무관하게 잠긴 것으로 취급되고(판매 카드 표시 + 기록/측정 정지),
+	// 끄면 즉시 원래대로 돌아온다. 구매 내역과는 아무 관계가 없다.
+	ImGui::Spacing();
+	sherbet::begin_card("##set_lockpreview");
+	{
+		if (card_head(ICON_FK_LOCK "  " "\xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0", "##lockpreview_on", &_sherbet_lock_preview, // "잠금 화면 미리보기"
+				_sherbet_lock_preview ? "\xEC\xBC\x9C\xEC\xA7\x90" : "\xEA\xBA\xBC\xEC\xA7\x90 \xC2\xB7 \xED\x8C\x90\xEB\xA7\xA4\xEC\x9E\x90 \xED\x99\x95\xEC\x9D\xB8\xEC\x9A\xA9", _sherbet_lock_preview)) // "켜짐" / "꺼짐 · 판매자 확인용"
+			modified = true;
+		sherbet_hint("\xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB2\xA8 \xEC\x9E\x88\xEC\x9D\x84 \xEB\x95\x8C \xEC\x96\xB4\xEB\x96\xBB\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94\xEC\xA7\x80 \xED\x99\x95\xEC\x9D\xB8\xED\x95\x98\xEB\x8A\x94 \xEC\x8A\xA4\xEC\x9C\x84\xEC\xB9\x98\xEC\x98\x88\xEC\x9A\x94. \xEC\xBC\x9C\xEB\x8F\x84 \xEA\xB5\xAC\xEB\xA7\xA4 \xEB\x82\xB4\xEC\x97\xAD\xEC\x97\x90\xEB\x8A\x94 \xEC\x98\x81\xED\x96\xA5\xEC\x9D\xB4 \xEC\x97\x86\xEA\xB3\xA0, \xEB\x81\x84\xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x9B\x90\xEB\x9E\x98\xEB\x8C\x80\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x98\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "유료 기능이 잠겨 있을 때 어떻게 보이는지 확인하는 스위치예요. 켜도 구매 내역에는 영향이 없고, 끄면 바로 원래대로 돌아옵니다."
+		if (_sherbet_lock_preview)
+			ImGui::TextColored(sherbet::status_color(sherbet::status::warn), "%s", ICON_FK_WARNING "  \xEC\xA7\x80\xEA\xB8\x88 \xEC\x9E\xA0\xEA\xB8\x88 \xED\x99\x94\xEB\xA9\xB4 \xEB\xAF\xB8\xEB\xA6\xAC\xEB\xB3\xB4\xEA\xB8\xB0\xEA\xB0\x80 \xEC\xBC\x9C\xEC\xA0\xB8 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9C\xA0\xEB\xA3\x8C \xEA\xB8\xB0\xEB\x8A\xA5\xEC\x9D\xB4 \xEC\x9E\xA0\xEA\xB8\xB4 \xEA\xB2\x83\xEC\xB2\x98\xEB\x9F\xBC \xEB\xB3\xB4\xEC\x9D\xB4\xEA\xB3\xA0 \xEC\x8B\xA4\xEC\xA0\x9C\xEB\xA1\x9C \xEB\x8F\x99\xEC\x9E\x91\xED\x95\x98\xEC\xA7\x80 \xEC\x95\x8A\xEC\x8A\xB5\xEB\x8B\x88\xEB\x8B\xA4."); // "지금 잠금 화면 미리보기가 켜져 있어요 — 유료 기능이 잠긴 것처럼 보이고 실제로 동작하지 않습니다."
+	}
+	sherbet::end_card();
 	}
 
 	if (modified)
