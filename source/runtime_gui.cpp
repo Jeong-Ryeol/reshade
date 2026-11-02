@@ -1574,19 +1574,22 @@ void reshade::runtime::draw_gui()
 		const sherbet::theme &ad_t = sherbet::active_theme();
 		const ImGuiViewport *const ad_vp = ImGui::GetMainViewport();
 		ImDrawList *const ad = ImGui::GetForegroundDrawList();
-		const float ad_sz = _imgui_context->Style.FontSizeBase * 1.5f;
+		// 일일 알림(×1.5)의 4배. 게임 중에 한눈에 보여야 한다(사용자 요청).
+		// 상수 배율이라 동적 아틀라스가 매 프레임 다시 굽지 않는다.
+		const float ad_sz = _imgui_context->Style.FontSizeBase * 6.0f;
 		// 광고 문구는 길 수 있다 — 화면 폭의 70% 에서 줄을 바꾼다.
 		const float ad_wrap = ad_vp->Size.x * 0.7f;
 		const ImVec2 ad_ts = _sherbet_title_font->CalcTextSizeA(ad_sz, FLT_MAX, ad_wrap, ad_text.c_str());
-		const float ad_pad = 18.0f;
-		// 일일 알림과 같은 자리. 둘이 동시에 떠 있으면 그 아래로 내려 겹치지 않게 한다.
+		const float ad_pad = ad_sz * 0.5f;
+		// 일일 알림과 같은 자리. 둘이 동시에 떠 있으면 그 상자 아래로 내려 겹치지 않게 한다
+		// (일일 알림 상자 높이 = 그쪽 글자 한 줄 + 위아래 여백 18).
 		float ad_y = ad_vp->Pos.y + ad_vp->Size.y * 0.12f;
 		if (_sherbet_alarm.remaining > 0.0f)
-			ad_y += ad_sz * 1.2f + ad_pad * 1.5f;
+			ad_y += _imgui_context->Style.FontSizeBase * 1.5f * 1.3f + 18.0f + 12.0f + ad_pad * 0.5f;
 		const ImVec2 ad_p(ad_vp->Pos.x + (ad_vp->Size.x - ad_ts.x) * 0.5f, ad_y);
 		ad->AddRectFilled(ImVec2(ad_p.x - ad_pad, ad_p.y - ad_pad * 0.5f),
 			ImVec2(ad_p.x + ad_ts.x + ad_pad, ad_p.y + ad_ts.y + ad_pad * 0.5f),
-			sherbet::with_alpha(ad_t.panel, static_cast<int>(220 * ad_a)), 14.0f);
+			sherbet::with_alpha(ad_t.panel, static_cast<int>(220 * ad_a)), ad_sz * 0.4f);
 		ad->AddText(_sherbet_title_font, ad_sz, ad_p,
 			sherbet::with_alpha(ad_t.text, static_cast<int>(255 * ad_a)), ad_text.c_str(), nullptr, ad_wrap);
 	}
