@@ -397,6 +397,10 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.get("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.get("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
+	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
+	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
+	config.get("OVERLAY", "SherbetAdText", _sherbet_ad_text);
 	config.get("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
 	config.get("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
 	config.get("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
@@ -449,6 +453,8 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	}
 	// 손으로 고친 ini 가 23:99 여도 '절대 안 울리는' 상태가 되지 않게 여기서 자른다.
 	sherbet::alarm::clamp_time(_sherbet_alarm_hour, _sherbet_alarm_min);
+	// 광고알리미 간격이 0 이면 매 프레임 울린다 — 여기서 자른다(판정 쪽에서도 한 번 더 자른다).
+	_sherbet_ad_interval = sherbet::adalarm::clamp_interval(_sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetSprayScale", _sherbet_spray_scale);
 	config.get("OVERLAY", "SherbetSprayGapMs", _sherbet_spray_gap_ms);
 	// 손으로 고친 ini 방어 — 배율 0 이면 궤적이 한 점으로 뭉치고, 간격이 0 이면 매 프레임
@@ -669,6 +675,10 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.set("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.set("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.set("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
+	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
+	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
+	config.set("OVERLAY", "SherbetAdText", _sherbet_ad_text);
 	config.set("OVERLAY", "SherbetMagOn", _sherbet_mag_on);
 	config.set("OVERLAY", "SherbetMagZoom", _sherbet_mag_zoom);
 	config.set("OVERLAY", "SherbetMagOpacity", _sherbet_mag_opacity);
@@ -1215,6 +1225,8 @@ void reshade::runtime::draw_gui()
 		// 아무 일도 안 일어난다(1.2.0 스프레이 트레이너에서 실제로 겪은 사고와 같은 함정).
 		// 옵션이 꺼져 있으면(기본) 이 조건은 예전과 똑같이 참이 되어 프레임 비용이 0 이다.
 		&& !_sherbet_alarm_on
+		// SHERBET: 광고알리미도 같은 이유 — 울려야 하는 순간은 오버레이가 닫힌 게임 중이다.
+		&& !_sherbet_ad_on
 		// SHERBET: HUD 돋보기도 오버레이가 닫힌 채로 그려야 한다 — 게임하면서 보는 것이 목적이다.
 		// ⚠️ **영역 잡는 중**도 반드시 면제한다. 잡을 땐 오버레이를 닫아야 HUD 가 보이는데,
 		//    돋보기가 아직 꺼져 있는 상태(처음 잡는 경우)라 _sherbet_mag_on 만으로는 여기서
@@ -1544,6 +1556,39 @@ void reshade::runtime::draw_gui()
 			sherbet::with_alpha(al_t.panel, static_cast<int>(220 * al_a)), 14.0f);
 		al->AddText(_sherbet_title_font, al_sz, al_p,
 			sherbet::with_alpha(al_t.text, static_cast<int>(255 * al_a)), al_text);
+	}
+
+	// SHERBET: 광고알리미 — 정한 간격마다 몇 초 떴다 사라진다. 일일 알림과 같은 모양·자리.
+	// 판정은 double 비교 한 번이라 매 프레임 돌려도 된다(시각 변환 없음, 단조 시계).
+	if (sherbet::adalarm::should_fire(_sherbet_ad,
+			std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+			_sherbet_ad_interval, _sherbet_ad_on))
+		_sherbet_ad.show.remaining = ImMax(1.0f, _sherbet_ad_secs); // 여기서만 켜진다(테스트 버튼 제외)
+	if (sherbet::alarm::tick_visible(_sherbet_ad.show, imgui_io.DeltaTime))
+	{
+		static const char *const kAdDefault =
+			"\xEA\xB4\x91\xEA\xB3\xA0 \xEC\xB1\x84\xED\x8C\x85\xEC\x9D\x84 \xEC\x98\xAC\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94!"; // "광고 채팅을 올려 주세요!"
+		const std::string ad_text = std::string(ICON_FK_BULLHORN "  ") +
+			(_sherbet_ad_text.empty() ? kAdDefault : _sherbet_ad_text.c_str());
+		const float ad_a = sherbet::alarm::fade_alpha(_sherbet_ad.show);
+		const sherbet::theme &ad_t = sherbet::active_theme();
+		const ImGuiViewport *const ad_vp = ImGui::GetMainViewport();
+		ImDrawList *const ad = ImGui::GetForegroundDrawList();
+		const float ad_sz = _imgui_context->Style.FontSizeBase * 1.5f;
+		// 광고 문구는 길 수 있다 — 화면 폭의 70% 에서 줄을 바꾼다.
+		const float ad_wrap = ad_vp->Size.x * 0.7f;
+		const ImVec2 ad_ts = _sherbet_title_font->CalcTextSizeA(ad_sz, FLT_MAX, ad_wrap, ad_text.c_str());
+		const float ad_pad = 18.0f;
+		// 일일 알림과 같은 자리. 둘이 동시에 떠 있으면 그 아래로 내려 겹치지 않게 한다.
+		float ad_y = ad_vp->Pos.y + ad_vp->Size.y * 0.12f;
+		if (_sherbet_alarm.remaining > 0.0f)
+			ad_y += ad_sz * 1.2f + ad_pad * 1.5f;
+		const ImVec2 ad_p(ad_vp->Pos.x + (ad_vp->Size.x - ad_ts.x) * 0.5f, ad_y);
+		ad->AddRectFilled(ImVec2(ad_p.x - ad_pad, ad_p.y - ad_pad * 0.5f),
+			ImVec2(ad_p.x + ad_ts.x + ad_pad, ad_p.y + ad_ts.y + ad_pad * 0.5f),
+			sherbet::with_alpha(ad_t.panel, static_cast<int>(220 * ad_a)), 14.0f);
+		ad->AddText(_sherbet_title_font, ad_sz, ad_p,
+			sherbet::with_alpha(ad_t.text, static_cast<int>(255 * ad_a)), ad_text.c_str(), nullptr, ad_wrap);
 	}
 
 	// SHERBET: HUD 돋보기 영역 잡기 — 화면 위에서 직접 드래그해 사각형을 정한다.
@@ -5979,6 +6024,70 @@ void reshade::runtime::draw_gui_settings()
 			_sherbet_alarm.remaining = ImMax(1.0f, _sherbet_alarm_secs);
 
 		sherbet_hint("\xEC\xA0\x95\xED\x95\x9C \xEC\x8B\x9C\xEA\xB0\x81\xEC\x97\x90 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD\xEC\x97\x90 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x9C\xB0\xEB\x8B\xA4\xEA\xB0\x80 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA0\xB8\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x95\x84 \xEB\x91\x94 \xEC\xA4\x91\xEC\x97\x90\xEB\x8F\x84 \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94."); // "정한 시각에 화면 위쪽에 잠시 떴다가 사라져요. 오버레이를 닫아 둔 중에도 보여요."
+	}
+	ImGui::Spacing();
+
+	// SHERBET: 광고알리미 — 광고 채팅 쿨타임마다 화면에 한 줄 띄운다(일일 알림과 같은 모양).
+	// 채팅을 대신 치지 않는다. 알려 주기만 한다.
+	if (ImGui::CollapsingHeader(ICON_FK_BULLHORN "  " "\xEA\xB4\x91\xEA\xB3\xA0\xEC\x95\x8C\xEB\xA6\xAC\xEB\xAF\xB8")) // "광고알리미"
+	{
+		const double ad_now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
+		if (ImGui::Checkbox("\xEC\x95\x8C\xEB\xA6\xBC \xEC\x82\xAC\xEC\x9A\xA9##ad", &_sherbet_ad_on)) // "알림 사용"
+		{
+			// 켜는 순간부터 센다. 오버레이가 닫혀 판정이 안 돈 사이에 남은 옛 값으로 바로 울리지 않게.
+			if (_sherbet_ad_on)
+				sherbet::adalarm::restart(_sherbet_ad, ad_now, _sherbet_ad_interval);
+			modified = true;
+		}
+
+		// 간격 — 분과 초로 나눠 고른다. 바꾸면 지금부터 새 간격으로 다시 센다.
+		int ad_m = _sherbet_ad_interval / 60, ad_s = _sherbet_ad_interval % 60;
+		bool ad_changed = false;
+		ImGui::SetNextItemWidth(ImMax(90.0f, 4.0f * ImGui::GetFontSize()));
+		ad_changed |= ImGui::DragInt("##adm", &ad_m, 0.1f, 0, 60, "%d\xEB\xB6\x84"); // "..분"
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(ImMax(90.0f, 4.0f * ImGui::GetFontSize()));
+		ad_changed |= ImGui::DragInt("##ads", &ad_s, 0.2f, 0, 59, "%02d\xEC\xB4\x88"); // "..초"
+		if (ad_changed)
+		{
+			_sherbet_ad_interval = sherbet::adalarm::clamp_interval(ImClamp(ad_m, 0, 60) * 60 + ImClamp(ad_s, 0, 59));
+			if (_sherbet_ad_on)
+				sherbet::adalarm::restart(_sherbet_ad, ad_now, _sherbet_ad_interval);
+			modified = true;
+		}
+
+		ImGui::SetNextItemWidth(ImMax(220.0f, 9.0f * ImGui::GetFontSize()));
+		char ad_buf[256];
+		std::snprintf(ad_buf, sizeof(ad_buf), "%s", _sherbet_ad_text.c_str());
+		if (ImGui::InputTextWithHint("##adtext",
+				"\xEA\xB4\x91\xEA\xB3\xA0 \xEC\xB1\x84\xED\x8C\x85\xEC\x9D\x84 \xEC\x98\xAC\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94!", // 기본 문구를 힌트로
+				ad_buf, sizeof(ad_buf)))
+		{
+			_sherbet_ad_text = ad_buf;
+			modified = true;
+		}
+
+		// 테스트 — 간격을 기다리지 않고 모양을 본다. 실제 발화와 같은 길(show.remaining)로 띄운다.
+		ImGui::SameLine();
+		if (sherbet::pill_button(ICON_FK_BULLHORN "  " "\xED\x85\x8C\xEC\x8A\xA4\xED\x8A\xB8##ad", false)) // "테스트"
+			_sherbet_ad.show.remaining = ImMax(1.0f, _sherbet_ad_secs);
+
+		if (_sherbet_ad_on)
+		{
+			const int ad_left = sherbet::adalarm::seconds_left(_sherbet_ad, ad_now);
+			if (ad_left >= 0)
+			{
+				ImGui::AlignTextToFramePadding();
+				ImGui::Text(ICON_FK_CLOCK "  " "\xEB\x8B\xA4\xEC\x9D\x8C \xEC\x95\x8C\xEB\xA6\xBC\xEA\xB9\x8C\xEC\xA7\x80 %d:%02d", ad_left / 60, ad_left % 60); // "다음 알림까지 m:ss"
+				ImGui::SameLine();
+			}
+			// 광고를 막 올렸을 때 누른다 — 서버 쿨타임과 딱 맞춰진다.
+			if (sherbet::pill_button(ICON_FK_REFRESH "  " "\xEB\x8B\xA4\xEC\x8B\x9C \xEC\x84\xB8\xEA\xB8\xB0##ad", false)) // "다시 세기"
+				sherbet::adalarm::restart(_sherbet_ad, ad_now, _sherbet_ad_interval);
+		}
+
+		sherbet_hint("\xEC\xA0\x95\xED\x95\x9C \xEA\xB0\x84\xEA\xB2\xA9\xEB\xA7\x88\xEB\x8B\xA4 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD\xEC\x97\x90 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x96\xB4\xEB\x8B\xA4\xEA\xB0\x80 \xEC\x82\xAC\xEB\x9D\xBC\xEC\xA0\xB8\xEC\x9A\x94. \xEA\xB4\x91\xEA\xB3\xA0\xEB\xA5\xBC \xEC\x98\xAC\xEB\xA6\xB0 \xEC\xA7\x81\xED\x9B\x84 '\xEB\x8B\xA4\xEC\x8B\x9C \xEC\x84\xB8\xEA\xB8\xB0'\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\xBF\xA8\xED\x83\x80\xEC\x9E\x84\xEC\x97\x90 \xEB\x94\xB1 \xEB\xA7\x9E\xEC\xB6\xB0\xEC\xA0\xB8\xEC\x9A\x94. \xEC\x98\xA4\xEB\xB2\x84\xEB\xA0\x88\xEC\x9D\xB4\xEB\xA5\xBC \xEB\x8B\xAB\xEC\x95\x84 \xEB\x91\x94 \xEC\xA4\x91\xEC\x97\x90\xEB\x8F\x84 \xEB\xB3\xB4\xEC\x97\xAC\xEC\x9A\x94."); // "정한 간격마다 화면 위쪽에 잠시 떴다가 사라져요. 광고를 올린 직후 '다시 세기'를 누르면 쿨타임에 딱 맞춰져요. 오버레이를 닫아 둔 중에도 보여요."
 	}
 	ImGui::Spacing();
 

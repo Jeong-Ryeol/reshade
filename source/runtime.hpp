@@ -10,6 +10,7 @@
 #include "imgui_code_editor.hpp"
 #include "sherbet_auth.hpp"
 #include "sherbet_alarm.hpp"
+#include "sherbet_adalarm.hpp"
 #include "sherbet_magnifier.hpp"
 #include "sherbet_spray.hpp"
 #include "sherbet_aim.hpp"
@@ -482,6 +483,14 @@ namespace reshade
 		float _sherbet_alarm_secs = 8.0f;      // 화면에 띄워 두는 시간
 		std::string _sherbet_alarm_text;       // 비우면 기본 문구
 		sherbet::alarm::state _sherbet_alarm;  // 세션 상태(디스크에 안 남긴다)
+
+		// SHERBET: 광고알리미 — 광고 채팅 쿨타임(기본 2분)마다 화면에 한 줄 띄운다. 일일 알림과 같은 모양.
+		// ⚠️ _sherbet_ad_on 도 draw_gui() 의 early-out 조건에 들어간다(일일 알림과 같은 이유).
+		bool _sherbet_ad_on = false;
+		int  _sherbet_ad_interval = sherbet::adalarm::kDefaultInterval; // 초
+		float _sherbet_ad_secs = 6.0f;         // 화면에 띄워 두는 시간
+		std::string _sherbet_ad_text;          // 비우면 기본 문구
+		sherbet::adalarm::state _sherbet_ad;   // 세션 상태(디스크에 안 남긴다)
 
 		// SHERBET: HUD 돋보기 — 화면의 한 사각형(체력·방어구 막대 등)을 확대해 크게 그린다.
 		// **게임 상태를 읽지 않는다.** 픽셀을 확대할 뿐이다(메모리 접근 0, 상태 판정 0).
