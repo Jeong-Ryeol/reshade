@@ -2103,7 +2103,8 @@ void reshade::runtime::draw_gui()
 		ImVec2 fps_window_size(200, 0);
 
 		// Get last calculated window size (because of 'ImGuiWindowFlags_AlwaysAutoResize')
-		if (ImGuiWindow *const fps_window = ImGui::FindWindowByName("OSD"))
+		ImGuiWindow *const fps_window = ImGui::FindWindowByName("OSD");
+		if (fps_window != nullptr)
 		{
 			fps_window_size  = fps_window->Size;
 			const int osd_lines = _sherbet_osd_horizontal
@@ -2128,11 +2129,14 @@ void reshade::runtime::draw_gui()
 			ImGuiWindowFlags_AlwaysAutoResize;
 		if (!_show_overlay)
 			osd_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
-		// 오버레이 열림 시엔 SetNextWindowPos를 강제하지 않아 사용자가 드래그로 옮길 수 있게 함
-		if (!_show_overlay)
+		// SHERBET: 위치는 **사용자가 OSD 를 끌고 있을 때만** 창에서 읽어 저장하고, 그 밖엔 항상
+		// 저장값으로 놓는다. 예전엔 메뉴가 열리면 창 위치를 매 프레임 비율로 되돌려 저장했는데,
+		// 배치(추정 높이)와 저장(실제 높이)의 크기가 달라 Home 을 누를 때마다 위로 기어 올라갔다.
+		// 크기를 맞춰도 apply_style() 이 첫 메뉴 열림에야 패딩을 바꿔 세션마다 조금씩 밀린다 —
+		// 끌지 않은 프레임엔 저장 자체를 안 하는 게 유일하게 드리프트가 없는 방법이다.
+		const bool osd_dragging = _show_overlay && fps_window != nullptr && _imgui_context->MovingWindow == fps_window;
+		if (!osd_dragging)
 			ImGui::SetNextWindowPos(fps_window_pos);
-		else
-			ImGui::SetNextWindowPos(fps_window_pos, ImGuiCond_Appearing);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(_fps_col[0], _fps_col[1], _fps_col[2], _fps_col[3]));
 		ImGui::Begin("OSD", nullptr, osd_flags);
 
@@ -2206,10 +2210,12 @@ void reshade::runtime::draw_gui()
 
 		ImGui::PopFont();
 
-		if (_show_overlay)
+		if (osd_dragging)
 		{
+			// ⚠️ 비율로 되돌릴 때도 **배치에 쓴 fps_window_size** 로 나눈다. 실제 창 크기(GetWindowSize)로
+			//    나누면 배치 쪽 추정 높이(13px 큼)와 어긋나 놓는 순간 튄다.
 			const ImVec2 wp = ImGui::GetWindowPos();
-			const ImVec2 ws = ImGui::GetWindowSize();
+			const ImVec2 ws = fps_window_size;
 			const float nx = (imgui_io.DisplaySize.x - ws.x) > 1.0f ? wp.x / (imgui_io.DisplaySize.x - ws.x) : 0.0f;
 			const float ny = (imgui_io.DisplaySize.y - ws.y) > 1.0f ? wp.y / (imgui_io.DisplaySize.y - ws.y) : 0.0f;
 			const float cnx = ImClamp(nx, 0.0f, 1.0f);
