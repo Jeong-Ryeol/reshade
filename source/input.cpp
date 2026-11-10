@@ -37,6 +37,10 @@ bool reshade::input::is_key_released(unsigned int keycode) const
 	assert(keycode < std::size(_keys));
 	return keycode > 0 && keycode < std::size(_keys) && (_keys[keycode] & 0x88) == 0x08;
 }
+bool reshade::input::sherbet_is_key_tapped(unsigned int keycode) const
+{
+	return is_key_released(keycode) && (_last_keys[keycode] & 0x80) == 0;
+}
 bool reshade::input::is_key_repeated(unsigned int keycode) const
 {
 	assert(keycode < std::size(_keys));

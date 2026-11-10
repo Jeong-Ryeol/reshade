@@ -1244,7 +1244,9 @@ void reshade::runtime::draw_gui()
 				_sherbet_side_focus = true;
 				_sherbet_side_query[0] = '\0';
 				_sherbet_side_sel = 0;
-				_input->sherbet_ime_request_korean(); // 윈도우가 영문이어도 한글로 친다(닫으면 원래대로)
+				// 윈도우가 영문이어도 한글로 친다(닫으면 원래대로). 렉카만 있으면 검색칸이 없어 바꿀 필요가 없다.
+				if (sherbet_feature_unlocked("sidenotice_police") || sherbet_feature_unlocked("sidenotice_sec"))
+					_input->sherbet_ime_request_korean();
 			}
 		}
 		if (_sherbet_side_close) // 창 안에서 고른 뒤(올리기·복사·Esc) 한 프레임 늦게 닫는다
@@ -1517,8 +1519,15 @@ void reshade::runtime::draw_gui()
 		// 확정 글자는 갈 곳 없이 사라졌다(사이드공지 '141정렬' + Enter → '141정' 실측). 실제로도 글자가 먼저 왔다.
 		for (ImWchar16 c : _input->text_input())
 			imgui_io.AddInputCharacterUTF16(c);
+		// SHERBET: 한 프레임 사이에 눌렀다 뗀 키도 눌림을 먼저 넘긴다. 지금 상태(떼어짐)만 넘기면 눌림이 통째로
+		// 사라진다 — FPS 가 낮을 때 Enter 를 짧게 치면 사이드공지가 안 올라갔다(구매자 제보). ImGui 큐가
+		// 눌림·뗌을 다음 프레임으로 나눠 처리하므로 입력칸은 Enter 를 한 번 본다.
 		for (const std::pair<ImGuiKey, unsigned int> &mapping : key_mappings)
+		{
+			if (_input->sherbet_is_key_tapped(mapping.second))
+				imgui_io.AddKeyEvent(mapping.first, true);
 			imgui_io.AddKeyEvent(mapping.first, _input->is_key_down(mapping.second));
+		}
 		for (ImGuiMouseButton i = 0; i < ImGuiMouseButton_COUNT; i++)
 			imgui_io.AddMouseButtonEvent(i, _input->is_mouse_button_down(i));
 	}
@@ -6653,21 +6662,32 @@ void reshade::runtime::sherbet_draw_side_quick()
 		}
 		return 0;
 	};
-	if (_sherbet_side_focus)
-	{
-		ImGui::SetKeyboardFocusHere();
-		_sherbet_side_focus = false;
-	}
-	ImGui::SetNextItemWidth(-FLT_MIN);
+	// 렉카만 있으면(목록형 그룹만) 검색칸이 없다 — 열면 목록뿐, ↑↓ 로 고르고 Enter 또는 클릭.
+	// 단축키를 L 같은 글자 키로 잡으면 그 글자가 검색칸에 찍혀 목록이 검색 결과로 바뀌었다(정렬 실측).
+	const bool no_search = has_listed && !has_other;
 	const int sel_before = _sherbet_side_sel;
-	// 첫 글자를 조합하는 동안엔 칸이 아직 비어 있어 안내 문구가 조합 글자 밑에 겹쳐 보인다 — 그동안은 숨긴다.
-	const bool composing = _input != nullptr && !_input->text_composition().empty();
-	const char *const query_hint = has_listed && !has_other
-		? "\xEB\xA0\x89\xEC\xB9\xB4 \xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEB\xAA\x87 \xEA\xB8\x80\xEC\x9E\x90\xEB\xA1\x9C \xEC\xB0\xBE\xEA\xB8\xB0" // "렉카 공지 · 몇 글자로 찾기"
-		: "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEC\x9E\xA5\xEC\x86\x8C \xEC\x9E\x85\xEB\xA0\xA5"; // "사이드공지 · 장소 입력"
-	const bool enter = ImGui::InputTextWithHint("##side_q", composing ? "" : query_hint, _sherbet_side_query, sizeof(_sherbet_side_query),
-		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCharFilter, input_cb, this);
+	bool enter = false;
+	if (no_search)
 	{
+		_sherbet_side_query[0] = '\0';
+		_sherbet_side_focus = false;
+		if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) --_sherbet_side_sel;
+		if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) ++_sherbet_side_sel;
+		enter = ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+	}
+	else
+	{
+		if (_sherbet_side_focus)
+		{
+			ImGui::SetKeyboardFocusHere();
+			_sherbet_side_focus = false;
+		}
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		// 첫 글자를 조합하는 동안엔 칸이 아직 비어 있어 안내 문구가 조합 글자 밑에 겹쳐 보인다 — 그동안은 숨긴다.
+		const bool composing = _input != nullptr && !_input->text_composition().empty();
+		const char *const query_hint = "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEC\x9E\xA5\xEC\x86\x8C \xEC\x9E\x85\xEB\xA0\xA5"; // "사이드공지 · 장소 입력"
+		enter = ImGui::InputTextWithHint("##side_q", composing ? "" : query_hint, _sherbet_side_query, sizeof(_sherbet_side_query),
+			ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCharFilter, input_cb, this);
 		// 영문 키가 섞여 있으면 한글 자판으로 읽은 모양을 칸 안 오른쪽에 — "→ 빈1"
 		const std::string composed = sherbet::sidenotice::compose_utf8(_sherbet_side_query);
 		if (composed != _sherbet_side_query)
@@ -6681,9 +6701,9 @@ void reshade::runtime::sherbet_draw_side_quick()
 		}
 	}
 
-	// 검색어 = 입력칸 + 한글 입력기가 지금 조합 중인 글자(치는 즉시 결과가 바뀌게).
+	// 검색어 = 입력칸 + 한글 입력기가 지금 조합 중인 글자(치는 즉시 결과가 바뀌게). 검색칸이 없으면 늘 빈칸 = 목록.
 	std::string query = _sherbet_side_query;
-	if (_input != nullptr && !_input->text_composition().empty())
+	if (!no_search && _input != nullptr && !_input->text_composition().empty())
 	{
 		const std::wstring &wc = _input->text_composition();
 		std::string comp(static_cast<size_t>(WideCharToMultiByte(CP_UTF8, 0, wc.c_str(), static_cast<int>(wc.size()), nullptr, 0, nullptr, nullptr)), '\0');

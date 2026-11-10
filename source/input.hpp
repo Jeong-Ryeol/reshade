@@ -136,6 +136,8 @@ namespace reshade
 		bool is_key_pressed(unsigned int keycode, bool ctrl, bool shift, bool alt, bool force_modifiers = false) const;
 		bool is_key_pressed(const unsigned int key[4], bool force_modifiers = false) const { return is_key_pressed(key[0], key[1] != 0, key[2] != 0, key[3] != 0, force_modifiers); }
 		bool is_key_released(unsigned int keycode) const;
+		// SHERBET: 지난 프레임엔 안 눌려 있었는데 이번 프레임 사이에 눌렀다 떼서 지금은 떼어진 키(FPS 가 낮을 때 짧게 탁 친 키).
+		bool sherbet_is_key_tapped(unsigned int keycode) const;
 		bool is_key_repeated(unsigned int keycode) const;
 		bool is_any_key_down() const;
 		bool is_any_key_pressed() const;
