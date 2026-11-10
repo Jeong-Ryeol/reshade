@@ -1201,6 +1201,11 @@ void reshade::runtime::draw_gui()
 			_sherbet_ime_was_fg = ime_fg;
 		}
 
+		// SHERBET: /content/me(산 기능·사이드공지 문장·테마)를 **early-out 위에서** 반영한다. 메뉴 그리는 곳에만 있으면
+		// 게임을 켜고 메뉴를 한 번 열기 전까진 산 기능이 전부 잠긴 것으로 보여 사이드공지 단축키가 안 먹었다(정렬 실측).
+		// 시작 때 읽은 캐시도, 시작 verify 뒤 페치도 도착하는 대로 바로 들어간다. ImGui 를 안 쓰는 갱신이라 컨텍스트 무관.
+		{ std::string content; if (_sherbet_auth.take_content(content)) sherbet::apply_content(content); }
+
 		// SHERBET: 사이드공지 — 채팅으로 올리기 시간표. 메뉴가 **닫힌 뒤에** 키를 보내야 하므로 early-out 위에서 돈다.
 		sherbet_side_tick();
 
@@ -2576,7 +2581,7 @@ void reshade::runtime::draw_gui()
 			if (_sherbet_content_done_timer > 0.0f)
 				_sherbet_content_done_timer -= _imgui_context->IO.DeltaTime;
 		}
-		{ std::string _content; if (_sherbet_auth.take_content(_content)) sherbet::apply_content(_content); }
+		// (/content/me 반영은 draw_gui 맨 위 — early-out 위 — 로 옮겼다. 메뉴를 안 열어도 산 기능이 열려야 한다.)
 		if (_sherbet_auth.take_files_changed())
 		{
 			const std::filesystem::path fx_dir = _config_path.parent_path() / L"Sherbet-Fx";

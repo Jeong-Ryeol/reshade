@@ -1051,8 +1051,7 @@ void sherbet::update::controller::tick(float dt_seconds)
 	// 구매자가 알림을 받으려면 껐다 켜는 수밖에 없었다(사용자 보고).
 	//
 	// 비용: 워커 스레드에서 도는 GET 하나, 응답 1KB 미만. 렌더 스레드는 안 막는다.
-	// ⚠️ 여기서 받는 것은 **매니페스트뿐**이다. 11MB DLL 다운로드는 사용자가
-	//    [업데이트] 를 눌러야만 시작한다(begin_update). 몰래 받는 일은 없다.
+	// 새 버전을 찾으면 아래 '자동 업데이트' 가 [업데이트] 를 대신 눌러 준다(정렬 요청 2026-11-11).
 	// ⚠️ 이미 찾았거나(_has_offer) 이미 교체해 재시작만 남았으면(_need_restart)
 	//    다시 물어볼 이유가 없다. _dismissed 는 건드리지 않으므로 "이번 판은 됐어요"
 	//    를 누른 사람에게 다시 뜨지도 않는다.
@@ -1066,7 +1065,7 @@ void sherbet::update::controller::tick(float dt_seconds)
 	}
 
 	// 창이 둘이면 렌더 스레드도 둘이다 — 워커 시작 경로 전체를 직렬화한다.
-	const std::lock_guard<std::mutex> guard(_worker_mtx);
+	std::unique_lock<std::mutex> guard(_worker_mtx);
 
 	// 끝난 워커 회수. std::thread 에 재대입하기 전에 반드시 join 되어 있어야 한다.
 	if (_worker_done.load())
@@ -1079,6 +1078,20 @@ void sherbet::update::controller::tick(float dt_seconds)
 	{
 		if (!_fetch_started.exchange(true))
 			set_status(kStatusPersonal);
+		return;
+	}
+
+	// ── 자동 업데이트(정렬 요청 2026-11-11) ──────────────────────────────────
+	// 새 버전을 찾으면 [업데이트] 를 안 눌러도 바로 받아 교체해 둔다 — 적용은 다음 실행 때(지금 게임은 그대로).
+	// 다운로드·교체는 워커 스레드라 게임 프레임을 안 막는다. **세션당 한 번만** 시도한다: 사용자가 [취소] 했거나
+	// 실패하면 다시 건드리지 않는다(배너의 [업데이트] 버튼은 그대로 있다). [나중에] 를 눌렀으면 안 한다.
+	// 롤백된 버전은 run_fetch 의 should_offer(블랙리스트)가 애초에 제안하지 않으므로 같은 버전을 되풀이하지 않는다.
+	if (_has_offer.load() && !_dismissed.load() && !_need_restart.load() && !_busy.load() && !_worker.joinable() && !_auto_tried)
+	{
+		_auto_tried = true;
+		guard.unlock(); // begin_update 가 같은 락을 다시 잡는다
+		reshade::log::message(reshade::log::level::info, "[sherbet-update] auto update");
+		begin_update();
 		return;
 	}
 

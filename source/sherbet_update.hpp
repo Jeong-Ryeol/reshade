@@ -142,6 +142,7 @@ namespace sherbet
 			std::atomic<bool> _inited{ false };
 			std::atomic<bool> _fetch_started{ false };
 			float _since_check = 0.0f;   // 렌더 스레드 전용 — 주기적 재확인 타이머
+			bool _auto_tried = false;    // _worker_mtx 보호 — 자동 업데이트는 세션당 한 번만
 			std::atomic<bool> _has_offer{ false };
 			std::atomic<bool> _mandatory{ false };
 			std::atomic<bool> _dismissed{ false };
