@@ -824,6 +824,9 @@
     <ClInclude Include="source\sherbet_ime.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_sidenotice.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_xhmarket.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>

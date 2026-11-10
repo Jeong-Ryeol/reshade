@@ -794,6 +794,7 @@
     <ClInclude Include="source\sherbet_crosshair.hpp" />
     <ClInclude Include="source\sherbet_adalarm.hpp" />
     <ClInclude Include="source\sherbet_ime.hpp" />
+    <ClInclude Include="source\sherbet_sidenotice.hpp" />
     <ClInclude Include="source\sherbet_engine.hpp" />
     <ClInclude Include="source\sherbet_frametime.hpp" />
     <ClInclude Include="source\sherbet_hotkey.hpp" />

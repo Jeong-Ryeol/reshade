@@ -172,6 +172,10 @@ namespace reshade
 		/// Gets the character input as captured by 'WM_CHAR' for the current frame.
 		/// </summary>
 		const std::wstring &text_input() const { return _text_input; }
+		/// <summary>
+		/// SHERBET: 한글 입력기가 지금 조합 중인 글자(아직 확정 안 됨). 오버레이가 키보드를 잡고 있을 때만 채워진다.
+		/// </summary>
+		const std::wstring &text_composition() const { return _text_composition; }
 
 		/// <summary>
 		/// Set to <see langword="true"/> to prevent mouse input window messages from reaching the application.
@@ -221,6 +225,9 @@ namespace reshade
 		/// <param name="message_data">Pointer to a <see cref="MSG"/> with the message data.</param>
 		/// <returns><see langword="true"/> if the called should ignore this message, or <see langword="false"/> if it should pass it on to the application.</returns>
 		static bool handle_window_message(const void *message_data);
+		// SHERBET: 창 프로시저로 **바로 전달된**(SendMessage) WM_IME_COMPOSITION 의 확정 글자.
+		// 스레드 훅(WH_CALLWNDPROC)이 부른다 — input_windows.cpp 의 sherbet_ime_callwnd 참고.
+		static void sherbet_on_sent_ime_result(void *hwnd, intptr_t lparam);
 
 		// SHERBET: 한글 키밀림 방지(sherbet_ime.hpp). 설정은 렌더 스레드가 매 프레임 넣고,
 		// 입력기 전환은 창 스레드(메시지 훅)에서만 한다 — 입력기 컨텍스트가 창 스레드에 묶여 있다.
@@ -233,6 +240,14 @@ namespace reshade
 			_sherbet_ime_korean_on_chat.store(korean_on_chat, std::memory_order_relaxed);
 		}
 		void sherbet_ime_request_english() { _sherbet_ime_english_requested.store(true, std::memory_order_relaxed); }
+		// 사이드공지 작은 창이 열렸다 — 한글로(키밀림 방지가 꺼져 있어도). 메뉴가 키보드를 잡고 있어도 다음 메시지에서
+		// 바꾸고, 바꾸기 전 상태를 기억해 둔다. 창이 닫히면 sherbet_ime_request_restore 로 되돌린다.
+		void sherbet_ime_request_korean() { _sherbet_ime_korean_requested.store(true, std::memory_order_relaxed); }
+		void sherbet_ime_request_restore() { _sherbet_ime_restore_requested.store(true, std::memory_order_relaxed); }
+		// 위 요청들이 남아 있으면 게임 창에 신호 메시지를 보내 창 스레드가 **바로** 처리하게 한다(렌더 스레드에서 매 프레임).
+		// 신호가 없으면 다음 마우스·키 메시지까지 기다려서, 사이드공지 창을 닫고 바로 T 를 누르면 입력기가 아직
+		// 한글이라 T 가 'ㅅ' 으로 채팅칸에 들어갔다(실측). 신호는 handle_window_message 가 삼킨다(게임에 안 간다).
+		void sherbet_ime_kick_if_pending();
 		// 마지막으로 본 입력기 상태: -1 모름, 0 영문, 1 한글 (카드 상태 줄용)
 		int sherbet_ime_mode() const { return _sherbet_ime_mode.load(std::memory_order_relaxed); }
 
@@ -271,11 +286,16 @@ namespace reshade
 		std::atomic<unsigned int> _sherbet_ime_chat_vks[kSherbetImeMaxChatKeys] = {}; // 채팅 키 목록(렌더 스레드가 매 프레임 넣는다)
 		std::atomic<bool> _sherbet_ime_korean_on_chat { true };
 		std::atomic<bool> _sherbet_ime_english_requested { false };
+		std::atomic<bool> _sherbet_ime_korean_requested { false }; // SHERBET: 사이드공지 작은 창 — 메뉴 안에서 한글로
+		std::atomic<bool> _sherbet_ime_restore_requested { false }; // SHERBET: 작은 창이 닫혔다 — 열기 전 상태로
+		int _sherbet_ime_saved_mode = -1; // 창 스레드 전용 — 한글로 바꾸기 전 상태(0/1), -1 = 바꾼 적 없음
 		std::atomic<int> _sherbet_ime_mode { -1 };
 		bool _sherbet_ime_chat_open = false;          // 창 스레드 전용(_mutex 아래)
 		bool _sherbet_ime_english_on_release = false; // 창 스레드 전용 — Enter·Esc 를 떼면 영문으로
 		uint64_t _frame_count = 0; // Keep track of frame count to identify windows with a lot of rendering
 		std::wstring _text_input;
+		std::wstring _text_composition; // SHERBET: 조합 중인 글자 — 매 프레임 지우지 않는다(조합이 끝나야 지운다)
+		std::wstring _sherbet_sent_result; // SHERBET: 바로 전달된 확정 글자 중 아직 WM_CHAR 로 다시 안 온 것(중복 거르기용)
 	};
 
 	class input_gamepad

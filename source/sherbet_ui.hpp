@@ -10,6 +10,7 @@
 #include "sherbet_theme.hpp"
 #include "sherbet_content_json.hpp"
 #include "sherbet_xhmarket.hpp"
+#include "sherbet_sidenotice.hpp"
 
 namespace sherbet
 {
@@ -40,6 +41,8 @@ namespace sherbet
 	// 서버가 내려준 조준점 목록(마켓 UI). 잠긴 항목은 코드 없이 이름만 들어 있다.
 	// /content/me 가 도착할 때 한 번 파싱되고, 그 뒤로는 매 프레임 읽기만 한다.
 	const std::vector<xhmarket::entry> &content_crosshairs();
+	// 사이드공지 문장(서버가 역할 있는 것만 내려준다 — 잠긴 문장은 아예 없다).
+	const std::vector<sidenotice::entry> &content_sidenotices();
 
 	// 테마 색/라운드/간격을 ImGui 스타일에 적용 (매 프레임 또는 테마 변경 시 호출)
 	void apply_style(ImGuiStyle &style, const theme &t);

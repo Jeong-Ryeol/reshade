@@ -115,6 +115,25 @@ static WPARAM sherbet_resolve_ime_vk(WPARAM vk, HWND hwnd)
 	return (real_vk != 0 && real_vk != VK_PROCESSKEY && real_vk < 0xFF) ? real_vk : vk;
 }
 
+// SHERBET: 입력기가 **조합 중에 먹은** 편집 키는 오버레이(ImGui)에 넘기지 않는다.
+// 한글 '비' 를 조합하던 중 백스페이스를 누르면 입력기는 '비'→'ㅂ' 으로 지우는데, 위에서 실제 키로
+// 되돌린 백스페이스가 ImGui 에도 가서 입력칸 앞 글자를 **하나 더** 지웠다(사이드공지 닉네임 칸 실측).
+// 편집·이동 키는 입력기가 안 먹었을 땐 원래 키로 온다 — 먹은 것만 VK_PROCESSKEY 로 남겨 ImGui 가 모르게 한다.
+// ⚠️ 키밀림 방지(sherbet_ime_key)는 계속 실제 키로 본다 — 조합 중 Enter 로 채팅을 끝내도 영문으로 돌아가야 한다.
+static WPARAM sherbet_overlay_vk(WPARAM raw_vk, WPARAM resolved_vk)
+{
+	if (raw_vk != VK_PROCESSKEY)
+		return resolved_vk;
+	switch (resolved_vk)
+	{
+	case VK_BACK: case VK_DELETE: case VK_RETURN: case VK_ESCAPE: case VK_TAB:
+	case VK_LEFT: case VK_RIGHT: case VK_UP: case VK_DOWN: case VK_HOME: case VK_END:
+		return VK_PROCESSKEY;
+	default:
+		return resolved_vk;
+	}
+}
+
 // SHERBET: 한글 키밀림 방지(sherbet_ime.hpp) — 게임 창 입력기를 한글/영문으로 바꾸고, 바뀐 뒤 상태를 돌려준다.
 // -1 = 입력기가 없는 창(게임이 떼어 둔 경우), 0 = 영문, 1 = 한글. korean 이 -1 이면 한/영은 그대로 두고 읽는다
 // (전자 모드만은 꺼 둔다 — 아래 주석).
@@ -150,6 +169,66 @@ static int sherbet_ime_switch(HWND hwnd, int korean)
 	return mode;
 }
 
+// SHERBET: 한글 확정 글자가 메시지 큐를 안 거치고 창 프로시저로 **바로 전달**되는 경우를 잡는다.
+// 실측(테스트 창으로 오버레이가 키보드를 잡은 상태 흉내): 글자를 이어 치다 확정되면 WM_IME_COMPOSITION(결과)이
+// 큐로 오지만, **스페이스·Enter 로 확정**하면 SendMessage 로 창 프로시저에 바로 간다. 보통은 DefWindowProc 가
+// 그걸 WM_IME_CHAR → WM_CHAR 로 다시 큐에 넣어 주는데, 파이브엠은 IME 메시지를 게임 쪽에서 막아 그 과정이
+// 없다 — '141정렬' 을 치고 스페이스를 누르면 '렬' 이 사라졌다. GetMessage 훅으로는 바로 전달된 메시지를
+// 볼 수 없으므로 창 스레드에 WH_CALLWNDPROC 훅을 하나 건다(같은 프로세스 스레드 훅, 전역 훅 아님).
+static LRESULT CALLBACK sherbet_ime_callwnd(int code, WPARAM wparam, LPARAM lparam)
+{
+	if (code == HC_ACTION)
+	{
+		const CWPSTRUCT *const cwp = reinterpret_cast<const CWPSTRUCT *>(lparam);
+		if (cwp != nullptr && cwp->message == WM_IME_COMPOSITION && (cwp->lParam & GCS_RESULTSTR) != 0)
+			reshade::input::sherbet_on_sent_ime_result(cwp->hwnd, static_cast<intptr_t>(cwp->lParam));
+	}
+	return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+void reshade::input::sherbet_ime_kick_if_pending()
+{
+	static const UINT kick = RegisterWindowMessageW(L"SherbetImeKick");
+	if (kick == 0 || _window == nullptr)
+		return;
+	const bool pending =
+		_sherbet_ime_korean_requested.load(std::memory_order_relaxed) ||
+		_sherbet_ime_restore_requested.load(std::memory_order_relaxed) ||
+		(_sherbet_ime_english_requested.load(std::memory_order_relaxed) && _sherbet_ime_enabled.load(std::memory_order_relaxed));
+	if (pending)
+		PostMessageW(static_cast<HWND>(_window), kick, 0, 0);
+}
+
+void reshade::input::sherbet_on_sent_ime_result(void *hwnd_ptr, intptr_t lparam)
+{
+	const HWND hwnd = static_cast<HWND>(hwnd_ptr);
+	std::shared_ptr<input> target;
+	{
+		// ⚠️ 게임 창 자신에게 온 것만. DefWindowProc 가 같은 메시지를 입력기 기본 창(IME 창)에도 다시 보내서
+		//    부모/소유자로 찾아 올라가면 한 글자가 세 번 들어간다(테스트 창 실측: '렬렬렬').
+		const std::shared_lock<std::shared_mutex> lock(s_windows_mutex);
+		if (const auto it = s_windows.find(hwnd); it != s_windows.end())
+			target = it->second.lock();
+	}
+	if (target == nullptr || (lparam & GCS_RESULTSTR) == 0)
+		return;
+	const std::unique_lock<std::recursive_mutex> input_lock(target->_mutex);
+	if (!target->is_blocking_keyboard_input())
+		return; // 오버레이가 키보드를 안 잡고 있으면 게임(채팅) 것이다
+	if (const HIMC himc = ImmGetContext(hwnd); himc != nullptr)
+	{
+		if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_RESULTSTR, nullptr, 0); bytes > 0)
+		{
+			std::wstring result(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+			ImmGetCompositionStringW(himc, GCS_RESULTSTR, result.data(), static_cast<DWORD>(bytes));
+			target->_text_input += result;
+			target->_sherbet_sent_result += result; // 게임이 DefWindowProc 로 넘겨 WM_CHAR 로 또 오면 거른다
+		}
+		ImmReleaseContext(hwnd, himc);
+	}
+	target->_text_composition.clear();
+}
+
 bool reshade::input::handle_window_message(const void *message_data)
 {
 	assert(message_data != nullptr);
@@ -168,8 +247,12 @@ bool reshade::input::handle_window_message(const void *message_data)
 		details.message == WM_IME_ENDCOMPOSITION || details.message == WM_IME_CHAR)
 		is_keyboard_message = true;
 
+	// SHERBET: 입력기 요청 처리 신호(sherbet_ime_kick_if_pending). 아래에서 요청을 처리하고 삼킨다.
+	static const UINT s_sherbet_kick = RegisterWindowMessageW(L"SherbetImeKick");
+	const bool sherbet_kick = s_sherbet_kick != 0 && details.message == s_sherbet_kick;
+
 	// Ignore messages that are not related to mouse or keyboard input
-	if (details.message != WM_INPUT && !is_mouse_message && !is_keyboard_message)
+	if (details.message != WM_INPUT && !is_mouse_message && !is_keyboard_message && !sherbet_kick)
 		return false;
 
 	// Guard access to windows list against race conditions
@@ -232,6 +315,12 @@ bool reshade::input::handle_window_message(const void *message_data)
 	//    입력기는 다른 컨텍스트라 값이 다르다 — 첫 테스트에서 표시가 영문↔한글로 빠르게 깜빡인 원인으로 본다.
 	// ⚠️ 입력기 API 는 바꿀 때와 reads_ime() 키(T·Enter·Esc·한/영)에서만 부른다. 무빙 키마다 부르면
 	//    그 호출이 게임 메시지 처리를 붙잡는다(래피드 트리거처럼 빠른 입력일수록 많이).
+	// SHERBET: 바로 전달되는 한글 확정 글자를 잡는 스레드 훅(sherbet_ime_callwnd) — 게임 창 스레드에 한 번만 건다.
+	{
+		static thread_local HHOOK s_sherbet_ime_hook = nullptr;
+		if (s_sherbet_ime_hook == nullptr && GetWindowThreadProcessId(static_cast<HWND>(input->_window), nullptr) == GetCurrentThreadId())
+			s_sherbet_ime_hook = SetWindowsHookExW(WH_CALLWNDPROC, sherbet_ime_callwnd, nullptr, GetCurrentThreadId());
+	}
 	const bool sherbet_ime_thread = input->_sherbet_ime_enabled.load(std::memory_order_relaxed) &&
 		GetWindowThreadProcessId(static_cast<HWND>(input->_window), nullptr) == GetCurrentThreadId();
 	const auto sherbet_ime_apply = [&](int want) {
@@ -259,7 +348,7 @@ bool reshade::input::handle_window_message(const void *message_data)
 	};
 	// 메뉴를 닫았거나 다른 프로그램에서 돌아왔을 때(렌더 스레드가 요청) — 키를 누르기 전에, 돌아오며 움직이는
 	// 마우스 메시지에서 먼저 영문으로 바꾼다. 그래야 돌아와서 처음 누르는 무빙 키부터 영문이다.
-	if (sherbet_ime_thread && (is_mouse_message || details.message == WM_INPUT) && !input->is_blocking_keyboard_input() &&
+	if (sherbet_ime_thread && (is_mouse_message || details.message == WM_INPUT || sherbet_kick) && !input->is_blocking_keyboard_input() &&
 		input->_sherbet_ime_english_requested.load(std::memory_order_relaxed) &&
 		input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed))
 	{
@@ -267,6 +356,30 @@ bool reshade::input::handle_window_message(const void *message_data)
 		input->_sherbet_ime_english_on_release = false;
 		sherbet_ime_apply(0);
 	}
+	// 사이드공지 작은 창이 열렸다(렌더 스레드가 요청) — 메뉴가 키보드를 잡고 있어도 한글로 바꾼다.
+	// ⚠️ 키밀림 방지가 꺼져 있어도 바꾼다(윈도우가 영문이어도 한글로 치게 — 정렬 요청). 그래서 바꾸기 전 상태를
+	//    기억해 두고, 창이 닫히면(restore 요청) 키밀림 방지가 꺼진 사람은 그 상태로 되돌린다 — 게임 중에 한글로
+	//    남으면 무빙 키가 밀린다. 키밀림 방지가 켜진 사람은 메뉴를 닫을 때의 영문 요청이 처리한다.
+	// 다음 메시지(마우스 움직임·raw input 이 쉴 새 없이 온다)에서 바로 처리되므로 첫 글자 전에 한글이 된다.
+	if (GetWindowThreadProcessId(static_cast<HWND>(input->_window), nullptr) == GetCurrentThreadId())
+	{
+		if (input->_sherbet_ime_korean_requested.load(std::memory_order_relaxed) &&
+			input->_sherbet_ime_korean_requested.exchange(false, std::memory_order_relaxed))
+		{
+			if (input->_sherbet_ime_saved_mode < 0)
+				input->_sherbet_ime_saved_mode = sherbet_ime_switch(details.hwnd, -1); // 지금 상태(바꾸기 전)
+			sherbet_ime_apply(1);
+		}
+		if (input->_sherbet_ime_restore_requested.load(std::memory_order_relaxed) &&
+			input->_sherbet_ime_restore_requested.exchange(false, std::memory_order_relaxed))
+		{
+			if (input->_sherbet_ime_saved_mode >= 0 && !input->_sherbet_ime_enabled.load(std::memory_order_relaxed))
+				sherbet_ime_apply(input->_sherbet_ime_saved_mode);
+			input->_sherbet_ime_saved_mode = -1;
+		}
+	}
+	if (sherbet_kick)
+		return true; // 신호는 요청 처리용 — 게임에 보내지 않는다
 
 	input->_mouse_position[0] = details.pt.x;
 	input->_mouse_position[1] = details.pt.y;
@@ -368,6 +481,18 @@ bool reshade::input::handle_window_message(const void *message_data)
 		}
 		break;
 	case WM_CHAR:
+		// SHERBET: 바로 전달된 확정 글자를 이미 넣었는데(sherbet_on_sent_ime_result), 게임이 그 메시지를
+		// DefWindowProc 에 넘겨 같은 글자가 WM_CHAR 로 다시 오면 한 번만 넣는다. 파엠은 IME 메시지를 막아서
+		// 다시 안 온다 — 다른 글자가 오면 기다리던 것을 버린다.
+		if (!input->_sherbet_sent_result.empty())
+		{
+			if (input->_sherbet_sent_result.front() == static_cast<wchar_t>(details.wParam))
+			{
+				input->_sherbet_sent_result.erase(0, 1);
+				break;
+			}
+			input->_sherbet_sent_result.clear();
+		}
 		input->_text_input += static_cast<wchar_t>(details.wParam);
 		break;
 	// SHERBET: 조합이 끝나 **확정된** 한글. 오버레이가 키보드를 잡고 있을 때만 우리가 소비한다
@@ -378,26 +503,45 @@ bool reshade::input::handle_window_message(const void *message_data)
 	// 한계: 조합 **중인** 글자는 화면에 안 보이고 완성된 순간 들어간다. 게임 위에 IME 조합창을
 	//    띄울 방법이 없어서 감수한다.
 	case WM_IME_COMPOSITION:
-		if (input->is_blocking_keyboard_input() && (details.lParam & GCS_RESULTSTR) != 0)
+		// SHERBET: 조합 **중인** 글자(GCS_COMPSTR)도 읽어 둔다 — 오버레이가 입력칸 커서 자리에 그대로 그린다
+		// (runtime_gui 의 sherbet_draw_ime_composition). 예전엔 완성된 글자만 받아서 '빈집' 을 치면
+		// '집' 이 다음 글자를 칠 때까지 안 보였다. 결과(RESULTSTR)만 온 메시지·빈 메시지는 조합이 끝난 것이다.
+		input->_text_composition.clear();
+		if (input->is_blocking_keyboard_input())
 		{
 			if (const HIMC himc = ImmGetContext(details.hwnd); himc != nullptr)
 			{
-				if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_RESULTSTR, nullptr, 0); bytes > 0)
+				if ((details.lParam & GCS_RESULTSTR) != 0)
 				{
-					std::wstring result(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
-					ImmGetCompositionStringW(himc, GCS_RESULTSTR, result.data(), static_cast<DWORD>(bytes));
-					input->_text_input += result;
+					if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_RESULTSTR, nullptr, 0); bytes > 0)
+					{
+						std::wstring result(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+						ImmGetCompositionStringW(himc, GCS_RESULTSTR, result.data(), static_cast<DWORD>(bytes));
+						input->_text_input += result;
+					}
+				}
+				if ((details.lParam & GCS_COMPSTR) != 0)
+				{
+					if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_COMPSTR, nullptr, 0); bytes > 0)
+					{
+						input->_text_composition.assign(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+						ImmGetCompositionStringW(himc, GCS_COMPSTR, input->_text_composition.data(), static_cast<DWORD>(bytes));
+					}
 				}
 				ImmReleaseContext(details.hwnd, himc);
 			}
 		}
 		break;
+	case WM_IME_ENDCOMPOSITION:
+		input->_text_composition.clear(); // SHERBET: 조합 끝(확정·취소) — 커서 자리 미리보기를 지운다
+		break;
 	case WM_KEYDOWN:
 	case WM_SYSKEYDOWN:
 	{
-		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // 한글 IME → 실제 키 복원
+		const WPARAM ime_vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // 한글 IME → 실제 키 복원
+		const WPARAM vk = sherbet_overlay_vk(details.wParam, ime_vk); // 조합 중 먹힌 편집 키는 오버레이에 안 넘긴다
 		assert(vk > 0 && vk < std::size(input->_keys));
-		sherbet_ime_key(static_cast<UINT>(vk), false); // SHERBET
+		sherbet_ime_key(static_cast<UINT>(ime_vk), false); // SHERBET
 		input->_keys[vk] = 0x88;
 		input->_keys_time[vk] = details.time;
 		if (input->is_blocking_keyboard_input())
@@ -407,9 +551,10 @@ bool reshade::input::handle_window_message(const void *message_data)
 	case WM_KEYUP:
 	case WM_SYSKEYUP:
 	{
-		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // keydown 과 반드시 짝을 맞춘다
+		const WPARAM ime_vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // keydown 과 반드시 짝을 맞춘다
+		const WPARAM vk = sherbet_overlay_vk(details.wParam, ime_vk);
 		assert(vk > 0 && vk < std::size(input->_keys));
-		sherbet_ime_key(static_cast<UINT>(vk), true); // SHERBET
+		sherbet_ime_key(static_cast<UINT>(ime_vk), true); // SHERBET
 		// Do not block key up messages if the key down one was not blocked previously (so key does not get stuck for the application)
 		if (input->is_blocking_keyboard_input() && (input->_keys[vk] & 0x04) == 0)
 			is_keyboard_message = false;
@@ -449,6 +594,32 @@ bool reshade::input::handle_window_message(const void *message_data)
 		assert(HIWORD(details.wParam) == XBUTTON1 || HIWORD(details.wParam) == XBUTTON2);
 		input->_keys[VK_XBUTTON1 + (HIWORD(details.wParam) - XBUTTON1)] = 0x08;
 		break;
+	}
+
+	// SHERBET: 조합 중인 글자를 입력기에서 **직접 다시 읽는다**(오버레이가 키보드를 잡고 있을 때만).
+	// WM_IME_COMPOSITION 알림만 믿으면 일부는 큐를 안 거치고 창 프로시저로 바로 가서 놓친다 — 백스페이스로
+	// 조합을 다 지웠는데 커서 자리에 '렬' 이 남아 있던 증상(실측). 키를 누르고 뗄 때마다 읽으면 떼는 순간엔
+	// 누른 키가 반영된 상태라 화면이 입력기와 어긋나지 않는다.
+	if (input->is_blocking_keyboard_input())
+	{
+		if ((details.message >= WM_KEYFIRST && details.message <= WM_KEYLAST) || details.message == WM_IME_COMPOSITION || details.message == WM_IME_ENDCOMPOSITION)
+		{
+			std::wstring comp;
+			if (const HIMC himc = ImmGetContext(details.hwnd); himc != nullptr)
+			{
+				if (const LONG bytes = ImmGetCompositionStringW(himc, GCS_COMPSTR, nullptr, 0); bytes > 0)
+				{
+					comp.assign(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+					ImmGetCompositionStringW(himc, GCS_COMPSTR, comp.data(), static_cast<DWORD>(bytes));
+				}
+				ImmReleaseContext(details.hwnd, himc);
+			}
+			input->_text_composition = std::move(comp);
+		}
+	}
+	else if (!input->_text_composition.empty())
+	{
+		input->_text_composition.clear(); // 오버레이가 닫혔다 — 남은 미리보기를 지운다
 	}
 
 	return (is_mouse_message && input->is_blocking_mouse_input()) || (is_keyboard_message && input->is_blocking_keyboard_input());

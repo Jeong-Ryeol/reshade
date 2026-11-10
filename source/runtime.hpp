@@ -21,6 +21,8 @@
 #include "sherbet_frametime.hpp"
 #include "sherbet_engine.hpp"
 #include "sherbet_magpreset.hpp"
+#include "sherbet_sidenotice.hpp"
+#include <array>
 #include "sherbet_ime.hpp"
 #include <atomic>
 #include <thread>
@@ -508,6 +510,35 @@ namespace reshade
 		float _sherbet_ime_flash = 0.0f;   // 1 → 0 으로 가라앉는다
 		bool _sherbet_ime_was_fg = false;  // 게임 창이 앞에 있었는지 — 다른 프로그램에서 돌아온 순간을 잡는다
 
+		// SHERBET: 사이드공지(sherbet_sidenotice.hpp) — 단축키로 작은 창을 띄워 장소 몇 글자로 공지를 찾아
+		// Enter 면 채팅으로 바로 올리고(채팅 키 → Ctrl+V → Enter), 클릭하면 복사만 한다.
+		// 작은 창은 **오버레이를 연 채로 메인 창 대신** 그린다(_sherbet_side_quick) — 입력 막기·커서·Esc 닫기를
+		// 오버레이 것 그대로 쓰기 위해서다. 올리기 시간표(_sherbet_side_poster)는 메뉴가 닫힌 뒤에 돌아야 하므로
+		// draw_gui() 앞부분(early-out 위)에서 돈다.
+		// 기본 단축키 = 스페이스바 + `(정렬 결정). 리쉐이드 원본 단축키는 스페이스바 조합을 못 담으므로
+		// 조준점·돋보기 프리셋과 같은 멀티키 조합(sherbet_hotkey.hpp)을 쓴다. 정렬 순서대로 {Space, `}.
+		sherbet::hotkey::chord _sherbet_side_key = { { 0x20, 0xC0, 0, 0 } };
+		int _sherbet_side_delay_ms = sherbet::sidenotice::kDefaultChatDelayMs; // 채팅 키 → 붙여넣기 사이(채팅창 열리는 시간)
+		unsigned int _sherbet_side_chat_key[4] = { 'T', 0, 0, 0 }; // 사이드공지를 칠 채팅창을 여는 키(일반 채팅)
+		bool _sherbet_side_quick = false;  // 지금 오버레이가 작은 사이드공지 창 모드인가
+		float _sherbet_side_pos[2] = { 0.5f, 0.2f }; // 작은 창 위치(화면 비율: 가운데 x, 위쪽 y). 끌어서 옮긴다
+		bool _sherbet_side_pos_dirty = false;        // 끌고 있었다 — 놓으면 저장
+		bool _sherbet_side_focus = false;  // 다음 프레임에 입력칸으로 키보드 포커스
+		bool _sherbet_side_close = false;  // 다음 프레임에 오버레이를 닫는다(창 안에서 바로 못 닫는다)
+		char _sherbet_side_query[96] = {};
+		int _sherbet_side_sel = 0;         // 검색 결과 안에서 고른 줄
+		sherbet::sidenotice::poster _sherbet_side_poster;
+		// 시간 칸 단계 — 문장에 '[00:00]' 이 있으면(보안국 습격) 고른 뒤 작은 창이 시간을 묻는다. 비어 있으면 검색 단계.
+		// 칸 채우기 단계 — 문장에 {대상}·{시간+30}·{팩션}·[00:00] 같은 칸이 있으면(수배·알디컨·영장·보습)
+		// 고른 뒤 작은 창이 칸을 차례로 묻는다. _sherbet_side_fill_text 가 비어 있으면 검색 단계.
+		std::string _sherbet_side_fill_text, _sherbet_side_fill_zone;
+		bool _sherbet_side_fill_send = true; // 다 채운 뒤 올리기(true) / 복사만(false)
+		int _sherbet_side_fill_at = 0;       // 지금 커서가 있는 칸
+		int _sherbet_side_fill_bad = -1;     // 방금 Enter 한 칸이 틀렸다(그 칸 번호)
+		std::vector<std::array<char, 128>> _sherbet_side_fill_buf; // 칸마다 입력 버퍼(한글 약 40자 — 긴 닉네임도 들어가게)
+		std::string _sherbet_side_msg;     // 탭에 잠깐 띄우는 결과 한 줄('복사했어요' 등)
+		std::chrono::high_resolution_clock::time_point _sherbet_side_msg_time;
+
 		// SHERBET: HUD 돋보기 — 화면의 한 사각형(체력·방어구 막대 등)을 확대해 크게 그린다.
 		// **게임 상태를 읽지 않는다.** 픽셀을 확대할 뿐이다(메모리 접근 0, 상태 판정 0).
 		// ⚠️ 좌표는 전부 **화면 대비 정규화(0~1)** — 반반 비교 분할선과 같은 관례.
@@ -775,6 +806,12 @@ namespace reshade
 		// (그라디언트)이다 — 잠긴 사람에게 실제 이미지 로딩 경로를 태우지 않는다.
 		void sherbet_draw_bg_lock_card(const sherbet::paid::feature &f);
 		void sherbet_draw_ime_lock_card(const sherbet::paid::feature &f);
+		void draw_gui_sidenotice();         // SHERBET: 「사이드공지」 탭
+		void sherbet_draw_side_quick();     // SHERBET: 단축키로 뜨는 작은 사이드공지 창
+		void sherbet_side_tick();           // SHERBET: 채팅으로 올리기 시간표(early-out 위에서 매 프레임)
+		void sherbet_side_post(const std::string &text, bool send); // send=false 면 복사만
+		void sherbet_side_choose(const sherbet::sidenotice::entry &e, bool send); // 시간 칸이 있으면 먼저 시간을 묻는다
+		bool sherbet_side_any_unlocked() const;
 
 		// SHERBET: 유료 기능 잠금 판정의 **호출부 단일 입구**.
 		// sherbet::paid::unlocked() 에 서버 엔타이틀(has_feature)과 판매자 미리보기 스위치를

@@ -37,6 +37,8 @@ namespace sherbet
 	// 서버 조준점 목록(마켓 UI용). 코드 검증까지 끝난 상태로 들고 있는다 —
 	// 매 프레임 parse_code 를 돌리지 않기 위해서고, 잠긴 항목은 코드 자체가 없다.
 	static std::vector<xhmarket::entry> s_content_crosshairs;
+	// 서버 사이드공지 문장(권한 있는 것만 온다).
+	static std::vector<sidenotice::entry> s_content_sidenotices;
 	// 서버가 내려준 잠금 기능 집합(예: "custompicture")
 	static std::set<std::string> s_features;
 
@@ -89,6 +91,7 @@ namespace sherbet
 	}
 	const std::vector<content_item> &content_presets() { return s_content_presets; }
 	const std::vector<xhmarket::entry> &content_crosshairs() { return s_content_crosshairs; }
+	const std::vector<sidenotice::entry> &content_sidenotices() { return s_content_sidenotices; }
 	// /content/me 응답(JSON)을 반영: 동적 테마 재구성 + 엔타이틀 집합 재구성.
 	// 렌더 스레드에서만 호출(레지스트리/엔타이틀은 렌더 루프가 읽음).
 	void apply_content(const std::string &body)
@@ -119,6 +122,7 @@ namespace sherbet
 		// 사용자가 붙여넣은 코드와 **같은 파서**를 통과시키고, 실패분은 버리지 않고
 		// '사용 불가' 상태로 남긴다(카드가 조용히 사라지면 산 사람이 이유를 알 수 없다).
 		s_content_crosshairs = xhmarket::parse_manifest(body);
+		s_content_sidenotices = sidenotice::parse_manifest(body);
 		// 잠금 기능 집합 재구성(예: "custompicture")
 		s_features.clear();
 		for (const std::string &f : auth::json_string_array(body, "features"))

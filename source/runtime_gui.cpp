@@ -423,6 +423,18 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 		while (_sherbet_ime_key_rows < sherbet::ime::kMaxChatKeys && _sherbet_ime_chat_keys.k[_sherbet_ime_key_rows] != 0)
 			++_sherbet_ime_key_rows;
 	}
+	config_get("INPUT", "SherbetSideChatKey", _sherbet_side_chat_key);
+	{
+		// 사이드공지 단축키(멀티키). 값이 없으면 기본값(스페이스바 + `)을 그대로 둔다 — 빈 조합으로 덮지 않는다.
+		unsigned int sk[sherbet::hotkey::kMaxKeys] = {};
+		if (config.get("INPUT", "SherbetSideHotkey", sk))
+			_sherbet_side_key = sherbet::hotkey::sanitize(sk);
+	}
+	config.get("OVERLAY", "SherbetSideDelay", _sherbet_side_delay_ms);
+	_sherbet_side_delay_ms = std::clamp(_sherbet_side_delay_ms, sherbet::sidenotice::kMinChatDelayMs, sherbet::sidenotice::kMaxChatDelayMs);
+	config.get("OVERLAY", "SherbetSidePos", _sherbet_side_pos);
+	_sherbet_side_pos[0] = ImClamp(_sherbet_side_pos[0], 0.0f, 1.0f);
+	_sherbet_side_pos[1] = ImClamp(_sherbet_side_pos[1], 0.0f, 0.95f);
 	config.get("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -709,6 +721,10 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetImeShow", _sherbet_ime_show);
 	config.set("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
 	config.set("INPUT", "SherbetImeChatKeys", _sherbet_ime_chat_keys.k);
+	config.set("INPUT", "SherbetSideChatKey", _sherbet_side_chat_key);
+	config.set("INPUT", "SherbetSideHotkey", _sherbet_side_key.k);
+	config.set("OVERLAY", "SherbetSideDelay", _sherbet_side_delay_ms);
+	config.set("OVERLAY", "SherbetSidePos", _sherbet_side_pos);
 	config.set("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -1185,11 +1201,57 @@ void reshade::runtime::draw_gui()
 			_sherbet_ime_was_fg = ime_fg;
 		}
 
+		// SHERBET: 사이드공지 — 채팅으로 올리기 시간표. 메뉴가 **닫힌 뒤에** 키를 보내야 하므로 early-out 위에서 돈다.
+		sherbet_side_tick();
+
 		if (_show_overlay && !_ignore_shortcuts && _input->is_key_pressed(input::key_escape) &&
 			(_input_processing_mode == 2 || (_input_processing_mode == 1 && (_imgui_context->IO.WantCaptureMouse || _imgui_context->IO.WantCaptureKeyboard))) && !_imgui_context->IO.NavVisible)
 			show_overlay = false; // Close when pressing the escape button, input focus is on the overlay and not currently navigating with the keyboard
 		else if (!_ignore_shortcuts && _input->is_key_pressed(_overlay_key_data, _force_shortcut_modifiers) && _imgui_context->ActiveId == 0)
 			show_overlay = !_show_overlay;
+		// SHERBET: 사이드공지 단축키 — 게임 중이면 작은 창으로 열고, 작은 창이 떠 있으면 닫는다(입력칸에 치는 중이어도).
+		// 큰 메뉴에서 입력칸에 치는 중일 땐(ActiveId) 그 글자일 수 있으니 무시한다.
+		else if ((!_show_overlay || _sherbet_side_quick || _imgui_context->ActiveId == 0) && sherbet_side_any_unlocked() &&
+			sherbet::hotkey::triggered(_sherbet_side_key,
+				// 판정은 조준점·돋보기 프리셋과 같은 멀티키 규칙(sherbet_hotkey.hpp). 수정키는 왼쪽/오른쪽 다 본다.
+				[this](unsigned int vk) {
+					switch (vk)
+					{
+					case sherbet::hotkey::kShift: return _input->is_key_down(0x10) || _input->is_key_down(0xA0) || _input->is_key_down(0xA1);
+					case sherbet::hotkey::kCtrl:  return _input->is_key_down(0x11) || _input->is_key_down(0xA2) || _input->is_key_down(0xA3);
+					case sherbet::hotkey::kAlt:   return _input->is_key_down(0x12) || _input->is_key_down(0xA4) || _input->is_key_down(0xA5);
+					default:                      return _input->is_key_down(vk);
+					}
+				},
+				[this](unsigned int vk) {
+					switch (vk)
+					{
+					case sherbet::hotkey::kShift: return _input->is_key_pressed(0x10) || _input->is_key_pressed(0xA0) || _input->is_key_pressed(0xA1);
+					case sherbet::hotkey::kCtrl:  return _input->is_key_pressed(0x11) || _input->is_key_pressed(0xA2) || _input->is_key_pressed(0xA3);
+					case sherbet::hotkey::kAlt:   return _input->is_key_pressed(0x12) || _input->is_key_pressed(0xA4) || _input->is_key_pressed(0xA5);
+					default:                      return _input->is_key_pressed(vk);
+					}
+				}))
+		{
+			if (_show_overlay && _sherbet_side_quick)
+			{
+				show_overlay = false;
+			}
+			else
+			{
+				show_overlay = true;
+				_sherbet_side_quick = true;
+				_sherbet_side_focus = true;
+				_sherbet_side_query[0] = '\0';
+				_sherbet_side_sel = 0;
+				_input->sherbet_ime_request_korean(); // 윈도우가 영문이어도 한글로 친다(닫으면 원래대로)
+			}
+		}
+		if (_sherbet_side_close) // 창 안에서 고른 뒤(올리기·복사·Esc) 한 프레임 늦게 닫는다
+		{
+			_sherbet_side_close = false;
+			show_overlay = false;
+		}
 
 		if (!_ignore_shortcuts)
 		{
@@ -1216,8 +1278,20 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 메뉴에서 한글을 쳤어도 게임으로 돌아가면 영문으로(다음 키 누름 때 창 스레드에서 바꾼다).
 		if (!show_overlay && _sherbet_ime_on && _input != nullptr && sherbet_feature_unlocked("imefix"))
 			_input->sherbet_ime_request_english();
+		if (!show_overlay)
+		{
+			// 사이드공지 창에서 한글로 바꿔 뒀으면 열기 전 상태로(키밀림 방지가 켜졌으면 위의 영문 요청이 한다)
+			if ((_sherbet_side_quick || !_sherbet_side_fill_text.empty()) && _input != nullptr)
+				_input->sherbet_ime_request_restore();
+			_sherbet_side_quick = false; // 다음에 Home 으로 열면 늘 큰 메뉴
+			_sherbet_side_fill_text.clear(); // 칸 채우던 중에 닫았으면 다음엔 검색부터
+		}
 		open_overlay(show_overlay, show_overlay_source);
 	}
+	// SHERBET: 입력기 요청(영문·한글·되돌리기)이 남아 있으면 게임 창 스레드가 바로 처리하게 신호를 보낸다.
+	// 마우스·키를 기다리면 사이드공지 창을 닫고 바로 누른 T 가 한글 'ㅅ' 으로 채팅칸에 들어간다.
+	if (_input != nullptr)
+		_input->sherbet_ime_kick_if_pending();
 
 	const bool show_splash_window = _show_splash && (is_loading() || (_reload_count <= 1 && (_last_present_time - _last_reload_time) < std::chrono::seconds(5)) || (!_show_overlay && _tutorial_index == 0 && _input != nullptr));
 
@@ -1436,12 +1510,15 @@ void reshade::runtime::draw_gui()
 			{ ImGuiMod_Super, input::key_application },
 		};
 
+		// SHERBET: 글자를 **키보다 먼저** 넘긴다. 한글을 조합하다 Enter 를 누르면 입력기가 마지막 글자('렬')를
+		// 확정한 직후 Enter 키가 같은 프레임에 들어온다. 키를 먼저 넘기면 입력칸이 Enter 를 먼저 처리해 끝나 버리고
+		// 확정 글자는 갈 곳 없이 사라졌다(사이드공지 '141정렬' + Enter → '141정' 실측). 실제로도 글자가 먼저 왔다.
+		for (ImWchar16 c : _input->text_input())
+			imgui_io.AddInputCharacterUTF16(c);
 		for (const std::pair<ImGuiKey, unsigned int> &mapping : key_mappings)
 			imgui_io.AddKeyEvent(mapping.first, _input->is_key_down(mapping.second));
 		for (ImGuiMouseButton i = 0; i < ImGuiMouseButton_COUNT; i++)
 			imgui_io.AddMouseButtonEvent(i, _input->is_mouse_button_down(i));
-		for (ImWchar16 c : _input->text_input())
-			imgui_io.AddInputCharacterUTF16(c);
 	}
 
 	if (_input_gamepad != nullptr)
@@ -2370,7 +2447,14 @@ void reshade::runtime::draw_gui()
 	//    창이 그 위를 덮으면 무엇을 잡는지 볼 수 없다. 창이 없으면 IO.WantCaptureMouse 가
 	//    false 라 드래그가 그대로 들어오고, _show_overlay 는 여전히 true 라 게임 입력은
 	//    계속 막힌다(오발 없음). 나가는 길은 우클릭/Esc 이며 안내를 화면에 띄운다.
-	if (_show_overlay && !_sherbet_mag_picking)
+	// SHERBET: 사이드공지 단축키로 연 오버레이는 큰 메뉴 대신 작은 창 하나만 그린다.
+	// 오버레이는 그대로 열려 있어서 게임 입력 막기·마우스 커서·Esc 가 큰 메뉴 때와 똑같이 동작한다.
+	if (_show_overlay && !_sherbet_mag_picking && _sherbet_side_quick)
+	{
+		sherbet::apply_style(_imgui_context->Style, sherbet::active_theme());
+		sherbet_draw_side_quick();
+	}
+	else if (_show_overlay && !_sherbet_mag_picking)
 	{
 		const ImGuiViewport *const viewport = ImGui::GetMainViewport();
 
@@ -2712,6 +2796,7 @@ void reshade::runtime::draw_gui()
 				{ "##tab_aimlab", ICON_FK_BULLSEYE, 7 },
 				{ "##tab_optimize", ICON_FK_DASHBOARD, 6 },
 				{ "##tab_engine", ICON_FK_BOLT, 8 },
+				{ "##tab_side", ICON_FK_COMMENTS, 9 }, // 사이드공지
 				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
 				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
 				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
@@ -2719,14 +2804,14 @@ void reshade::runtime::draw_gui()
 			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다.
 			// ⚠️ 배열에 항목을 추가하면 **반드시 여기도 같이 늘린다** — 안 그러면 마지막
 			//    탭이 조용히 사라진다(에임 탭 때 실제로 겪었다).
-			//    에임 4→5, 최적화 5→6, 에임 랩 6→7, 엔진룸 7→8.
-			int item_count = 8;
+			//    에임 4→5, 최적화 5→6, 에임 랩 6→7, 엔진룸 7→8, 사이드공지 8→9.
+			int item_count = 9;
 #if RESHADE_ADDON
 			// 서드파티 애드온(REST 등)이 로드돼 있을 때만 Add-ons 탭을 노출한다 (일반 구매자에겐 숨김).
 			// .addon 파일 로드분은 external=false 이지만 file 이 채워지고(REST), .asi 등 외부 등록분은 external=true.
 			// 빌트인(Generic Depth 등)은 external=false + file 이 비어 있어 자연히 제외된다.
 			for (const addon_info &info : addon_loaded_info)
-				if (info.external || !info.file.empty()) { item_count = 9; break; }
+				if (info.external || !info.file.empty()) { item_count = 10; break; }
 #endif
 			for (int i = 0; i < item_count; ++i)
 			{
@@ -2761,6 +2846,7 @@ void reshade::runtime::draw_gui()
 		case 6: draw_gui_optimize(); break;
 		case 7: draw_gui_aimlab(); break;
 		case 8: draw_gui_engine(); break;
+		case 9: draw_gui_sidenotice(); break;
 		default: draw_gui_home(); break;
 		}
 		ImGui::EndChild();
@@ -2874,6 +2960,27 @@ void reshade::runtime::draw_gui()
 #if RESHADE_LOCALIZATION
 	resources::set_current_language(prev_language);
 #endif
+
+	// SHERBET: 한글 조합 중인 글자를 입력칸 커서 자리에 그린다(input_windows.cpp 가 GCS_COMPSTR 를 읽어 둔다).
+	// 리쉐이드는 **확정된** 글자만 입력칸에 넣는다. 이게 없으면 '빈집' 을 칠 때 '집' 이 다음 글자를 칠 때까지
+	// 안 보였다(사용자 제보: 한 글자 더 쳐야 앞 글자가 보인다). 커서 뒤 글자를 가리도록 입력칸 바탕을 깔고
+	// 밑줄을 긋는다 — 아직 확정 전이라는 표시. 글자 크기는 그 입력칸의 크기 그대로라 폰트를 새로 굽지 않는다.
+	if (_input != nullptr && _imgui_context->PlatformImeData.WantVisible && !_input->text_composition().empty())
+	{
+		const ImGuiPlatformImeData &ime = _imgui_context->PlatformImeData;
+		const std::wstring &wcomp = _input->text_composition();
+		std::string comp(static_cast<size_t>(WideCharToMultiByte(CP_UTF8, 0, wcomp.c_str(), static_cast<int>(wcomp.size()), nullptr, 0, nullptr, nullptr)), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wcomp.c_str(), static_cast<int>(wcomp.size()), comp.data(), static_cast<int>(comp.size()), nullptr, nullptr);
+		ImFont *const font = ImGui::GetFont();
+		const float size = ime.InputLineHeight;
+		const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, comp.c_str());
+		const ImVec2 p(ime.InputPos.x + 1.0f, ime.InputPos.y);
+		const sherbet::theme &t = sherbet::active_theme();
+		ImDrawList *const dl = ImGui::GetForegroundDrawList();
+		dl->AddRectFilled(ImVec2(p.x - 1.0f, p.y), ImVec2(p.x + ts.x + 2.0f, p.y + size + 1.0f), sherbet::with_alpha(t.panel, 255));
+		dl->AddText(font, size, p, sherbet::with_alpha(t.text, 255), comp.c_str());
+		dl->AddLine(ImVec2(p.x, p.y + size), ImVec2(p.x + ts.x, p.y + size), sherbet::with_alpha(t.accent, 230), 1.5f);
+	}
 
 	// Disable keyboard shortcuts while typing into input boxes
 	_ignore_shortcuts |= ImGui::IsAnyItemActive();
@@ -3653,7 +3760,8 @@ static bool sherbet_hotkey_box(const char *id, sherbet::hotkey::chord &key, cons
 	static hk::capture cap;
 	static ImGuiID cap_id = 0;
 	const ImGuiID my_id = ImGui::GetID(id);
-	const auto key_name = [](unsigned int vk) { return reshade::input::key_name(vk); };
+	// ` 는 리쉐이드 이름표가 'OEM ~' 라 알아보기 어렵다(사이드공지 기본키 '스페이스바 + `' 에서 지적) — 글자 그대로.
+	const auto key_name = [](unsigned int vk) { return vk == 0xC0 ? std::string("`") : reshade::input::key_name(vk); };
 
 	const bool capturing = cap_id == my_id;
 	const std::string shown = capturing ? (cap.any ? hk::name(cap.best, key_name) : std::string()) : hk::name(key, key_name);
@@ -6005,6 +6113,518 @@ void reshade::runtime::sherbet_draw_ime_lock_card(const sherbet::paid::feature &
 		sherbet_draw_lock_footer(f);
 	}
 	sherbet::end_card();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SHERBET: 사이드공지(sherbet_sidenotice.hpp)
+//   단축키 → 작은 창(오버레이를 연 채 큰 메뉴 대신 그린다) → 장소 몇 글자 → Enter 면 채팅으로 바로 올리기,
+//   줄을 클릭하면 복사만. 문장은 서버가 역할 있는 것만 내려준다(sherbet::content_sidenotices).
+// ─────────────────────────────────────────────────────────────────────────────
+static const char *const kSideNone = "\xEC\xB0\xBE\xEB\x8A\x94 \xEC\x9E\xA5\xEC\x86\x8C\xEA\xB0\x80 \xEC\x97\x86\xEC\x96\xB4\xEC\x9A\x94"; // "찾는 장소가 없어요"
+static const char *const kSideLoading = "\xEA\xB3\xB5\xEC\xA7\x80 \xEB\xAC\xB8\xEC\x9E\xA5\xEC\x9D\x84 \xEB\xB6\x88\xEB\x9F\xAC\xEC\x98\xA4\xEB\x8A\x94 \xEC\xA4\x91\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94 \xE2\x80\x94 \xEC\x9E\xA0\xEC\x8B\x9C \xEB\x92\xA4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x97\xB4\xEC\x96\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "공지 문장을 불러오는 중이에요 — 잠시 뒤 다시 열어 주세요"
+static const char *const kSideCopied = "\xEB\xB3\xB5\xEC\x82\xAC\xED\x96\x88\xEC\x96\xB4\xEC\x9A\x94 \xE2\x80\x94 \xEC\xB1\x84\xED\x8C\x85\xEC\x97\x90\xEC\x84\x9C Ctrl+V"; // "복사했어요 — 채팅에서 Ctrl+V"
+static const char *const kSidePosted = "\xEC\x98\xAC\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94"; // "올렸어요"
+static const char *const kSideStopped = "\xEA\xB2\x8C\xEC\x9E\x84 \xEC\xB0\xBD\xEC\x9D\xB4 \xEC\x95\x9E\xEC\x97\x90 \xEC\x97\x86\xEC\x96\xB4\xEC\x84\x9C \xEB\xA9\x88\xEC\xB7\x84\xEC\x96\xB4\xEC\x9A\x94"; // "게임 창이 앞에 없어서 멈췄어요"
+
+// 그룹 이름 → 잠금 기능 id. 모르는 그룹(앞으로 늘어날 것)은 nullptr — 서버가 준 대로 보여준다.
+static const char *sherbet_side_feature(const std::string &group)
+{
+	if (group == "\xEA\xB2\xBD\xEC\xB0\xB0\xEC\xB2\xAD") return "sidenotice_police"; // "경찰청"
+	if (group == "\xEB\xB3\xB4\xEC\x95\x88\xEA\xB5\xAD") return "sidenotice_sec";    // "보안국"
+	return nullptr;
+}
+
+bool reshade::runtime::sherbet_side_any_unlocked() const
+{
+	return sherbet_feature_unlocked("sidenotice_police") || sherbet_feature_unlocked("sidenotice_sec");
+}
+
+// 클립보드에 넣고, send 면 메뉴를 닫은 뒤 채팅 키 → Ctrl+V → Enter 를 시간표대로 보낸다.
+// ⚠️ 클립보드를 쓰는 이유: 파엠 채팅은 웹 입력칸이라 Ctrl+V 가 한 번에 정확히 들어간다. 글자를 키로 하나씩
+//    치면 한글 입력기를 거쳐 조합이 깨진다(그리고 키밀림 방지가 입력기를 바꾸는 중일 수 있다).
+void reshade::runtime::sherbet_side_post(const std::string &text, bool send)
+{
+	ImGui::SetClipboardText(text.c_str());
+	_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
+	if (send)
+	{
+		_sherbet_side_poster.start(static_cast<long long>(GetTickCount64()), _sherbet_side_delay_ms);
+		_sherbet_side_msg.clear(); // 올리고 나서(send 단계) 채운다
+		_sherbet_side_close = true; // 메뉴가 열려 있으면 키가 게임에 안 간다
+	}
+	else
+	{
+		_sherbet_side_msg = kSideCopied;
+		if (_sherbet_side_quick)
+			_sherbet_side_close = true; // 작은 창에서 복사했으면 바로 채팅으로 가게 닫아 준다
+	}
+}
+
+// 목록에서 하나 골랐다. 문장에 채울 칸({대상}·{시간+30}·{팩션}·[00:00])이 있으면 바로 안 올리고
+// 작은 창에서 칸을 차례로 받는다(시간 칸은 지금+N분이 미리 들어 있다). 큰 메뉴 탭에서 골랐어도 작은 창으로.
+void reshade::runtime::sherbet_side_choose(const sherbet::sidenotice::entry &e, bool send)
+{
+	const std::vector<sherbet::sidenotice::slot> slots = sherbet::sidenotice::find_slots(e.text);
+	if (slots.empty())
+	{
+		sherbet_side_post(e.text, send);
+		return;
+	}
+	const std::time_t now = std::time(nullptr);
+	struct tm lt; localtime_s(&lt, &now);
+	_sherbet_side_fill_buf.assign(slots.size(), {});
+	for (size_t i = 0; i < slots.size(); ++i)
+	{
+		const std::string def = sherbet::sidenotice::slot_default(slots[i], lt.tm_hour, lt.tm_min);
+		std::snprintf(_sherbet_side_fill_buf[i].data(), _sherbet_side_fill_buf[i].size(), "%s", def.c_str());
+	}
+	_sherbet_side_fill_text = e.text;
+	_sherbet_side_fill_zone = e.zone;
+	_sherbet_side_fill_send = send;
+	_sherbet_side_fill_at = 0;
+	_sherbet_side_fill_bad = -1;
+	_sherbet_side_quick = true;
+	_sherbet_side_focus = true;
+	// 고번 닉네임 칸이 있으면 입력기를 한글로(닉네임은 대부분 한글이다). 창이 닫히면 원래대로 돌아간다.
+	if (_input != nullptr)
+		for (const sherbet::sidenotice::slot &s : slots)
+			if (s.kind == sherbet::sidenotice::slot_kind::target)
+			{
+				_input->sherbet_ime_request_korean();
+				break;
+			}
+}
+
+// ⚠️ draw_gui() 앞부분(early-out 위)에서 매 프레임 부른다 — 키를 보낼 때는 메뉴가 닫혀 있어 early-out 상태다.
+void reshade::runtime::sherbet_side_tick()
+{
+	if (!_sherbet_side_poster.active())
+		return;
+	const sherbet::sidenotice::post_action act = _sherbet_side_poster.tick(static_cast<long long>(GetTickCount64()));
+	if (act == sherbet::sidenotice::post_action::none)
+		return;
+
+	// 메뉴를 다시 열었거나 다른 프로그램으로 갔으면 멈춘다 — 키가 엉뚱한 곳(우리 메뉴·카톡)에 들어간다.
+	if (_show_overlay || GetForegroundWindow() != static_cast<HWND>(get_hwnd()))
+	{
+		_sherbet_side_poster.cancel();
+		_sherbet_side_msg = kSideStopped;
+		_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
+		return;
+	}
+
+	INPUT in[6] = {};
+	const auto key = [&in](int i, WORD vk, bool up) {
+		in[i].type = INPUT_KEYBOARD;
+		in[i].ki.wVk = vk;
+		in[i].ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+		in[i].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+	};
+	switch (act)
+	{
+	case sherbet::sidenotice::post_action::open_chat:
+	{
+		// 사이드공지는 일반 채팅창에 친다 — 사이드공지 탭의 '채팅 키'(기본 T).
+		const WORD chat = static_cast<WORD>(_sherbet_side_chat_key[0] != 0 ? _sherbet_side_chat_key[0] : 'T');
+		key(0, chat, false);
+		key(1, chat, true);
+		SendInput(2, in, sizeof(INPUT));
+		break;
+	}
+	case sherbet::sidenotice::post_action::paste:
+		// ⚠️ Ctrl+A 로 전체 선택한 뒤 붙여넣는다. 채팅 키(T)를 누르는 순간 키밀림 방지가 한글로 바꿔서
+		//    그 T 가 'ㅅ' 으로 채팅칸에 먼저 들어간다(실측: 'ㅅ/경찰청 …' 로 나가 명령어가 깨졌다).
+		//    무엇이 먼저 들어가 있든 문장으로 통째로 바꿔치기한다.
+		key(0, VK_CONTROL, false);
+		key(1, 'A', false);
+		key(2, 'A', true);
+		key(3, 'V', false);
+		key(4, 'V', true);
+		key(5, VK_CONTROL, true);
+		SendInput(6, in, sizeof(INPUT));
+		break;
+	case sherbet::sidenotice::post_action::send:
+		key(0, VK_RETURN, false);
+		key(1, VK_RETURN, true);
+		SendInput(2, in, sizeof(INPUT));
+		_sherbet_side_msg = kSidePosted;
+		_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
+		break;
+	default:
+		break;
+	}
+}
+
+void reshade::runtime::sherbet_draw_side_quick()
+{
+	const sherbet::theme &t = sherbet::active_theme();
+	const ImGuiViewport *const vp = ImGui::GetMainViewport();
+	const float fs = _imgui_context->Style.FontSizeBase * _imgui_context->Style.FontScaleMain;
+	// 작은 박스 하나(구매자 의견: '너무 크다'). 검색은 좁게, 칸 채우기는 미리보기 문장이 들어가게 조금 넓게.
+	const float w = ImMin(vp->Size.x - 32.0f, fs * (_sherbet_side_fill_text.empty() ? 21.0f : 27.0f));
+
+	// 권한 있는 그룹 문장만. (서버도 역할로 거르지만 '잠금 화면 미리보기' 를 켜면 여기서도 잠근다.)
+	std::vector<sherbet::sidenotice::entry> list;
+	for (const sherbet::sidenotice::entry &e : sherbet::content_sidenotices())
+		if (const char *const f = sherbet_side_feature(e.group); f == nullptr || sherbet_feature_unlocked(f))
+			list.push_back(e);
+	bool many_groups = false;
+	for (const sherbet::sidenotice::entry &e : list)
+		if (e.group != list.front().group) { many_groups = true; break; }
+
+	// 위치 — 끌어서 옮길 수 있다(FPS 표시와 같은 규칙: **끄는 동안만** 위치를 따라가 저장하고, 평소엔 저장값에 놓는다).
+	// 저장값은 화면 비율(가운데 x, 위쪽 y)이라 해상도가 바뀌어도 같은 자리다.
+	ImGuiWindow *const quick_window = ImGui::FindWindowByName("##sherbet_side_quick");
+	const bool quick_dragging = quick_window != nullptr && _imgui_context->MovingWindow == quick_window;
+	if (!quick_dragging)
+		ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * _sherbet_side_pos[0], vp->Pos.y + vp->Size.y * _sherbet_side_pos[1]), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+	ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.0f), ImVec2(w, vp->Size.y * 0.7f));
+	if (_sherbet_side_focus)
+		ImGui::SetNextWindowFocus();
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(t.bg0, 246)));
+	ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(sherbet::with_alpha(t.accent, 150)));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(fs * 0.55f, fs * 0.5f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+	ImGui::Begin("##sherbet_side_quick", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar);
+	ImGui::PopStyleVar(2);
+	ImGui::PopStyleColor(2);
+	if (quick_dragging)
+	{
+		const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+		_sherbet_side_pos[0] = ImClamp((wp.x + ws.x * 0.5f - vp->Pos.x) / ImMax(1.0f, vp->Size.x), 0.0f, 1.0f);
+		_sherbet_side_pos[1] = ImClamp((wp.y - vp->Pos.y) / ImMax(1.0f, vp->Size.y), 0.0f, 0.95f);
+		_sherbet_side_pos_dirty = true;
+	}
+	else if (_sherbet_side_pos_dirty)
+	{
+		_sherbet_side_pos_dirty = false;
+		save_config(); // 놓았다 — 한 번만 저장
+	}
+
+	// ── 칸 채우기 단계(수배·알디컨·영장·보습) ──────────────────────────────────
+	// 문장에 채울 칸이 있는 항목을 고르면 여기로 온다. 칸이 차례로 있고 Enter 면 다음 칸, 마지막 칸에서
+	// Enter 면 올라간다. 시간 칸은 지금+N분이 골라진 채로 떠서 그대로 Enter 하거나 '2135' 처럼 덮어 친다.
+	// 고번 닉네임은 '141정렬' '141 정렬' '141/정렬' 어느 쪽이든 '141/정렬' 로. Esc 는 목록으로.
+	if (!_sherbet_side_fill_text.empty())
+	{
+		namespace sn = sherbet::sidenotice;
+		const std::vector<sn::slot> slots = sn::find_slots(_sherbet_side_fill_text);
+		if (_sherbet_side_fill_buf.size() != slots.size())
+			_sherbet_side_fill_buf.resize(slots.size());
+		const int n = static_cast<int>(slots.size());
+		_sherbet_side_fill_at = ImClamp(_sherbet_side_fill_at, 0, ImMax(0, n - 1));
+
+		ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(t.accent), "%s", ICON_FK_COMMENTS);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(_sherbet_side_fill_zone.c_str());
+
+		const auto label_of = [](const sn::slot &s) -> std::string {
+			if (s.kind == sn::slot_kind::target) return "\xEA\xB3\xA0\xEB\xB2\x88 \xEB\x8B\x89\xEB\x84\xA4\xEC\x9E\x84"; // "고번 닉네임"
+			return s.label;
+		};
+		float label_w = 0.0f;
+		for (const sn::slot &s : slots)
+			label_w = ImMax(label_w, ImGui::CalcTextSize(label_of(s).c_str()).x);
+
+		std::vector<std::string> values(slots.size());
+		std::vector<bool> ok(slots.size(), false);
+		int enter_at = -1;
+		for (int i = 0; i < n; ++i)
+		{
+			const sn::slot &s = slots[static_cast<size_t>(i)];
+			ImGui::PushID(i);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted(label_of(s).c_str());
+			ImGui::SameLine(label_w + _imgui_context->Style.WindowPadding.x + fs * 0.8f);
+			if (_sherbet_side_focus && i == _sherbet_side_fill_at)
+			{
+				ImGui::SetKeyboardFocusHere();
+				_sherbet_side_focus = false;
+			}
+			ImGui::SetNextItemWidth(s.kind == sn::slot_kind::time ? fs * 5.0f : -FLT_MIN);
+			// 조합 중인 칸은 안내 문구를 숨긴다(첫 글자 조합 동안 '141 정렬' 이 글자 밑에 겹쳐 보인다).
+			const bool composing_here = i == _sherbet_side_fill_at && _input != nullptr && !_input->text_composition().empty();
+			const char *const hint = s.kind == sn::slot_kind::target && !composing_here ? "141 \xEC\xA0\x95\xEB\xA0\xAC" : ""; // "141 정렬"
+			if (ImGui::InputTextWithHint("##fill", hint, _sherbet_side_fill_buf[static_cast<size_t>(i)].data(), _sherbet_side_fill_buf[static_cast<size_t>(i)].size(),
+					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+				enter_at = i;
+			if (ImGui::IsItemActive())
+				_sherbet_side_fill_at = i; // 마우스로 다른 칸을 눌렀으면 거기서부터
+			ok[static_cast<size_t>(i)] = sn::slot_value(s, _sherbet_side_fill_buf[static_cast<size_t>(i)].data(), values[static_cast<size_t>(i)]);
+			if (!ok[static_cast<size_t>(i)])
+				values[static_cast<size_t>(i)].clear();
+			ImGui::PopID();
+		}
+
+		// 미리보기 — 아직 안 채운 칸은 '…' 로
+		const std::string filled = sn::fill_slots(_sherbet_side_fill_text, slots, values, "\xE2\x80\xA6");
+		ImGui::Spacing();
+		ImGui::TextDisabled("%s", "\xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x88 \xEB\xAC\xB8\xEC\x9E\xA5"); // "올라갈 문장"
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(filled.c_str());
+		ImGui::PopTextWrapPos();
+		// 닉네임이 아주 길면 채팅칸 상한(166자)을 넘어 끝이 잘린다 — 올리기 전에 알려 준다(막지는 않는다).
+		if (const size_t chars = sn::char_count(filled); chars > sn::kChatMaxChars)
+			ImGui::TextColored(ImVec4(1.0f, 0.70f, 0.35f, 1.0f),
+				"\xEC\xB1\x84\xED\x8C\x85 \xEA\xB8\x80\xEC\x9E\x90 \xEC\x88\x98\xEB\xA5\xBC \xEB\x84\x98\xEC\x96\xB4\xEC\x9A\x94 (%d/%d) \xE2\x80\x94 \xEB\x81\x9D\xEC\x9D\xB4 \xEC\x9E\x98\xEB\xA6\xB4 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94", // "채팅 글자 수를 넘어요 (%d/%d) — 끝이 잘릴 수 있어요"
+				static_cast<int>(chars), static_cast<int>(sn::kChatMaxChars));
+
+		if (_sherbet_side_fill_bad >= 0 && _sherbet_side_fill_bad < n && !ok[static_cast<size_t>(_sherbet_side_fill_bad)])
+		{
+			const sn::slot &bad = slots[static_cast<size_t>(_sherbet_side_fill_bad)];
+			const char *const why =
+				bad.kind == sn::slot_kind::target ? "\xEA\xB3\xA0\xEB\xB2\x88\xEA\xB3\xBC \xEB\x8B\x89\xEB\x84\xA4\xEC\x9E\x84\xEC\x9D\x84 141 \xEC\xA0\x95\xEB\xA0\xAC \xEC\xB2\x98\xEB\x9F\xBC \xEC\x8D\xA8 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94" : // "고번과 닉네임을 141 정렬 처럼 써 주세요"
+				bad.kind == sn::slot_kind::time ? "\xEC\x8B\x9C\xEA\xB0\x84\xEC\x9D\x84 21:35 \xEB\x82\x98 2135 \xEC\xB2\x98\xEB\x9F\xBC \xEC\x8D\xA8 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94" : // "시간을 21:35 나 2135 처럼 써 주세요"
+				"\xEB\xB9\x84\xEC\x96\xB4 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94"; // "비어 있어요"
+			ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", why);
+		}
+
+		if (enter_at >= 0)
+		{
+			if (!ok[static_cast<size_t>(enter_at)])
+			{
+				_sherbet_side_fill_bad = enter_at;
+				_sherbet_side_fill_at = enter_at;
+				_sherbet_side_focus = true; // Enter 로 빠진 칸에 다시 커서
+			}
+			else if (enter_at < n - 1)
+			{
+				_sherbet_side_fill_bad = -1;
+				_sherbet_side_fill_at = enter_at + 1; // 다음 칸
+				_sherbet_side_focus = true;
+			}
+			else
+			{
+				// 마지막 칸 — 다 맞으면 올리고, 아니면 처음 틀린 칸으로 돌아간다.
+				int first_bad = -1;
+				for (int i = 0; i < n && first_bad < 0; ++i)
+					if (!ok[static_cast<size_t>(i)])
+						first_bad = i;
+				if (first_bad < 0)
+				{
+					const bool send = _sherbet_side_fill_send;
+					_sherbet_side_fill_text.clear();
+					sherbet_side_post(filled, send);
+				}
+				else
+				{
+					_sherbet_side_fill_bad = first_bad;
+					_sherbet_side_fill_at = first_bad;
+					_sherbet_side_focus = true;
+				}
+			}
+		}
+		else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		{
+			_sherbet_side_fill_text.clear();
+			_sherbet_side_focus = true; // 검색칸으로
+		}
+
+		ImGui::Spacing();
+		ImGui::TextDisabled("%s", _sherbet_side_fill_at < n - 1
+			? "Enter \xEB\x8B\xA4\xEC\x9D\x8C \xEC\xB9\xB8  \xC2\xB7  Esc \xEB\x92\xA4\xEB\xA1\x9C" // "Enter 다음 칸  ·  Esc 뒤로"
+			: _sherbet_side_fill_send
+				? "Enter \xEC\x98\xAC\xEB\xA6\xAC\xEA\xB8\xB0  \xC2\xB7  Esc \xEB\x92\xA4\xEB\xA1\x9C"  // "Enter 올리기  ·  Esc 뒤로"
+				: "Enter \xEB\xB3\xB5\xEC\x82\xAC  \xC2\xB7  Esc \xEB\x92\xA4\xEB\xA1\x9C"); // "Enter 복사  ·  Esc 뒤로"
+		ImGui::End();
+		return;
+	}
+
+	// 입력칸 — 친 그대로 둔다. 영문 상태로 한글을 친 경우(키밀림 방지 때문에 게임 중엔 영문이다)엔
+	// 두벌식으로 읽은 모양('qls1' → '빈1')을 칸 오른쪽에 흐리게 보여 준다. 검색은 두 가지 다 본다.
+	const auto input_cb = [](ImGuiInputTextCallbackData *d) -> int {
+		runtime *const self = static_cast<runtime *>(d->UserData);
+		if (d->EventFlag == ImGuiInputTextFlags_CallbackCharFilter)
+		{
+			// 단축키(스페이스바 + `)로 열면 그 ` 와 꾹 누른 스페이스바 반복이 입력칸에 찍힌다. 장소 이름엔
+			// ` 가 없고 맨 앞 공백도 쓸모없으니 버린다.
+			if (d->EventChar == '`' || (d->EventChar == ' ' && self->_sherbet_side_query[0] == '\0'))
+				return 1;
+		}
+		else if (d->EventFlag == ImGuiInputTextFlags_CallbackHistory)
+		{
+			if (d->EventKey == ImGuiKey_UpArrow) --self->_sherbet_side_sel;
+			else if (d->EventKey == ImGuiKey_DownArrow) ++self->_sherbet_side_sel;
+		}
+		else if (d->EventFlag == ImGuiInputTextFlags_CallbackEdit)
+		{
+			// 친 글자는 그대로 둔다(영어 'atm' 도 쳐야 한다). 한글 자판으로 읽은 모양은 칸 오른쪽에 따로 보여 준다.
+			self->_sherbet_side_sel = 0; // 검색어가 바뀌면 맨 위부터
+		}
+		return 0;
+	};
+	if (_sherbet_side_focus)
+	{
+		ImGui::SetKeyboardFocusHere();
+		_sherbet_side_focus = false;
+	}
+	ImGui::SetNextItemWidth(-FLT_MIN);
+	const int sel_before = _sherbet_side_sel;
+	// 첫 글자를 조합하는 동안엔 칸이 아직 비어 있어 안내 문구가 조합 글자 밑에 겹쳐 보인다 — 그동안은 숨긴다.
+	const bool composing = _input != nullptr && !_input->text_composition().empty();
+	const bool enter = ImGui::InputTextWithHint("##side_q", composing ? "" : "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEC\x9E\xA5\xEC\x86\x8C \xEC\x9E\x85\xEB\xA0\xA5" /* "사이드공지 · 장소 입력" */, _sherbet_side_query, sizeof(_sherbet_side_query),
+		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCharFilter, input_cb, this);
+	{
+		// 영문 키가 섞여 있으면 한글 자판으로 읽은 모양을 칸 안 오른쪽에 — "→ 빈1"
+		const std::string composed = sherbet::sidenotice::compose_utf8(_sherbet_side_query);
+		if (composed != _sherbet_side_query)
+		{
+			const std::string hint = std::string(ICON_FK_LONG_ARROW_RIGHT " ") + composed; // 유니코드 → 는 폰트에 없을 수 있어 아이콘 글꼴로
+			const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+			const ImVec2 ts = ImGui::CalcTextSize(hint.c_str());
+			const float pad = _imgui_context->Style.FramePadding.x;
+			ImGui::GetWindowDrawList()->AddText(ImVec2(b.x - pad - ts.x, a.y + (b.y - a.y - ts.y) * 0.5f),
+				sherbet::with_alpha(t.text_dim, 200), hint.c_str());
+		}
+	}
+
+	// 검색어 = 입력칸 + 한글 입력기가 지금 조합 중인 글자(치는 즉시 결과가 바뀌게).
+	std::string query = _sherbet_side_query;
+	if (_input != nullptr && !_input->text_composition().empty())
+	{
+		const std::wstring &wc = _input->text_composition();
+		std::string comp(static_cast<size_t>(WideCharToMultiByte(CP_UTF8, 0, wc.c_str(), static_cast<int>(wc.size()), nullptr, 0, nullptr, nullptr)), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wc.c_str(), static_cast<int>(wc.size()), comp.data(), static_cast<int>(comp.size()), nullptr, nullptr);
+		query += comp;
+	}
+	const std::vector<size_t> hits = sherbet::sidenotice::search(list, query);
+	if (hits.empty())
+		_sherbet_side_sel = 0;
+	else
+		_sherbet_side_sel = ImClamp(_sherbet_side_sel, 0, static_cast<int>(hits.size()) - 1);
+	const bool sel_moved = _sherbet_side_sel != sel_before;
+
+	if (enter && !hits.empty())
+		sherbet_side_choose(list[hits[static_cast<size_t>(_sherbet_side_sel)]], true);
+	if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		_sherbet_side_close = true;
+
+	// 결과 — 칠 때만, 한 줄짜리 최대 5줄(장소 이름만). 빈 검색어면 입력칸 하나만 보인다(작은 박스).
+	if (list.empty())
+	{
+		ImGui::TextDisabled("%s", kSideLoading);
+	}
+	else if (!query.empty() && hits.empty())
+	{
+		ImGui::TextDisabled("%s", kSideNone);
+	}
+	else if (!query.empty())
+	{
+		const float line = ImGui::GetTextLineHeight();
+		const float row_h = line + fs * 0.3f;
+		const int shown = ImMin(static_cast<int>(hits.size()), 5);
+		ImGui::BeginChild("##side_rows", ImVec2(0.0f, shown * (row_h + _imgui_context->Style.ItemSpacing.y)), ImGuiChildFlags_None);
+		ImDrawList *const dl = ImGui::GetWindowDrawList();
+		for (int i = 0; i < static_cast<int>(hits.size()); ++i)
+		{
+			const sherbet::sidenotice::entry &e = list[hits[static_cast<size_t>(i)]];
+			ImGui::PushID(static_cast<int>(hits[static_cast<size_t>(i)]));
+			if (ImGui::Selectable("##row", i == _sherbet_side_sel, ImGuiSelectableFlags_None, ImVec2(0.0f, row_h)))
+				sherbet_side_choose(e, false); // 클릭 = 복사만
+			if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
+			{
+				// 문장 전체는 마우스를 올리면 — 그냥 두면 한 줄로 화면 끝까지 뻗어서 줄을 접는다.
+				ImGui::PushTextWrapPos(fs * 24.0f);
+				ImGui::TextUnformatted(e.text.c_str());
+				ImGui::PopTextWrapPos();
+				ImGui::EndTooltip();
+			}
+			if (i == _sherbet_side_sel && sel_moved)
+				ImGui::SetScrollHereY();
+			const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+			const float pad = fs * 0.4f;
+			// 고른 줄 표시 — 테마의 Selectable 바탕색은 너무 옅어서 위아래 키로 고른 줄이 안 보였다(정렬 지적).
+			// 강조색 바탕 + 왼쪽 막대로 직접 그린다. 마우스를 올린 줄은 옅게.
+			const bool sel_row = i == _sherbet_side_sel;
+			if (sel_row)
+			{
+				dl->AddRectFilled(a, b, sherbet::with_alpha(t.accent, 70), fs * 0.25f);
+				dl->AddRectFilled(a, ImVec2(a.x + fs * 0.18f, b.y), sherbet::with_alpha(t.accent, 255), fs * 0.1f);
+			}
+			else if (ImGui::IsItemHovered())
+			{
+				dl->AddRectFilled(a, b, sherbet::with_alpha(t.accent, 28), fs * 0.25f);
+			}
+			dl->AddText(ImVec2(a.x + pad + (sel_row ? fs * 0.2f : 0.0f), a.y + (row_h - line) * 0.5f),
+				sel_row ? sherbet::with_alpha(t.accent, 255) : sherbet::with_alpha(t.text, 235), e.zone.c_str());
+			if (many_groups)
+			{
+				const ImVec2 gs = ImGui::CalcTextSize(e.group.c_str());
+				dl->AddText(ImVec2(b.x - pad - gs.x, a.y + (row_h - line) * 0.5f), sherbet::with_alpha(t.accent, 200), e.group.c_str());
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndChild();
+		ImGui::TextDisabled("%s", "Enter \xEC\x98\xAC\xEB\xA6\xAC\xEA\xB8\xB0  \xC2\xB7  \xED\x81\xB4\xEB\xA6\xAD \xEB\xB3\xB5\xEC\x82\xAC"); // "Enter 올리기  ·  클릭 복사"
+	}
+	ImGui::End();
+}
+
+void reshade::runtime::draw_gui_sidenotice()
+{
+	bool modified = false;
+
+	ImGui::PushFont(_sherbet_title_font, _imgui_context->Style.FontSizeBase * 1.6f);
+	ImGui::TextUnformatted(ICON_FK_COMMENTS "  \xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80"); // "사이드공지"
+	ImGui::PopFont();
+	ImGui::Spacing();
+
+	// 잠긴 그룹은 판매 카드.
+	for (const char *const fid : { "sidenotice_police", "sidenotice_sec" })
+	{
+		if (sherbet_feature_unlocked(fid))
+			continue;
+		if (const sherbet::paid::feature *const f = sherbet::paid::find(fid))
+		{
+			ImGui::PushID(fid);
+			sherbet::begin_card("##side_lock");
+			sherbet_draw_lock_header(*f);
+			sherbet_draw_lock_footer(*f);
+			sherbet::end_card();
+			ImGui::PopID();
+			ImGui::Spacing();
+		}
+	}
+	if (!sherbet_side_any_unlocked())
+		return;
+
+	// 설정 — 열기 단축키 · 채팅 키 · 채팅창 열리는 시간
+	sherbet::begin_card("##side_set");
+	{
+		sherbet_hint("\xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\x9C\x84\xEC\x97\x90 \xEC\x9E\x91\xEC\x9D\x80 \xEC\xB0\xBD\xEC\x9D\xB4 \xEB\x96\xA0\xEC\x9A\x94. \xEC\x9E\xA5\xEC\x86\x8C\xEB\xA5\xBC \xEB\xAA\x87 \xEA\xB8\x80\xEC\x9E\x90 \xEC\xB9\x98\xEA\xB3\xA0 Enter \xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEA\xB3\xA0, \xEC\xA4\x84\xEC\x9D\x84 \xED\x81\xB4\xEB\xA6\xAD\xED\x95\x98\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\xA7\x8C \xED\x95\xB4\xEC\x9A\x94."); // "단축키를 누르면 게임 위에 작은 창이 떠요. 장소를 몇 글자 치고 Enter 면 바로 올라가고, 줄을 클릭하면 복사만 해요."
+		if (_input != nullptr)
+		{
+			// 멀티키 칸(조준점·돋보기 프리셋과 같은 것) — 스페이스바 + ` 처럼 아무 키나 4개까지.
+			if (sherbet_hotkey_box("##side_key", _sherbet_side_key, *_input, ImMax(220.0f, 12.0f * ImGui::GetFontSize())))
+				modified = true;
+			ImGui::SameLine();
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("\xEC\x97\xB4\xEA\xB8\xB0 \xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4"); // "열기 단축키"
+			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
+			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4##side_chat", _sherbet_side_chat_key, *_input)) // "채팅 키"
+			{
+				_sherbet_side_chat_key[1] = _sherbet_side_chat_key[2] = _sherbet_side_chat_key[3] = 0; // 키 하나만
+				modified = true;
+			}
+		}
+		ImGui::SetNextItemWidth(ImMax(160.0f, 10.0f * ImGui::GetFontSize()));
+		if (ImGui::SliderInt("\xEC\xB1\x84\xED\x8C\x85\xEC\xB0\xBD \xEC\x97\xB4\xEB\xA6\xAC\xEB\x8A\x94 \xEC\x8B\x9C\xEA\xB0\x84##side_delay", &_sherbet_side_delay_ms, // "채팅창 열리는 시간"
+				sherbet::sidenotice::kMinChatDelayMs, sherbet::sidenotice::kMaxChatDelayMs, "%d ms", ImGuiSliderFlags_AlwaysClamp))
+			modified = true;
+		sherbet_hint("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4(T)\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEA\xB3\xA0 \xEC\xB1\x84\xED\x8C\x85\xEC\xB0\xBD\xEC\x9D\xB4 \xEC\x97\xB4\xEB\xA6\xAC\xEB\xA9\xB4 Ctrl+V, Enter \xEB\xA5\xBC \xEB\x8C\x80\xEC\x8B\xA0 \xEB\x88\x8C\xEB\x9F\xAC \xEC\xA4\x98\xEC\x9A\x94. \xEC\xB1\x84\xED\x8C\x85\xEC\xB0\xBD\xEC\x9D\xB4 \xEB\x8A\xA6\xEA\xB2\x8C \xEC\x97\xB4\xEB\xA0\xA4\xEC\x84\x9C \xEA\xB8\x80\xEC\x9E\x90\xEA\xB0\x80 \xEC\x95\x88 \xEB\x93\xA4\xEC\x96\xB4\xEA\xB0\x80\xEB\xA9\xB4 '\xEC\xB1\x84\xED\x8C\x85\xEC\xB0\xBD \xEC\x97\xB4\xEB\xA6\xAC\xEB\x8A\x94 \xEC\x8B\x9C\xEA\xB0\x84'\xEC\x9D\x84 \xEB\x8A\x98\xEB\xA0\xA4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94."); // "채팅 키(T)를 누르고 채팅창이 열리면 Ctrl+V, Enter 를 대신 눌러 줘요. 채팅창이 늦게 열려서 글자가 안 들어가면 '채팅창 열리는 시간'을 늘려 주세요."
+		if (!_sherbet_side_msg.empty() && std::chrono::high_resolution_clock::now() - _sherbet_side_msg_time < std::chrono::seconds(4))
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(sherbet::active_theme().accent), "%s", _sherbet_side_msg.c_str());
+	}
+	sherbet::end_card();
+	ImGui::Spacing();
+
+	// 목록(올리기·복사 버튼)은 두지 않는다 — 쓰는 곳은 단축키 작은 창뿐이다(정렬 결정). 문장이 도착했는지만 알린다.
+	if (sherbet::content_sidenotices().empty())
+		ImGui::TextDisabled("%s", kSideLoading);
+
+	if (modified)
+		save_config();
 }
 
 void reshade::runtime::draw_gui_settings()
