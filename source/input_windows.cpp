@@ -116,7 +116,8 @@ static WPARAM sherbet_resolve_ime_vk(WPARAM vk, HWND hwnd)
 }
 
 // SHERBET: 한글 키밀림 방지(sherbet_ime.hpp) — 게임 창 입력기를 한글/영문으로 바꾸고, 바뀐 뒤 상태를 돌려준다.
-// -1 = 입력기가 없는 창(게임이 떼어 둔 경우), 0 = 영문, 1 = 한글. korean 이 -1 이면 바꾸지 않고 읽기만 한다.
+// -1 = 입력기가 없는 창(게임이 떼어 둔 경우), 0 = 영문, 1 = 한글. korean 이 -1 이면 한/영은 그대로 두고 읽는다
+// (전자 모드만은 꺼 둔다 — 아래 주석).
 // ⚠️ 창 스레드(메시지 훅 안)에서만 부른다. 입력기 컨텍스트는 그 창을 만든 스레드에 묶여 있어
 //    렌더 스레드(present)에서 바꾸면 먹지 않는다.
 static int sherbet_ime_switch(HWND hwnd, int korean)
@@ -132,12 +133,17 @@ static int sherbet_ime_switch(HWND hwnd, int korean)
 	int mode = -1;
 	if (ImmGetConversionStatus(himc, &conv, &sentence))
 	{
-		if (korean >= 0)
-		{
-			const DWORD want = korean == 1 ? (conv | IME_CMODE_NATIVE) : (conv & ~static_cast<DWORD>(IME_CMODE_NATIVE));
-			if (want != conv && ImmSetConversionStatus(himc, want, sentence))
-				conv = want;
-		}
+		// ⚠️ 전자(전각) 모드는 읽기만 하는 호출에서도 끈다. 전자 모드면 파이브엠 채팅에 일반 글자와
+		//    전각 글자가 **둘 다** 들어가 스페이스가 두 칸('　' 포함), '+' 가 '+＋' 로 찍힌다(실측).
+		//    Alt+= 한 번이면 켜지고, 한/영을 바꿔도 그대로 남아 있어서 한번 걸리면 계속 간다.
+		//    채팅에서 전각 문자를 쓸 일은 없으니 보이는 대로 끈다(Alt 를 뗄 때도 여기서 읽는다).
+		DWORD want = conv & ~static_cast<DWORD>(IME_CMODE_FULLSHAPE);
+		if (korean == 1)
+			want |= IME_CMODE_NATIVE;
+		else if (korean == 0)
+			want &= ~static_cast<DWORD>(IME_CMODE_NATIVE);
+		if (want != conv && ImmSetConversionStatus(himc, want, sentence))
+			conv = want;
 		mode = (ImmGetOpenStatus(himc) && (conv & IME_CMODE_NATIVE) != 0) ? 1 : 0;
 	}
 	ImmReleaseContext(hwnd, himc);
