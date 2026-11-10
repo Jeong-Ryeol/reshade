@@ -498,6 +498,7 @@ namespace reshade
 		bool _sherbet_ime_on = false;
 		bool _sherbet_ime_korean_on_chat = true;
 		unsigned int _sherbet_ime_chat_key[4] = { 'T', 0, 0, 0 };
+		unsigned int _sherbet_ime_chat_key2[4] = { 0x76 /* F7 */, 0, 0, 0 }; // 두 번째 채팅 키(무전 등 다른 채팅창)
 		// 화면 위쪽 가운데 작은 '한글/영문' 표시. ⚠️ 켜져 있으면 draw_gui() early-out 면제(게임 중에 보여야 한다).
 		bool _sherbet_ime_show = true;
 		float _sherbet_ime_pos[2] = { 0.5f, 0.012f }; // 화면 비율(0=왼쪽/위, 1=오른쪽/아래). 메뉴 연 채로 끌어서 옮긴다

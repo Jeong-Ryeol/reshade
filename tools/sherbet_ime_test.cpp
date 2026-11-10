@@ -147,6 +147,22 @@ static void test_reads_ime_only_rare_keys()
 	assert(!reads_ime('T', 0));
 }
 
+// 채팅 키 2(기본 F7): 어느 키로 열어도 한글, Enter 면 영문. 0 이면 그 키는 아무 일도 안 한다.
+static void test_second_chat_key()
+{
+	const unsigned int f7 = kDefaultChatKey2;
+	state st;
+	assert(on_key_down(st, true, true, 'T', f7, false, false, f7) == action::to_korean);
+	assert(up(st, f7) == action::none);
+	assert(on_key_down(st, true, true, 'T', 'T', false, false, f7) == action::none); // 이미 열림(채팅 중 ㅅ)
+	assert(on_key_down(st, true, true, 'T', kVkReturn, false, false, f7) == action::none);
+	assert(up(st, kVkReturn) == action::to_english);
+	assert(on_key_down(st, true, true, 'T', 'T', false, false, f7) == action::to_korean); // T 로도 여전히
+	state off;
+	assert(on_key_down(off, true, true, 'T', f7, false, false, 0) == action::none);    // 키 2 안 씀
+	assert(reads_ime(f7, 'T', f7) && !reads_ime(f7, 'T', 0) && !reads_ime('W', 'T', f7));
+}
+
 int main()
 {
 	test_chat_cycle();
@@ -160,6 +176,7 @@ int main()
 	test_requested_english();
 	test_no_chat_key();
 	test_reads_ime_only_rare_keys();
-	std::printf("sherbet_ime_test: 11 passed\n");
+	test_second_chat_key();
+	std::printf("sherbet_ime_test: 12 passed\n");
 	return 0;
 }

@@ -404,6 +404,7 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	_sherbet_ime_pos[0] = ImClamp(_sherbet_ime_pos[0], 0.0f, 1.0f);
 	_sherbet_ime_pos[1] = ImClamp(_sherbet_ime_pos[1], 0.0f, 1.0f);
 	config_get("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
+	config_get("INPUT", "SherbetImeChatKey2", _sherbet_ime_chat_key2);
 	config.get("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -690,6 +691,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetImeShow", _sherbet_ime_show);
 	config.set("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
 	config.set("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
+	config.set("INPUT", "SherbetImeChatKey2", _sherbet_ime_chat_key2);
 	config.set("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -1156,7 +1158,7 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 한글 키밀림 방지 설정을 입력 쪽에 넘긴다. ⚠️ 여기는 early-out **위**라 메뉴가 닫혀 있어도 매 프레임 돈다.
 		// ⚠️ 유료 기능(imefix) — 잠겨 있으면 켜 둔 설정이 남아 있어도 입력기를 건드리지 않는다.
 		const bool ime_active = _sherbet_ime_on && sherbet_feature_unlocked("imefix");
-		_input->sherbet_ime_config(ime_active, _sherbet_ime_chat_key[0], _sherbet_ime_korean_on_chat);
+		_input->sherbet_ime_config(ime_active, _sherbet_ime_chat_key[0], _sherbet_ime_chat_key2[0], _sherbet_ime_korean_on_chat);
 		// 다른 프로그램(카톡 등)에서 한/영을 바꾸고 돌아와도 게임으로 오면 영문. 입력기 상태는 앱끼리 같이 바뀐다.
 		// 처음 켜졌을 때도 여기서 한 번 걸린다(_sherbet_ime_was_fg 초기값 false) — 게임은 영문으로 시작한다.
 		{
@@ -6256,8 +6258,12 @@ void reshade::runtime::draw_gui_settings()
 		std::string ime_st;
 		if (_sherbet_ime_on)
 		{
-			if (_sherbet_ime_korean_on_chat && _sherbet_ime_chat_key[0] != 0)
-				ime_st = std::string("\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 ") + input::key_name(_sherbet_ime_chat_key[0]) + // "켜짐 · " + 키
+			std::string chat_keys; // "T" / "T·F7" — 두 채팅 키 중 설정된 것
+			for (const unsigned int k : { _sherbet_ime_chat_key[0], _sherbet_ime_chat_key2[0] })
+				if (k != 0)
+					chat_keys += (chat_keys.empty() ? "" : "\xC2\xB7") + input::key_name(k);
+			if (_sherbet_ime_korean_on_chat && !chat_keys.empty())
+				ime_st = std::string("\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 ") + chat_keys + // "켜짐 · " + 키
 					" \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80, Enter\xC2\xB7" "Esc \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8"; // " 누르면 한글, Enter·Esc 누르면 영문"
 			else
 				ime_st = "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 Enter\xC2\xB7" "Esc \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8"; // "켜짐 · Enter·Esc 누르면 영문"
@@ -6296,9 +6302,16 @@ void reshade::runtime::draw_gui_settings()
 		if (_input != nullptr)
 		{
 			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
-			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4##ime_key", _sherbet_ime_chat_key, *_input)) // "채팅 키"
+			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4 1##ime_key", _sherbet_ime_chat_key, *_input)) // "채팅 키 1"
 			{
 				_sherbet_ime_chat_key[1] = _sherbet_ime_chat_key[2] = _sherbet_ime_chat_key[3] = 0; // 채팅 키는 키 하나만 본다(Ctrl 등 조합 무시)
+				modified = true;
+			}
+			// 두 번째 채팅 키(기본 F7) — 서버에 따라 무전 등 다른 채팅창을 여는 키. 어느 쪽으로 열어도 똑같이 한글.
+			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
+			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4 2##ime_key2", _sherbet_ime_chat_key2, *_input)) // "채팅 키 2"
+			{
+				_sherbet_ime_chat_key2[1] = _sherbet_ime_chat_key2[2] = _sherbet_ime_chat_key2[3] = 0;
 				modified = true;
 			}
 		}

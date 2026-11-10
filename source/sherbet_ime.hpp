@@ -39,6 +39,7 @@ namespace sherbet
 		constexpr unsigned int kVkMenu = 0x12;   // Alt — 오른쪽 Alt 를 한/영으로 쓰는 키보드
 		constexpr unsigned int kVkRMenu = 0xA5;
 		constexpr unsigned int kDefaultChatKey = 'T';
+		constexpr unsigned int kDefaultChatKey2 = 0x76; // F7 — 서버에 따라 다른 채팅(무전 등)을 여는 두 번째 키
 
 		struct state
 		{
@@ -46,9 +47,16 @@ namespace sherbet
 			bool english_on_release = false; // Enter·Esc 를 눌렀다 — 떼면 영문으로
 		};
 
+		// 이 키가 채팅을 여는 키인가. 채팅 키는 두 개까지(0 = 안 씀).
+		inline bool is_chat_key(unsigned int vk, unsigned int chat_vk, unsigned int chat_vk2)
+		{
+			return (chat_vk != 0 && vk == chat_vk) || (chat_vk2 != 0 && vk == chat_vk2);
+		}
+
 		// 키를 눌렀을 때. english_requested = 메뉴를 닫으며 미뤄 둔 영문 전환
 		// (메뉴 닫기는 렌더 스레드에서 일어나는데 입력기는 창 스레드에서만 바꿀 수 있다).
-		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, unsigned int chat_vk, unsigned int vk, bool overlay_blocking, bool english_requested)
+		// chat_vk2 = 두 번째 채팅 키(기본 F7). 둘 중 어느 쪽으로 열어도 같다.
+		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, unsigned int chat_vk, unsigned int vk, bool overlay_blocking, bool english_requested, unsigned int chat_vk2 = 0)
 		{
 			if (!enabled || overlay_blocking)
 				return action::none;
@@ -63,7 +71,7 @@ namespace sherbet
 				st.english_on_release = true;
 				return english_requested ? action::to_english : action::none;
 			}
-			if (chat_vk != 0 && vk == chat_vk && !st.chat_open)
+			if (is_chat_key(vk, chat_vk, chat_vk2) && !st.chat_open)
 			{
 				st.chat_open = true;
 				st.english_on_release = false; // Enter→T 연타: 새 채팅은 한글로 남긴다
@@ -87,10 +95,10 @@ namespace sherbet
 		}
 
 		// 이 키를 뗀 뒤 입력기 상태를 읽어 화면 표시를 갱신할지. 무빙 키는 절대 아니다.
-		inline bool reads_ime(unsigned int vk, unsigned int chat_vk)
+		inline bool reads_ime(unsigned int vk, unsigned int chat_vk, unsigned int chat_vk2 = 0)
 		{
 			return vk == kVkReturn || vk == kVkEscape || vk == kVkHangul || vk == kVkMenu || vk == kVkRMenu ||
-				(chat_vk != 0 && vk == chat_vk);
+				is_chat_key(vk, chat_vk, chat_vk2);
 		}
 	}
 }
