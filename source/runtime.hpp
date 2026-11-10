@@ -493,6 +493,18 @@ namespace reshade
 		std::string _sherbet_ad_text;          // 비우면 기본 문구
 		sherbet::adalarm::state _sherbet_ad;   // 세션 상태(디스크에 안 남긴다)
 
+		// SHERBET: 한글 키밀림 방지 — 평소엔 영문, 채팅 키(보통 T)면 한글, Enter·Esc 면 영문(sherbet_ime.hpp).
+		// 실제 전환은 input 이 창 스레드에서 한다. 이 값들은 draw_gui() 앞부분(early-out 위)에서 매 프레임 넘긴다.
+		bool _sherbet_ime_on = false;
+		bool _sherbet_ime_korean_on_chat = true;
+		unsigned int _sherbet_ime_chat_key[4] = { 'T', 0, 0, 0 };
+		// 화면 위쪽 가운데 작은 '한글/영문' 표시. ⚠️ 켜져 있으면 draw_gui() early-out 면제(게임 중에 보여야 한다).
+		bool _sherbet_ime_show = true;
+		float _sherbet_ime_pos[2] = { 0.5f, 0.012f }; // 화면 비율(0=왼쪽/위, 1=오른쪽/아래). 메뉴 연 채로 끌어서 옮긴다
+		int _sherbet_ime_last_mode = -1;   // 바뀐 순간을 알아채 잠깐 또렷하게 하려고
+		float _sherbet_ime_flash = 0.0f;   // 1 → 0 으로 가라앉는다
+		bool _sherbet_ime_was_fg = false;  // 게임 창이 앞에 있었는지 — 다른 프로그램에서 돌아온 순간을 잡는다
+
 		// SHERBET: HUD 돋보기 — 화면의 한 사각형(체력·방어구 막대 등)을 확대해 크게 그린다.
 		// **게임 상태를 읽지 않는다.** 픽셀을 확대할 뿐이다(메모리 접근 0, 상태 판정 0).
 		// ⚠️ 좌표는 전부 **화면 대비 정규화(0~1)** — 반반 비교 분할선과 같은 관례.
@@ -759,6 +771,7 @@ namespace reshade
 		// SHERBET: 「설정」 탭 커스텀 사진 배경 잠금 카드. 가운데 미리보기는 **가짜 사진**
 		// (그라디언트)이다 — 잠긴 사람에게 실제 이미지 로딩 경로를 태우지 않는다.
 		void sherbet_draw_bg_lock_card(const sherbet::paid::feature &f);
+		void sherbet_draw_ime_lock_card(const sherbet::paid::feature &f);
 
 		// SHERBET: 유료 기능 잠금 판정의 **호출부 단일 입구**.
 		// sherbet::paid::unlocked() 에 서버 엔타이틀(has_feature)과 판매자 미리보기 스위치를

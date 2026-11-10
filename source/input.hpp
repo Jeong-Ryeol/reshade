@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <string>
 #include <memory>
 #include <mutex>
@@ -221,6 +222,18 @@ namespace reshade
 		/// <returns><see langword="true"/> if the called should ignore this message, or <see langword="false"/> if it should pass it on to the application.</returns>
 		static bool handle_window_message(const void *message_data);
 
+		// SHERBET: 한글 키밀림 방지(sherbet_ime.hpp). 설정은 렌더 스레드가 매 프레임 넣고,
+		// 입력기 전환은 창 스레드(메시지 훅)에서만 한다 — 입력기 컨텍스트가 창 스레드에 묶여 있다.
+		void sherbet_ime_config(bool enabled, unsigned int chat_vk, bool korean_on_chat)
+		{
+			_sherbet_ime_enabled.store(enabled, std::memory_order_relaxed);
+			_sherbet_ime_chat_vk.store(chat_vk, std::memory_order_relaxed);
+			_sherbet_ime_korean_on_chat.store(korean_on_chat, std::memory_order_relaxed);
+		}
+		void sherbet_ime_request_english() { _sherbet_ime_english_requested.store(true, std::memory_order_relaxed); }
+		// 마지막으로 본 입력기 상태: -1 모름, 0 영문, 1 한글 (카드 상태 줄용)
+		int sherbet_ime_mode() const { return _sherbet_ime_mode.load(std::memory_order_relaxed); }
+
 	private:
 		static bool is_keyboard_layout_german();
 
@@ -251,6 +264,13 @@ namespace reshade
 		unsigned int _last_mouse_position[2] = {};
 		int64_t _raw_mouse_delta[2] = {}; // SHERBET: raw input 상대 이동 누적(읽으면 리셋)
 		bool _raw_mouse_seen = false;     // SHERBET: 상대 이동을 한 번이라도 받았는지
+		std::atomic<bool> _sherbet_ime_enabled { false };
+		std::atomic<unsigned int> _sherbet_ime_chat_vk { 'T' };
+		std::atomic<bool> _sherbet_ime_korean_on_chat { true };
+		std::atomic<bool> _sherbet_ime_english_requested { false };
+		std::atomic<int> _sherbet_ime_mode { -1 };
+		bool _sherbet_ime_chat_open = false;          // 창 스레드 전용(_mutex 아래)
+		bool _sherbet_ime_english_on_release = false; // 창 스레드 전용 — Enter·Esc 를 떼면 영문으로
 		uint64_t _frame_count = 0; // Keep track of frame count to identify windows with a lot of rendering
 		std::wstring _text_input;
 	};

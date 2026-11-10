@@ -821,6 +821,9 @@
     <ClInclude Include="source\sherbet_adalarm.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>
+    <ClInclude Include="source\sherbet_ime.hpp">
+      <Filter>core\runtime</Filter>
+    </ClInclude>
     <ClInclude Include="source\sherbet_xhmarket.hpp">
       <Filter>core\runtime</Filter>
     </ClInclude>

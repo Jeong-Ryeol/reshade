@@ -4,6 +4,7 @@
  */
 
 #include "input.hpp"
+#include "sherbet_ime.hpp"
 #include "dll_log.hpp"
 #include "hook_manager.hpp"
 #include <atomic>
@@ -114,6 +115,35 @@ static WPARAM sherbet_resolve_ime_vk(WPARAM vk, HWND hwnd)
 	return (real_vk != 0 && real_vk != VK_PROCESSKEY && real_vk < 0xFF) ? real_vk : vk;
 }
 
+// SHERBET: 한글 키밀림 방지(sherbet_ime.hpp) — 게임 창 입력기를 한글/영문으로 바꾸고, 바뀐 뒤 상태를 돌려준다.
+// -1 = 입력기가 없는 창(게임이 떼어 둔 경우), 0 = 영문, 1 = 한글. korean 이 -1 이면 바꾸지 않고 읽기만 한다.
+// ⚠️ 창 스레드(메시지 훅 안)에서만 부른다. 입력기 컨텍스트는 그 창을 만든 스레드에 묶여 있어
+//    렌더 스레드(present)에서 바꾸면 먹지 않는다.
+static int sherbet_ime_switch(HWND hwnd, int korean)
+{
+	if (const HWND focus = GetFocus(); focus != nullptr)
+		hwnd = focus;
+	const HIMC himc = ImmGetContext(hwnd);
+	if (himc == nullptr)
+		return -1;
+	if (korean == 1 && !ImmGetOpenStatus(himc))
+		ImmSetOpenStatus(himc, TRUE);
+	DWORD conv = 0, sentence = 0;
+	int mode = -1;
+	if (ImmGetConversionStatus(himc, &conv, &sentence))
+	{
+		if (korean >= 0)
+		{
+			const DWORD want = korean == 1 ? (conv | IME_CMODE_NATIVE) : (conv & ~static_cast<DWORD>(IME_CMODE_NATIVE));
+			if (want != conv && ImmSetConversionStatus(himc, want, sentence))
+				conv = want;
+		}
+		mode = (ImmGetOpenStatus(himc) && (conv & IME_CMODE_NATIVE) != 0) ? 1 : 0;
+	}
+	ImmReleaseContext(hwnd, himc);
+	return mode;
+}
+
 bool reshade::input::handle_window_message(const void *message_data)
 {
 	assert(message_data != nullptr);
@@ -190,6 +220,45 @@ bool reshade::input::handle_window_message(const void *message_data)
 	// Prevent input threads from modifying input while it is accessed elsewhere
 	const std::unique_lock<std::recursive_mutex> input_lock(input->_mutex);
 
+	// SHERBET: 한글 키밀림 방지 — 키를 누르거나 뗄 때마다 sherbet_ime.hpp 로 판단해 입력기를 바꾼다.
+	// raw input 과 WM_KEY* 가 둘 다 와도 판단이 멱등이라 두 번 불려도 결과가 같다.
+	// ⚠️ **게임 창을 가진 스레드에서만** 판단한다. 다른 스레드(raw input 을 따로 받는 창 등)에서 읽은
+	//    입력기는 다른 컨텍스트라 값이 다르다 — 첫 테스트에서 표시가 영문↔한글로 빠르게 깜빡인 원인으로 본다.
+	// ⚠️ 입력기 API 는 바꿀 때와 reads_ime() 키(T·Enter·Esc·한/영)에서만 부른다. 무빙 키마다 부르면
+	//    그 호출이 게임 메시지 처리를 붙잡는다(래피드 트리거처럼 빠른 입력일수록 많이).
+	const bool sherbet_ime_thread = input->_sherbet_ime_enabled.load(std::memory_order_relaxed) &&
+		GetWindowThreadProcessId(static_cast<HWND>(input->_window), nullptr) == GetCurrentThreadId();
+	const auto sherbet_ime_apply = [&](int want) {
+		if (const int mode = sherbet_ime_switch(details.hwnd, want); mode >= 0) // -1(입력기 없는 창)로 덮지 않는다
+			input->_sherbet_ime_mode.store(mode, std::memory_order_relaxed);
+	};
+	const auto sherbet_ime_key = [&](UINT vk, bool key_up) {
+		if (!sherbet_ime_thread)
+			return;
+		const bool blocking = input->is_blocking_keyboard_input();
+		const unsigned int chat_vk = input->_sherbet_ime_chat_vk.load(std::memory_order_relaxed);
+		sherbet::ime::state st { input->_sherbet_ime_chat_open, input->_sherbet_ime_english_on_release };
+		const sherbet::ime::action act = key_up
+			? sherbet::ime::on_key_up(st, true, vk, blocking)
+			: sherbet::ime::on_key_down(st, true, input->_sherbet_ime_korean_on_chat.load(std::memory_order_relaxed), chat_vk, vk, blocking,
+				!blocking && input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed));
+		input->_sherbet_ime_chat_open = st.chat_open;
+		input->_sherbet_ime_english_on_release = st.english_on_release;
+		const int want = act == sherbet::ime::action::to_korean ? 1 : act == sherbet::ime::action::to_english ? 0 : -1;
+		if (want >= 0 || (key_up && sherbet::ime::reads_ime(vk, chat_vk)))
+			sherbet_ime_apply(want);
+	};
+	// 메뉴를 닫았거나 다른 프로그램에서 돌아왔을 때(렌더 스레드가 요청) — 키를 누르기 전에, 돌아오며 움직이는
+	// 마우스 메시지에서 먼저 영문으로 바꾼다. 그래야 돌아와서 처음 누르는 무빙 키부터 영문이다.
+	if (sherbet_ime_thread && (is_mouse_message || details.message == WM_INPUT) && !input->is_blocking_keyboard_input() &&
+		input->_sherbet_ime_english_requested.load(std::memory_order_relaxed) &&
+		input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed))
+	{
+		input->_sherbet_ime_chat_open = false;
+		input->_sherbet_ime_english_on_release = false;
+		sherbet_ime_apply(0);
+	}
+
 	input->_mouse_position[0] = details.pt.x;
 	input->_mouse_position[1] = details.pt.y;
 
@@ -265,6 +334,9 @@ bool reshade::input::handle_window_message(const void *message_data)
 			if (raw_data.data.keyboard.VKey == 0)
 				break; // Ignore messages without a valid key code
 
+			if (raw_data.data.keyboard.VKey < 0xFF)
+				sherbet_ime_key(raw_data.data.keyboard.VKey, (raw_data.data.keyboard.Flags & RI_KEY_BREAK) != 0); // SHERBET
+
 			is_keyboard_message = true;
 			// Do not block key up messages if the key down one was not blocked previously
 			if (input->is_blocking_keyboard_input() && (raw_data.data.keyboard.Flags & RI_KEY_BREAK) != 0 && raw_data.data.keyboard.VKey < 0xFF && (input->_keys[raw_data.data.keyboard.VKey] & 0x04) == 0)
@@ -316,6 +388,7 @@ bool reshade::input::handle_window_message(const void *message_data)
 	{
 		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // 한글 IME → 실제 키 복원
 		assert(vk > 0 && vk < std::size(input->_keys));
+		sherbet_ime_key(static_cast<UINT>(vk), false); // SHERBET
 		input->_keys[vk] = 0x88;
 		input->_keys_time[vk] = details.time;
 		if (input->is_blocking_keyboard_input())
@@ -327,6 +400,7 @@ bool reshade::input::handle_window_message(const void *message_data)
 	{
 		const WPARAM vk = sherbet_resolve_ime_vk(details.wParam, details.hwnd); // keydown 과 반드시 짝을 맞춘다
 		assert(vk > 0 && vk < std::size(input->_keys));
+		sherbet_ime_key(static_cast<UINT>(vk), true); // SHERBET
 		// Do not block key up messages if the key down one was not blocked previously (so key does not get stuck for the application)
 		if (input->is_blocking_keyboard_input() && (input->_keys[vk] & 0x04) == 0)
 			is_keyboard_message = false;

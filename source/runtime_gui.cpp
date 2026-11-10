@@ -397,6 +397,13 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.get("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.get("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.get("OVERLAY", "SherbetImeOn", _sherbet_ime_on);
+	config.get("OVERLAY", "SherbetImeKoreanOnChat", _sherbet_ime_korean_on_chat);
+	config.get("OVERLAY", "SherbetImeShow", _sherbet_ime_show);
+	config.get("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
+	_sherbet_ime_pos[0] = ImClamp(_sherbet_ime_pos[0], 0.0f, 1.0f);
+	_sherbet_ime_pos[1] = ImClamp(_sherbet_ime_pos[1], 0.0f, 1.0f);
+	config_get("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
 	config.get("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -678,6 +685,11 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetAlarmMin", _sherbet_alarm_min);
 	config.set("OVERLAY", "SherbetAlarmSecs", _sherbet_alarm_secs);
 	config.set("OVERLAY", "SherbetAlarmText", _sherbet_alarm_text);
+	config.set("OVERLAY", "SherbetImeOn", _sherbet_ime_on);
+	config.set("OVERLAY", "SherbetImeKoreanOnChat", _sherbet_ime_korean_on_chat);
+	config.set("OVERLAY", "SherbetImeShow", _sherbet_ime_show);
+	config.set("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
+	config.set("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
 	config.set("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -1141,6 +1153,19 @@ void reshade::runtime::draw_gui()
 
 	if (_input != nullptr)
 	{
+		// SHERBET: 한글 키밀림 방지 설정을 입력 쪽에 넘긴다. ⚠️ 여기는 early-out **위**라 메뉴가 닫혀 있어도 매 프레임 돈다.
+		// ⚠️ 유료 기능(imefix) — 잠겨 있으면 켜 둔 설정이 남아 있어도 입력기를 건드리지 않는다.
+		const bool ime_active = _sherbet_ime_on && sherbet_feature_unlocked("imefix");
+		_input->sherbet_ime_config(ime_active, _sherbet_ime_chat_key[0], _sherbet_ime_korean_on_chat);
+		// 다른 프로그램(카톡 등)에서 한/영을 바꾸고 돌아와도 게임으로 오면 영문. 입력기 상태는 앱끼리 같이 바뀐다.
+		// 처음 켜졌을 때도 여기서 한 번 걸린다(_sherbet_ime_was_fg 초기값 false) — 게임은 영문으로 시작한다.
+		{
+			const bool ime_fg = GetForegroundWindow() == static_cast<HWND>(get_hwnd());
+			if (ime_fg && !_sherbet_ime_was_fg && ime_active)
+				_input->sherbet_ime_request_english();
+			_sherbet_ime_was_fg = ime_fg;
+		}
+
 		if (_show_overlay && !_ignore_shortcuts && _input->is_key_pressed(input::key_escape) &&
 			(_input_processing_mode == 2 || (_input_processing_mode == 1 && (_imgui_context->IO.WantCaptureMouse || _imgui_context->IO.WantCaptureKeyboard))) && !_imgui_context->IO.NavVisible)
 			show_overlay = false; // Close when pressing the escape button, input focus is on the overlay and not currently navigating with the keyboard
@@ -1168,7 +1193,12 @@ void reshade::runtime::draw_gui()
 	}
 
 	if (show_overlay != _show_overlay)
+	{
+		// SHERBET: 메뉴에서 한글을 쳤어도 게임으로 돌아가면 영문으로(다음 키 누름 때 창 스레드에서 바꾼다).
+		if (!show_overlay && _sherbet_ime_on && _input != nullptr && sherbet_feature_unlocked("imefix"))
+			_input->sherbet_ime_request_english();
 		open_overlay(show_overlay, show_overlay_source);
+	}
 
 	const bool show_splash_window = _show_splash && (is_loading() || (_reload_count <= 1 && (_last_present_time - _last_reload_time) < std::chrono::seconds(5)) || (!_show_overlay && _tutorial_index == 0 && _input != nullptr));
 
@@ -1231,6 +1261,8 @@ void reshade::runtime::draw_gui()
 		&& !_sherbet_alarm_on
 		// SHERBET: 광고알리미도 같은 이유 — 울려야 하는 순간은 오버레이가 닫힌 게임 중이다.
 		&& !_sherbet_ad_on
+		// SHERBET: 한글/영문 표시도 게임 중에 보이는 것이 목적이다(유료 — 잠겨 있으면 면제 안 함, 비용 0).
+		&& !(_sherbet_ime_on && _sherbet_ime_show && sherbet_feature_unlocked("imefix"))
 		// SHERBET: HUD 돋보기도 오버레이가 닫힌 채로 그려야 한다 — 게임하면서 보는 것이 목적이다.
 		// ⚠️ **영역 잡는 중**도 반드시 면제한다. 잡을 땐 오버레이를 닫아야 HUD 가 보이는데,
 		//    돋보기가 아직 꺼져 있는 상태(처음 잡는 경우)라 _sherbet_mag_on 만으로는 여기서
@@ -1596,6 +1628,89 @@ void reshade::runtime::draw_gui()
 			sherbet::with_alpha(ad_t.panel, static_cast<int>(220 * ad_a)), ad_sz * 0.4f);
 		ad->AddText(_sherbet_title_font, ad_sz, ad_p,
 			sherbet::with_alpha(ad_t.text, static_cast<int>(255 * ad_a)), ad_text.c_str(), nullptr, ad_wrap);
+	}
+
+	// SHERBET: 한글/영문 표시 — 화면 위쪽 가운데에 작은 알약 하나. 화면을 가리지 않게 평소엔 흐리고,
+	// 바뀐 직후 1초 남짓 또렷했다가 가라앉는다. 한글(무빙이 밀릴 수 있는 상태)은 강조색 점, 영문은 흐린 점.
+	// 입력기 상태는 input 이 키를 뗄 때마다 창 스레드에서 읽어 둔 값이다(-1 = 아직 모름/입력기 없는 창 → 안 그린다).
+	if (_sherbet_ime_on && _sherbet_ime_show && _input != nullptr && sherbet_feature_unlocked("imefix"))
+	{
+		const int ime_mode = _input->sherbet_ime_mode();
+		if (ime_mode != _sherbet_ime_last_mode)
+		{
+			_sherbet_ime_last_mode = ime_mode;
+			_sherbet_ime_flash = 1.0f;
+		}
+		_sherbet_ime_flash = ImMax(0.0f, _sherbet_ime_flash - imgui_io.DeltaTime / 1.2f);
+		// 메뉴가 열려 있으면 상태를 아직 몰라도 그린다 — 끌어서 옮길 대상이 보여야 한다.
+		if (ime_mode >= 0 || _show_overlay)
+		{
+			const sherbet::theme &im_t = sherbet::active_theme();
+			const ImGuiViewport *const im_vp = ImGui::GetMainViewport();
+			ImFont *const im_font = ImGui::GetFont();
+			const float im_sz = _imgui_context->Style.FontSizeBase * 0.95f; // 상수 배율 — 동적 아틀라스 재굽기 방지
+			static const char *const kImeKo = "\xED\x95\x9C\xEA\xB8\x80"; // "한글"
+			static const char *const kImeEn = "\xEC\x98\x81\xEB\xAC\xB8"; // "영문"
+			const bool im_ko = ime_mode == 1;
+			const char *const im_label = im_ko ? kImeKo : kImeEn;
+			// 폭은 두 글자 중 넓은 쪽으로 고정 — 바뀔 때 크기가 달라지면 비율 위치가 출렁인다.
+			const float im_tw = ImMax(im_font->CalcTextSizeA(im_sz, FLT_MAX, 0.0f, kImeKo).x, im_font->CalcTextSizeA(im_sz, FLT_MAX, 0.0f, kImeEn).x);
+			const float im_th = im_font->CalcTextSizeA(im_sz, FLT_MAX, 0.0f, im_label).y;
+			const float im_r = im_sz * 0.2f, im_gap = im_sz * 0.45f, im_px = im_sz * 0.7f, im_py = im_sz * 0.3f;
+			const float im_w = im_px + im_r * 2.0f + im_gap + im_tw + im_px;
+			const float im_h = im_th + im_py * 2.0f;
+
+			// 위치 — FPS 표시와 같은 규칙: 화면 비율로 저장하고, **끌고 있을 때만** 창에서 읽어 저장한다
+			// (여닫기만으로 위치가 기어가던 OSD 버그를 처음부터 피한다).
+			ImGuiWindow *const im_win = ImGui::FindWindowByName("##sherbet_ime");
+			const bool im_drag = _show_overlay && im_win != nullptr && _imgui_context->MovingWindow == im_win;
+			const float im_room_x = ImMax(0.0f, im_vp->Size.x - im_w), im_room_y = ImMax(0.0f, im_vp->Size.y - im_h);
+			if (!im_drag)
+				ImGui::SetNextWindowPos(ImVec2(im_vp->Pos.x + _sherbet_ime_pos[0] * im_room_x, im_vp->Pos.y + _sherbet_ime_pos[1] * im_room_y));
+			ImGui::SetNextWindowSize(ImVec2(im_w, im_h));
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
+			ImGuiWindowFlags im_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBackground;
+			if (!_show_overlay)
+				im_flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+			ImGui::Begin("##sherbet_ime", nullptr, im_flags);
+			{
+				ImDrawList *const im_dl = ImGui::GetWindowDrawList();
+				const ImVec2 im_p0 = ImGui::GetWindowPos();
+				// 평소 투명도: 영문은 조용히, 한글은 조금 더 보이게. 바뀐 직후·메뉴 열림(옮기는 중)엔 또렷하게.
+				const float im_base = im_ko ? 0.85f : 0.55f;
+				const float im_a = _show_overlay ? 1.0f : im_base + (1.0f - im_base) * _sherbet_ime_flash;
+				im_dl->AddRectFilled(im_p0, ImVec2(im_p0.x + im_w, im_p0.y + im_h),
+					sherbet::with_alpha(im_t.panel, static_cast<ImU32>(175 * im_a)), im_h * 0.5f);
+				if (im_ko || _show_overlay)
+					im_dl->AddRect(im_p0, ImVec2(im_p0.x + im_w, im_p0.y + im_h),
+						sherbet::with_alpha(im_ko ? im_t.accent : im_t.border, static_cast<ImU32>(150 * im_a)), im_h * 0.5f, 0, 1.5f);
+				im_dl->AddCircleFilled(ImVec2(im_p0.x + im_px + im_r, im_p0.y + im_h * 0.5f), im_r,
+					sherbet::with_alpha(im_ko ? im_t.accent : im_t.text_dim, static_cast<ImU32>(255 * im_a)));
+				im_dl->AddText(im_font, im_sz, ImVec2(im_p0.x + im_px + im_r * 2.0f + im_gap, im_p0.y + im_py),
+					sherbet::with_alpha(im_t.text, static_cast<ImU32>(240 * im_a)), im_label);
+				ImGui::Dummy(ImVec2(im_w, im_h));
+				if (_show_overlay && ImGui::IsWindowHovered())
+					ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+				if (im_drag)
+				{
+					const ImVec2 wp = ImGui::GetWindowPos();
+					const float nx = ImClamp(im_room_x > 1.0f ? (wp.x - im_vp->Pos.x) / im_room_x : 0.5f, 0.0f, 1.0f);
+					const float ny = ImClamp(im_room_y > 1.0f ? (wp.y - im_vp->Pos.y) / im_room_y : 0.0f, 0.0f, 1.0f);
+					if (fabsf(nx - _sherbet_ime_pos[0]) > 0.001f || fabsf(ny - _sherbet_ime_pos[1]) > 0.001f)
+					{
+						_sherbet_ime_pos[0] = nx;
+						_sherbet_ime_pos[1] = ny;
+						save_config();
+					}
+				}
+			}
+			ImGui::End();
+			ImGui::PopStyleVar(3);
+		}
 	}
 
 	// SHERBET: HUD 돋보기 영역 잡기 — 화면 위에서 직접 드래그해 사각형을 정한다.
@@ -5818,6 +5933,61 @@ void reshade::runtime::sherbet_draw_bg_lock_card(const sherbet::paid::feature &f
 	sherbet::end_card();
 }
 
+// SHERBET: 한글 키밀림 방지 진열 카드 — 진짜 표시와 같은 모양의 알약이 영문↔한글로 바뀌는 미니 게임 화면.
+// 글자로 "자동으로 바꿔 줘요" 라고만 쓰면 아무것도 안 보여준다. 실제로 뜨는 모습을 보여준다.
+void reshade::runtime::sherbet_draw_ime_lock_card(const sherbet::paid::feature &f)
+{
+	static const char *const kImeLockCaption = ICON_FK_ARROW_UP " \xEC\x98\x88\xEC\x8B\x9C\xEC\x98\x88\xEC\x9A\x94 \xE2\x80\x94 \xEA\xB2\x8C\xEC\x9E\x84 \xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD \xEA\xB0\x80\xEC\x9A\xB4\xEB\x8D\xB0\xEC\x97\x90 \xEC\x9D\xB4\xEB\xA0\x87\xEA\xB2\x8C \xEB\x96\xA0\xEC\x9A\x94"; // "↑ 예시예요 — 게임 화면 위쪽 가운데에 이렇게 떠요"
+	static const char *const kImeLockFlow = "T \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80  \xC2\xB7  Enter\xC2\xB7" "Esc \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8"; // "T 누르면 한글  ·  Enter·Esc 누르면 영문"
+
+	sherbet::begin_card("##ime_lock");
+	{
+		sherbet_draw_lock_header(f);
+
+		const sherbet::theme &t = sherbet::active_theme();
+		ImDrawList *const dl = ImGui::GetWindowDrawList();
+
+		// 미니 게임 화면 — 어두운 띠. 실제 표시와 같은 그리기 규칙(점 + 글자 알약, 한글이면 강조색 테두리).
+		const ImVec2 p0 = ImGui::GetCursorScreenPos();
+		const float pw = ImMax(120.0f, ImGui::GetContentRegionAvail().x);
+		const float ph = ImGui::GetTextLineHeightWithSpacing() * 4.0f + 24.0f;
+		const ImVec2 p1(p0.x + pw, p0.y + ph);
+		dl->AddRectFilledMultiColor(p0, p1, sherbet::with_alpha(t.bg1, 240), sherbet::with_alpha(t.bg1, 240),
+			sherbet::with_alpha(t.bg0, 250), sherbet::with_alpha(t.bg0, 250));
+		dl->AddRect(p0, p1, sherbet::with_alpha(t.border, 200), 12.0f, 0, 1.0f);
+
+		// 1.6초마다 영문 ↔ 한글. 바뀐 직후 잠깐 또렷하게 — 실제 표시의 깜빡임과 같은 느낌.
+		const double now = ImGui::GetTime();
+		const int korean = static_cast<int>(now / 1.6) % 2;
+		const float since = static_cast<float>(now - std::floor(now / 1.6) * 1.6);
+		const float flash = ImMax(0.0f, 1.0f - since / 1.2f);
+		const char *const label = korean ? "\xED\x95\x9C\xEA\xB8\x80" : "\xEC\x98\x81\xEB\xAC\xB8"; // "한글" / "영문"
+		const float sz = ImGui::GetFontSize();
+		const ImVec2 ts = ImGui::CalcTextSize(label);
+		const float r = sz * 0.2f, gap = sz * 0.45f, px = sz * 0.7f, py = sz * 0.3f;
+		const float w = px + r * 2.0f + gap + ts.x + px, h = ts.y + py * 2.0f;
+		const ImVec2 a(p0.x + (pw - w) * 0.5f, p0.y + 12.0f);
+		const float alpha = (korean ? 0.85f : 0.55f) + (korean ? 0.15f : 0.45f) * flash;
+		dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), sherbet::with_alpha(t.panel, static_cast<ImU32>(200 * alpha)), h * 0.5f);
+		if (korean)
+			dl->AddRect(a, ImVec2(a.x + w, a.y + h), sherbet::with_alpha(t.accent, static_cast<ImU32>(170 * alpha)), h * 0.5f, 0, 1.5f);
+		dl->AddCircleFilled(ImVec2(a.x + px + r, a.y + h * 0.5f), r,
+			sherbet::with_alpha(korean ? t.accent : t.text_dim, static_cast<ImU32>(255 * alpha)));
+		dl->AddText(ImVec2(a.x + px + r * 2.0f + gap, a.y + py), sherbet::with_alpha(t.text, static_cast<ImU32>(240 * alpha)), label);
+
+		// 아래쪽 가운데에 동작 한 줄.
+		const ImVec2 fs = ImGui::CalcTextSize(kImeLockFlow);
+		dl->AddText(ImVec2(p0.x + (pw - fs.x) * 0.5f, p1.y - fs.y - 12.0f), sherbet::with_alpha(t.text_dim, 230), kImeLockFlow);
+
+		ImGui::Dummy(ImVec2(pw, ph));
+		ImGui::TextDisabled("%s", kImeLockCaption);
+		ImGui::Spacing();
+
+		sherbet_draw_lock_footer(f);
+	}
+	sherbet::end_card();
+}
+
 void reshade::runtime::draw_gui_settings()
 {
 	bool modified = false;
@@ -5833,7 +6003,7 @@ void reshade::runtime::draw_gui_settings()
 	// 마켓 탭과 같은 알약이다. 켜져 있는 기능 수를 알약에 붙여, 들어가 보지 않아도 알 수 있게 한다.
 	// ⚠️ 번호는 config(SherbetSettingsSeg)에 저장된다 — 재배치하지 말 것.
 	{
-		const int on_tools = _sherbet_mag_on ? 1 : 0;
+		const int on_tools = (_sherbet_mag_on ? 1 : 0) + ((_sherbet_ime_on && sherbet_feature_unlocked("imefix")) ? 1 : 0);
 		const int on_alarm = (_sherbet_alarm_on ? 1 : 0) + (_sherbet_ad_on ? 1 : 0);
 		const int on_deco = (_sherbet_bg_on && sherbet_feature_unlocked("custompicture")) ? 1 : 0;
 		const auto seg_pill = [&](int idx, const char *name, int on_count) {
@@ -6070,6 +6240,74 @@ void reshade::runtime::draw_gui_settings()
 		sherbet_hint("\xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xED\x95\x9C \xEA\xB3\xB3\xEC\x9D\x84 \xEA\xB7\xB8\xEB\x8C\x80\xEB\xA1\x9C \xED\x81\xAC\xEA\xB2\x8C \xEB\xB3\xB4\xEC\x97\xAC\xEC\xA4\x8D\xEB\x8B\x88\xEB\x8B\xA4. \xEC\xB2\xB4\xEB\xA0\xA5\xC2\xB7\xEB\xB0\xA9\xEC\x96\xB4\xEA\xB5\xAC \xEB\xA7\x89\xEB\x8C\x80\xEC\xB2\x98\xEB\xB0\x8D \xEC\x9E\x91\xEC\x95\x84\xEC\x84\x9C \xEC\x95\x88 \xEB\xB3\xB4\xEC\x9D\xB4\xEB\x8A\x94 \xEA\xB2\x83\xEC\x9D\x84 \xED\x81\xAC\xEA\xB2\x8C \xEB\x9D\x84\xEC\x9A\xB8 \xEB\x95\x8C \xEC\x93\xB0\xEC\x84\xB8\xEC\x9A\x94."); // "화면의 한 곳을 그대로 크게 보여줍니다. 체력·방어구 막대처럼 작아서 안 보이는 것을 크게 띄울 때 쓰세요."
 	}
 	sherbet::end_card();
+
+	// SHERBET: 한글 키밀림 방지(sherbet_ime.hpp). 입력기 전환 자체는 input_windows.cpp 가 창 스레드에서 한다.
+	// 유료(imefix) — 잠겨 있으면 진열 카드(미리보기 + 구매 안내)만, 열려 있으면 진짜 카드.
+	ImGui::Spacing();
+	if (!sherbet_feature_unlocked("imefix"))
+	{
+		if (const sherbet::paid::feature *const ime_f = sherbet::paid::find("imefix"))
+			sherbet_draw_ime_lock_card(*ime_f);
+	}
+	else
+	{
+	sherbet::begin_card("##set_ime");
+	{
+		std::string ime_st;
+		if (_sherbet_ime_on)
+		{
+			if (_sherbet_ime_korean_on_chat && _sherbet_ime_chat_key[0] != 0)
+				ime_st = std::string("\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 ") + input::key_name(_sherbet_ime_chat_key[0]) + // "켜짐 · " + 키
+					" \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80, Enter\xC2\xB7" "Esc \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8"; // " 누르면 한글, Enter·Esc 누르면 영문"
+			else
+				ime_st = "\xEC\xBC\x9C\xEC\xA7\x90 \xC2\xB7 Enter\xC2\xB7" "Esc \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8"; // "켜짐 · Enter·Esc 누르면 영문"
+			const int ime_mode = _input != nullptr ? _input->sherbet_ime_mode() : -1;
+			if (ime_mode == 1)
+				ime_st += " \xC2\xB7 \xEC\xA7\x80\xEA\xB8\x88 \xED\x95\x9C\xEA\xB8\x80"; // " · 지금 한글"
+			else if (ime_mode == 0)
+				ime_st += " \xC2\xB7 \xEC\xA7\x80\xEA\xB8\x88 \xEC\x98\x81\xEB\xAC\xB8"; // " · 지금 영문"
+		}
+		else
+		{
+			ime_st = "\xEA\xBA\xBC\xEC\xA7\x90"; // "꺼짐"
+		}
+		if (card_head(ICON_FK_KEYBOARD "  " "\xED\x95\x9C\xEA\xB8\x80 \xED\x82\xA4\xEB\xB0\x80\xEB\xA6\xBC \xEB\xB0\xA9\xEC\xA7\x80", "##ime_on", &_sherbet_ime_on, ime_st.c_str(), _sherbet_ime_on)) // "한글 키밀림 방지"
+		{
+			if (_sherbet_ime_on && _input != nullptr)
+				_input->sherbet_ime_request_english(); // 켜는 순간부터 영문으로(메뉴를 닫고 마우스를 움직이면 적용)
+			modified = true;
+		}
+
+		if (ImGui::Checkbox("\xEC\xB1\x84\xED\x8C\x85 \xEC\x97\xB4 \xEB\x95\x8C \xED\x95\x9C\xEA\xB8\x80\xEB\xA1\x9C \xEB\xB0\x94\xEA\xBE\xB8\xEA\xB8\xB0##ime", &_sherbet_ime_korean_on_chat)) // "채팅 열 때 한글로 바꾸기"
+			modified = true;
+		if (ImGui::Checkbox("\xED\x99\x94\xEB\xA9\xB4 \xEC\x9C\x84\xEC\xAA\xBD \xEA\xB0\x80\xEC\x9A\xB4\xEB\x8D\xB0\xEC\x97\x90 \xED\x95\x9C\xEA\xB8\x80/\xEC\x98\x81\xEB\xAC\xB8 \xED\x91\x9C\xEC\x8B\x9C##ime_show", &_sherbet_ime_show)) // "화면 위쪽 가운데에 한글/영문 표시"
+			modified = true;
+		if (_sherbet_ime_show)
+		{
+			ImGui::SameLine();
+			if (sherbet::pill_button(ICON_FK_REFRESH "  " "\xEC\x9C\x84\xEC\xB9\x98 \xEC\xB4\x88\xEA\xB8\xB0\xED\x99\x94##ime_pos", false)) // "위치 초기화"
+			{
+				_sherbet_ime_pos[0] = 0.5f;
+				_sherbet_ime_pos[1] = 0.012f;
+				modified = true;
+			}
+			sherbet_hint("\xEB\xA9\x94\xEB\x89\xB4\xEB\xA5\xBC \xEC\x97\xB0 \xEC\xB1\x84\xEB\xA1\x9C \xED\x99\x94\xEB\xA9\xB4\xEC\x9D\x98 \xED\x95\x9C\xEA\xB8\x80/\xEC\x98\x81\xEB\xAC\xB8 \xED\x91\x9C\xEC\x8B\x9C\xEB\xA5\xBC \xEB\x81\x8C\xEC\x96\xB4\xEC\x84\x9C \xEC\x9B\x90\xED\x95\x98\xEB\x8A\x94 \xEA\xB3\xB3\xEC\x9C\xBC\xEB\xA1\x9C \xEC\x98\xAE\xEA\xB8\xB8 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94."); // "메뉴를 연 채로 화면의 한글/영문 표시를 끌어서 원하는 곳으로 옮길 수 있어요."
+		}
+		if (_input != nullptr)
+		{
+			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
+			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4##ime_key", _sherbet_ime_chat_key, *_input)) // "채팅 키"
+			{
+				_sherbet_ime_chat_key[1] = _sherbet_ime_chat_key[2] = _sherbet_ime_chat_key[3] = 0; // 채팅 키는 키 하나만 본다(Ctrl 등 조합 무시)
+				modified = true;
+			}
+		}
+
+		sherbet_hint("\xED\x95\x9C\xEA\xB8\x80 \xEC\x83\x81\xED\x83\x9C\xEB\xA1\x9C \xEB\xAC\xB4\xEB\xB9\x99\xEC\x9D\x84 \xEC\xB9\x98\xEB\xA9\xB4 \xED\x82\xA4\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEA\xB8\xB0\xEB\xA5\xBC \xED\x95\x9C \xEB\xB2\x88 \xEA\xB1\xB0\xEC\xB3\x90 \xEB\x93\xA4\xEC\x96\xB4\xEA\xB0\x80\xEC\x84\x9C \xEB\xB0\x80\xEB\xA6\xB4 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94. \xED\x8F\x89\xEC\x86\x8C\xEC\x97\x94 \xEC\x98\x81\xEB\xAC\xB8\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x91\x90\xEA\xB3\xA0, \xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80, Enter\xEB\x82\x98 Esc\xEB\xA1\x9C \xEC\xB1\x84\xED\x8C\x85\xEC\x9D\x84 \xEB\x81\x9D\xEB\x82\xB4\xEB\xA9\xB4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x98\x81\xEB\xAC\xB8\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB0\x94\xEA\xBF\x94 \xEC\xA4\x98\xEC\x9A\x94."); // "한글 상태로 무빙을 치면 키가 입력기를 한 번 거쳐 들어가서 밀릴 수 있어요. 평소엔 영문으로 두고, 채팅 키를 누르면 한글, Enter나 Esc로 채팅을 끝내면 다시 영문으로 바꿔 줘요."
+		sherbet_hint("\xEA\xB7\xB8\xEB\x9E\x98\xEB\x8F\x84 \xEB\xB0\x80\xEB\xA6\xAC\xEB\xA9\xB4 \xEC\x9C\x88\xEB\x8F\x84\xEC\x9A\xB0 \xEC\x84\xA4\xEC\xA0\x95 > \xEC\x8B\x9C\xEA\xB0\x84 \xEB\xB0\x8F \xEC\x96\xB8\xEC\x96\xB4 > \xEC\x96\xB8\xEC\x96\xB4 \xEB\xB0\x8F \xEC\xA7\x80\xEC\x97\xAD > \xED\x95\x9C\xEA\xB5\xAD\xEC\x96\xB4 \xEC\x98\xB5\xEC\x85\x98 > Microsoft \xEC\x9E\x85\xEB\xA0\xA5\xEA\xB8\xB0\xEC\x97\x90\xEC\x84\x9C '\xEC\x9D\xB4\xEC\xA0\x84 \xEB\xB2\x84\xEC\xA0\x84\xEC\x9D\x98 Microsoft IME'\xEB\xA5\xBC \xEC\xBC\x9C \xEB\xB3\xB4\xEC\x84\xB8\xEC\x9A\x94."); // "그래도 밀리면 윈도우 설정 > 시간 및 언어 > 언어 및 지역 > 한국어 옵션 > Microsoft 입력기에서 '이전 버전의 Microsoft IME'를 켜 보세요."
+	}
+	sherbet::end_card();
+	} // imefix 열림
 	}
 
 	// SHERBET: 알림 세그먼트 — 일일 알림과 광고알리미. 창이 넓으면 카드 두 장을 나란히 둔다.
