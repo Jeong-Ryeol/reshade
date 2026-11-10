@@ -1361,6 +1361,8 @@ void reshade::runtime::draw_gui()
 		//    돋보기가 아직 꺼져 있는 상태(처음 잡는 경우)라 _sherbet_mag_on 만으로는 여기서
 		//    early-out 되어 드래그가 한 프레임도 처리되지 않는다.
 		&& !_sherbet_mag_on && !_sherbet_mag_picking
+		// SHERBET: 렉카 쿨타임(압류 2분전 → 2분)도 기다리는 동안은 게임 중이다. 타이머가 없으면 비용 0.
+		&& _sherbet_side_cool.empty()
 #if RESHADE_ADDON
 		&& !has_addon_event<addon_event::reshade_overlay>()
 #endif
@@ -1808,6 +1810,10 @@ void reshade::runtime::draw_gui()
 			ImGui::PopStyleVar(3);
 		}
 	}
+
+	// SHERBET: 렉카 쿨타임 — 게임 중엔 작은 창 자리에 '하은(210) 1:42'. 창을 열면 창 안에 같은 줄이 있으니 여기선 안 그린다.
+	if (!_show_overlay && !_sherbet_side_cool.empty())
+		sherbet_draw_side_cool_hud();
 
 	// SHERBET: HUD 돋보기 영역 잡기 — 화면 위에서 직접 드래그해 사각형을 정한다.
 	//
@@ -6126,17 +6132,48 @@ static const char *const kSideCopied = "\xEB\xB3\xB5\xEC\x82\xAC\xED\x96\x88\xEC
 static const char *const kSidePosted = "\xEC\x98\xAC\xEB\xA0\xB8\xEC\x96\xB4\xEC\x9A\x94"; // "올렸어요"
 static const char *const kSideStopped = "\xEA\xB2\x8C\xEC\x9E\x84 \xEC\xB0\xBD\xEC\x9D\xB4 \xEC\x95\x9E\xEC\x97\x90 \xEC\x97\x86\xEC\x96\xB4\xEC\x84\x9C \xEB\xA9\x88\xEC\xB7\x84\xEC\x96\xB4\xEC\x9A\x94"; // "게임 창이 앞에 없어서 멈췄어요"
 
+static const char *const kSideNoName = "\xEC\x9D\xB4\xEB\xA6\x84(\xEA\xB3\xA0\xEB\xB2\x88)\xEC\x9D\x84 \xEB\xA8\xBC\xEC\xA0\x80 \xEB\xB3\xB5\xEC\x82\xAC\xED\x95\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94"; // "이름(고번)을 먼저 복사해 주세요"
+static const char *const kSideTowGroup = "\xEC\x8B\xA0\xEC\x84\xB8\xEA\xB3\x84\xEB\xA0\x89\xEC\xB9\xB4"; // "신세계렉카"
+
 // 그룹 이름 → 잠금 기능 id. 모르는 그룹(앞으로 늘어날 것)은 nullptr — 서버가 준 대로 보여준다.
 static const char *sherbet_side_feature(const std::string &group)
 {
 	if (group == "\xEA\xB2\xBD\xEC\xB0\xB0\xEC\xB2\xAD") return "sidenotice_police"; // "경찰청"
 	if (group == "\xEB\xB3\xB4\xEC\x95\x88\xEA\xB5\xAD") return "sidenotice_sec";    // "보안국"
+	if (group == kSideTowGroup) return "sidenotice_tow";
 	return nullptr;
+}
+
+// 목록형 그룹(신세계렉카) — 공지 종류를 다 못 외우니 창을 열면 목록이 늘 떠 있고, 줄을 클릭해도 바로 올린다
+// (클릭=복사로 두면 클립보드의 이름이 문장으로 덮여 다음 공지에 이름이 안 들어간다).
+static bool sherbet_side_listed(const std::string &group)
+{
+	return group == kSideTowGroup;
+}
+
+// 클립보드 글자(UTF-8). 글자가 아니면(그림 등) 빈칸.
+static std::string sherbet_side_clipboard()
+{
+	const char *const s = ImGui::GetClipboardText();
+	return s != nullptr ? std::string(s) : std::string();
 }
 
 bool reshade::runtime::sherbet_side_any_unlocked() const
 {
-	return sherbet_feature_unlocked("sidenotice_police") || sherbet_feature_unlocked("sidenotice_sec");
+	return sherbet_feature_unlocked("sidenotice_police") || sherbet_feature_unlocked("sidenotice_sec") || sherbet_feature_unlocked("sidenotice_tow");
+}
+
+// ⚠️ sherbet_side_tick() 에서도 부른다 — 그때는 아직 우리 ImGui 컨텍스트가 current 가 아니라서 잠깐 바꿔 끼운다.
+void reshade::runtime::sherbet_side_restore_clipboard()
+{
+	if (!_sherbet_side_restore_on)
+		return;
+	_sherbet_side_restore_on = false;
+	_sherbet_side_restore_at = 0;
+	ImGuiContext *const prev = ImGui::GetCurrentContext();
+	ImGui::SetCurrentContext(_imgui_context);
+	ImGui::SetClipboardText(_sherbet_side_restore.c_str());
+	ImGui::SetCurrentContext(prev);
 }
 
 // 클립보드에 넣고, send 면 메뉴를 닫은 뒤 채팅 키 → Ctrl+V → Enter 를 시간표대로 보낸다.
@@ -6144,6 +6181,14 @@ bool reshade::runtime::sherbet_side_any_unlocked() const
 //    치면 한글 입력기를 거쳐 조합이 깨진다(그리고 키밀림 방지가 입력기를 바꾸는 중일 수 있다).
 void reshade::runtime::sherbet_side_post(const std::string &text, bool send)
 {
+	// 렉카 문장이면 클립보드 원문(이름)을 기억해 두고 Enter 뒤에 되돌린다. 복사만 하는 경우는 덮는 게 목적이라 안 한다.
+	_sherbet_side_restore_on = send && _sherbet_side_clip_keep_on;
+	_sherbet_side_restore_at = 0; // Enter 를 보낸 뒤에 시각을 잡는다(sherbet_side_tick)
+	if (_sherbet_side_restore_on)
+		_sherbet_side_restore = _sherbet_side_clip_keep;
+	_sherbet_side_clip_keep_on = false;
+	if (!send)
+		_sherbet_side_pend_min = -1; // 복사만 했으면 쿨타임은 안 건드린다
 	ImGui::SetClipboardText(text.c_str());
 	_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
 	if (send)
@@ -6164,10 +6209,36 @@ void reshade::runtime::sherbet_side_post(const std::string &text, bool send)
 // 작은 창에서 칸을 차례로 받는다(시간 칸은 지금+N분이 미리 들어 있다). 큰 메뉴 탭에서 골랐어도 작은 창으로.
 void reshade::runtime::sherbet_side_choose(const sherbet::sidenotice::entry &e, bool send)
 {
-	const std::vector<sherbet::sidenotice::slot> slots = sherbet::sidenotice::find_slots(e.text);
+	// {클립보드}(렉카) — 미리 복사해 둔 이름을 지금 끼운다. 이름이 없으면 안 올리고 창에 '이름을 먼저 복사' 를 띄운 채 둔다.
+	std::string text = e.text;
+	_sherbet_side_clip_keep_on = false;
+	_sherbet_side_pend_min = -1;
+	if (sherbet::sidenotice::has_clip_slot(text))
+	{
+		// 방금 올린 공지의 되돌리기가 아직 안 끝났으면(클립보드에 문장이 들어 있다) 되돌릴 이름을 그대로 쓴다.
+		const std::string raw = _sherbet_side_restore_on ? _sherbet_side_restore : sherbet_side_clipboard();
+		std::string name;
+		if (!sherbet::sidenotice::clip_name(raw, name))
+		{
+			_sherbet_side_clip_seq = 0; // '대상' 줄도 다시 읽게
+			_sherbet_side_quick = true;
+			_sherbet_side_focus = true;
+			return;
+		}
+		text = sherbet::sidenotice::fill_clip(text, name);
+		_sherbet_side_clip_keep = raw;
+		_sherbet_side_clip_keep_on = true;
+		// 쿨타임 — '압류 2분전 (2분)' 이면 이 이름에 2분, 다른 공지면 이 이름 타이머 끝(올라간 순간 반영).
+		std::string zone_main, zone_note;
+		sherbet::sidenotice::split_note(e.zone, zone_main, zone_note);
+		_sherbet_side_pend_target = name;
+		_sherbet_side_pend_min = sherbet::sidenotice::note_minutes(zone_note);
+	}
+
+	const std::vector<sherbet::sidenotice::slot> slots = sherbet::sidenotice::find_slots(text);
 	if (slots.empty())
 	{
-		sherbet_side_post(e.text, send);
+		sherbet_side_post(text, send);
 		return;
 	}
 	const std::time_t now = std::time(nullptr);
@@ -6178,7 +6249,7 @@ void reshade::runtime::sherbet_side_choose(const sherbet::sidenotice::entry &e, 
 		const std::string def = sherbet::sidenotice::slot_default(slots[i], lt.tm_hour, lt.tm_min);
 		std::snprintf(_sherbet_side_fill_buf[i].data(), _sherbet_side_fill_buf[i].size(), "%s", def.c_str());
 	}
-	_sherbet_side_fill_text = e.text;
+	_sherbet_side_fill_text = text;
 	_sherbet_side_fill_zone = e.zone;
 	_sherbet_side_fill_send = send;
 	_sherbet_side_fill_at = 0;
@@ -6198,6 +6269,12 @@ void reshade::runtime::sherbet_side_choose(const sherbet::sidenotice::entry &e, 
 // ⚠️ draw_gui() 앞부분(early-out 위)에서 매 프레임 부른다 — 키를 보낼 때는 메뉴가 닫혀 있어 early-out 상태다.
 void reshade::runtime::sherbet_side_tick()
 {
+	// 렉카 — Enter 를 보내고 조금 뒤에 클립보드를 이름으로 되돌린다. 바로 되돌리면 게임이 렉으로 붙여넣기를
+	// 늦게 처리할 때 문장 대신 이름이 붙어 나간다(키는 차례대로 처리되니 그 사이에 붙여넣기가 끝나 있다).
+	if (_sherbet_side_restore_on && _sherbet_side_restore_at != 0 && static_cast<long long>(GetTickCount64()) >= _sherbet_side_restore_at)
+		sherbet_side_restore_clipboard();
+	if (!_sherbet_side_cool.empty()) // 다 되고 3초 지난 쿨타임은 치운다(비면 early-out 이 다시 걸린다)
+		_sherbet_side_cool.prune(static_cast<long long>(GetTickCount64()));
 	if (!_sherbet_side_poster.active())
 		return;
 	const sherbet::sidenotice::post_action act = _sherbet_side_poster.tick(static_cast<long long>(GetTickCount64()));
@@ -6210,6 +6287,8 @@ void reshade::runtime::sherbet_side_tick()
 		_sherbet_side_poster.cancel();
 		_sherbet_side_msg = kSideStopped;
 		_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
+		sherbet_side_restore_clipboard(); // 렉카 — 멈췄어도 클립보드는 이름으로
+		_sherbet_side_pend_min = -1;      // 안 올라갔으니 쿨타임도 안 건드린다
 		return;
 	}
 
@@ -6249,9 +6328,86 @@ void reshade::runtime::sherbet_side_tick()
 		SendInput(2, in, sizeof(INPUT));
 		_sherbet_side_msg = kSidePosted;
 		_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
+		if (_sherbet_side_restore_on) // 렉카 — 클립보드를 이름으로(위에서 조금 뒤에)
+			_sherbet_side_restore_at = static_cast<long long>(GetTickCount64()) + sherbet::sidenotice::kClipRestoreMs;
+		if (_sherbet_side_pend_min >= 0) // 렉카 쿨타임 — 실제로 올라간 지금부터
+		{
+			_sherbet_side_cool.posted(_sherbet_side_pend_target, _sherbet_side_pend_min, static_cast<long long>(GetTickCount64()));
+			_sherbet_side_pend_min = -1;
+		}
 		break;
 	default:
 		break;
+	}
+}
+
+// 렉카 쿨타임 한 줄 — 이름(그림 문자 뺀 것)과 오른쪽 글자('1:42' / '2분 지났어요').
+struct sherbet_side_cool_row
+{
+	std::string name, right;
+	bool done = false;
+};
+static std::vector<sherbet_side_cool_row> sherbet_side_cool_rows(const sherbet::sidenotice::cooldowns &cool, long long now_ms)
+{
+	std::vector<sherbet_side_cool_row> rows;
+	for (const sherbet::sidenotice::cooldown &c : cool.items())
+	{
+		sherbet_side_cool_row r;
+		r.name = sherbet::sidenotice::display_text(c.target);
+		r.right = sherbet::sidenotice::format_remaining(c.end_ms - now_ms);
+		r.done = r.right.empty();
+		if (r.done)
+			r.right = std::to_string(c.minutes) + "\xEB\xB6\x84 \xEC\xA7\x80\xEB\x82\xAC\xEC\x96\xB4\xEC\x9A\x94"; // "N분 지났어요"
+		rows.push_back(std::move(r));
+	}
+	return rows;
+}
+
+// 렉카 쿨타임 HUD — 게임 중(메뉴 닫힘) 작은 창 자리(가운데 x, 위쪽 y)에 줄마다 '⏱ 하은(210)   1:42'.
+// 다 된 줄은 'N분 지났어요' 가 강조색으로 깜빡이다가 3초 뒤 사라진다. 입력은 안 받는다(그리기만) —
+// ✕ 로 지우기는 창을 열었을 때 창 맨 위 타이머 줄에서.
+// ⚠️ draw_gui() early-out 아래에서 불린다 — 타이머가 있으면 early-out 면제 조건(_sherbet_side_cool)이 막아 준다.
+void reshade::runtime::sherbet_draw_side_cool_hud()
+{
+	const sherbet::theme &t = sherbet::active_theme();
+	const ImGuiViewport *const vp = ImGui::GetMainViewport();
+	ImFont *const font = ImGui::GetFont();
+	const float sz = _imgui_context->Style.FontSizeBase * 1.05f; // 상수 배율 — 동적 아틀라스 재굽기 방지
+	const long long now = static_cast<long long>(GetTickCount64());
+	const float pulse = 0.6f + 0.4f * sinf(static_cast<float>(now % 1000000) * 0.006f);
+
+	const std::vector<sherbet_side_cool_row> rows = sherbet_side_cool_rows(_sherbet_side_cool, now);
+	if (rows.empty())
+		return;
+	float name_w = 0.0f, right_w = 0.0f;
+	bool any_done = false;
+	for (const sherbet_side_cool_row &r : rows)
+	{
+		name_w = ImMax(name_w, font->CalcTextSizeA(sz, FLT_MAX, 0.0f, r.name.c_str()).x);
+		// 숫자 폭이 초마다 달라 상자가 출렁이지 않게 '0:00' 폭을 바닥으로 잡는다.
+		right_w = ImMax(right_w, ImMax(font->CalcTextSizeA(sz, FLT_MAX, 0.0f, r.right.c_str()).x, font->CalcTextSizeA(sz, FLT_MAX, 0.0f, "0:00").x));
+		any_done = any_done || r.done;
+	}
+	const float icon_w = font->CalcTextSizeA(sz, FLT_MAX, 0.0f, ICON_FK_CLOCK).x;
+	const float pad_x = sz * 0.7f, pad_y = sz * 0.35f, gap = sz * 0.45f, line_h = sz * 1.4f;
+	const float w = pad_x + icon_w + gap + name_w + gap * 2.0f + right_w + pad_x;
+	const float h = pad_y * 2.0f + line_h * static_cast<float>(rows.size());
+	const float x = ImClamp(vp->Pos.x + vp->Size.x * _sherbet_side_pos[0] - w * 0.5f, vp->Pos.x, ImMax(vp->Pos.x, vp->Pos.x + vp->Size.x - w));
+	const float y = ImClamp(vp->Pos.y + vp->Size.y * _sherbet_side_pos[1], vp->Pos.y, ImMax(vp->Pos.y, vp->Pos.y + vp->Size.y - h));
+
+	ImDrawList *const dl = ImGui::GetForegroundDrawList();
+	dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), sherbet::with_alpha(t.panel, 215), sz * 0.45f);
+	dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h),
+		sherbet::with_alpha(t.accent, any_done ? static_cast<int>(255 * pulse) : 110), sz * 0.45f, 0, 1.5f);
+	for (size_t i = 0; i < rows.size(); ++i)
+	{
+		const sherbet_side_cool_row &r = rows[i];
+		const float ly = y + pad_y + line_h * static_cast<float>(i) + (line_h - sz) * 0.5f;
+		const ImU32 accent = sherbet::with_alpha(t.accent, r.done ? static_cast<int>(255 * pulse) : 255);
+		dl->AddText(font, sz, ImVec2(x + pad_x, ly), r.done ? accent : sherbet::with_alpha(t.text_dim, 230), ICON_FK_CLOCK);
+		dl->AddText(font, sz, ImVec2(x + pad_x + icon_w + gap, ly), sherbet::with_alpha(t.text, 240), r.name.c_str());
+		const float rw = font->CalcTextSizeA(sz, FLT_MAX, 0.0f, r.right.c_str()).x;
+		dl->AddText(font, sz, ImVec2(x + w - pad_x - rw, ly), accent, r.right.c_str());
 	}
 }
 
@@ -6271,6 +6427,9 @@ void reshade::runtime::sherbet_draw_side_quick()
 	bool many_groups = false;
 	for (const sherbet::sidenotice::entry &e : list)
 		if (e.group != list.front().group) { many_groups = true; break; }
+	bool has_listed = false, has_other = false; // 목록형(렉카) 문장이 있나 / 검색형(경찰청·보안국)이 있나
+	for (const sherbet::sidenotice::entry &e : list)
+		(sherbet_side_listed(e.group) ? has_listed : has_other) = true;
 
 	// 위치 — 끌어서 옮길 수 있다(FPS 표시와 같은 규칙: **끄는 동안만** 위치를 따라가 저장하고, 평소엔 저장값에 놓는다).
 	// 저장값은 화면 비율(가운데 x, 위쪽 y)이라 해상도가 바뀌어도 같은 자리다.
@@ -6431,6 +6590,46 @@ void reshade::runtime::sherbet_draw_side_quick()
 		return;
 	}
 
+	// 렉카 쿨타임 — 게임 중 HUD 와 같은 줄을 창 맨 위에(같은 자리라 창을 열어도 타이머가 제자리다).
+	// 줄 오른쪽 ✕ = 그 타이머 지우기. 게임 중 HUD 는 누를 수 없다(클릭이 게임으로 가고 FiveM 이 커서를
+	// 가운데 고정한다) — 지우는 건 창을 열었을 때 여기서.
+	{
+		const std::vector<sherbet_side_cool_row> rows = sherbet_side_cool_rows(_sherbet_side_cool, static_cast<long long>(GetTickCount64()));
+		const float x_sz = ImGui::GetTextLineHeight();
+		int drop = -1;
+		for (size_t i = 0; i < rows.size(); ++i)
+		{
+			const sherbet_side_cool_row &r = rows[i];
+			ImGui::PushID(static_cast<int>(i));
+			const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(r.done ? t.accent : t.text_dim), "%s", ICON_FK_CLOCK);
+			ImGui::SameLine();
+			ImGui::TextUnformatted(r.name.c_str());
+			ImGui::SameLine(right - x_sz - fs * 0.6f - ImGui::CalcTextSize(r.right.c_str()).x);
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(t.accent), "%s", r.right.c_str());
+			ImGui::SameLine(right - x_sz);
+			if (ImGui::InvisibleButton("##cool_x", ImVec2(x_sz, x_sz)))
+				drop = static_cast<int>(i);
+			// ✕ 는 글꼴에 없어서 선 두 개로 그린다.
+			const bool x_hot = ImGui::IsItemHovered();
+			const ImVec2 c = ImVec2((ImGui::GetItemRectMin().x + ImGui::GetItemRectMax().x) * 0.5f, (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
+			const float k = x_sz * 0.22f;
+			const ImU32 x_col = x_hot ? t.text : sherbet::with_alpha(t.text_dim, 200);
+			ImGui::GetWindowDrawList()->AddLine(ImVec2(c.x - k, c.y - k), ImVec2(c.x + k, c.y + k), x_col, 1.6f);
+			ImGui::GetWindowDrawList()->AddLine(ImVec2(c.x - k, c.y + k), ImVec2(c.x + k, c.y - k), x_col, 1.6f);
+			if (x_hot)
+				ImGui::SetTooltip("%s", "\xED\x83\x80\xEC\x9D\xB4\xEB\xA8\xB8 \xEC\xA7\x80\xEC\x9A\xB0\xEA\xB8\xB0"); // "타이머 지우기"
+			ImGui::PopID();
+		}
+		if (drop >= 0)
+		{
+			_sherbet_side_cool.dismiss(_sherbet_side_cool.items()[static_cast<size_t>(drop)].target);
+			_sherbet_side_focus = true; // 입력칸으로 커서 되돌리기
+		}
+		if (!rows.empty())
+			ImGui::Separator();
+	}
+
 	// 입력칸 — 친 그대로 둔다. 영문 상태로 한글을 친 경우(키밀림 방지 때문에 게임 중엔 영문이다)엔
 	// 두벌식으로 읽은 모양('qls1' → '빈1')을 칸 오른쪽에 흐리게 보여 준다. 검색은 두 가지 다 본다.
 	const auto input_cb = [](ImGuiInputTextCallbackData *d) -> int {
@@ -6463,7 +6662,10 @@ void reshade::runtime::sherbet_draw_side_quick()
 	const int sel_before = _sherbet_side_sel;
 	// 첫 글자를 조합하는 동안엔 칸이 아직 비어 있어 안내 문구가 조합 글자 밑에 겹쳐 보인다 — 그동안은 숨긴다.
 	const bool composing = _input != nullptr && !_input->text_composition().empty();
-	const bool enter = ImGui::InputTextWithHint("##side_q", composing ? "" : "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEC\x9E\xA5\xEC\x86\x8C \xEC\x9E\x85\xEB\xA0\xA5" /* "사이드공지 · 장소 입력" */, _sherbet_side_query, sizeof(_sherbet_side_query),
+	const char *const query_hint = has_listed && !has_other
+		? "\xEB\xA0\x89\xEC\xB9\xB4 \xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEB\xAA\x87 \xEA\xB8\x80\xEC\x9E\x90\xEB\xA1\x9C \xEC\xB0\xBE\xEA\xB8\xB0" // "렉카 공지 · 몇 글자로 찾기"
+		: "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80 \xC2\xB7 \xEC\x9E\xA5\xEC\x86\x8C \xEC\x9E\x85\xEB\xA0\xA5"; // "사이드공지 · 장소 입력"
+	const bool enter = ImGui::InputTextWithHint("##side_q", composing ? "" : query_hint, _sherbet_side_query, sizeof(_sherbet_side_query),
 		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCharFilter, input_cb, this);
 	{
 		// 영문 키가 섞여 있으면 한글 자판으로 읽은 모양을 칸 안 오른쪽에 — "→ 빈1"
@@ -6488,19 +6690,52 @@ void reshade::runtime::sherbet_draw_side_quick()
 		WideCharToMultiByte(CP_UTF8, 0, wc.c_str(), static_cast<int>(wc.size()), comp.data(), static_cast<int>(comp.size()), nullptr, nullptr);
 		query += comp;
 	}
-	const std::vector<size_t> hits = sherbet::sidenotice::search(list, query);
+	// 렉카(목록형) — 빈 검색어면 그 그룹 공지를 늘 다 보여 준다(다 못 외운다). 순서는 서버가 준 대로(정렬이 정한 순서).
+	const bool list_mode = has_listed && query.empty();
+	std::vector<size_t> hits = sherbet::sidenotice::search(list, query);
+	if (list_mode)
+		hits.erase(std::remove_if(hits.begin(), hits.end(), [&list](size_t k) { return !sherbet_side_listed(list[k].group); }), hits.end());
 	if (hits.empty())
 		_sherbet_side_sel = 0;
 	else
 		_sherbet_side_sel = ImClamp(_sherbet_side_sel, 0, static_cast<int>(hits.size()) - 1);
 	const bool sel_moved = _sherbet_side_sel != sel_before;
 
+	// 렉카 — 지금 클립보드의 이름('대상' 줄). 클립보드가 바뀌었을 때만 다시 읽는다(매 프레임 열면 다른
+	// 프로그램의 복사를 막을 수 있다). 방금 올린 공지의 되돌리기가 남아 있으면 그 이름이 곧 돌아올 이름이다.
+	std::string clip_shown;
+	if (has_listed)
+	{
+		const unsigned long seq = GetClipboardSequenceNumber();
+		if (seq != _sherbet_side_clip_seq || seq == 0)
+		{
+			std::string name;
+			const char *const raw = ImGui::GetClipboardText();
+			_sherbet_side_clip_name = raw != nullptr && sherbet::sidenotice::clip_name(raw, name) ? name : std::string();
+			if (raw != nullptr) // 못 열었으면(다른 프로그램이 잡고 있음) 다음 프레임에 다시
+				_sherbet_side_clip_seq = seq;
+		}
+		clip_shown = _sherbet_side_clip_name;
+		if (std::string name; _sherbet_side_restore_on && sherbet::sidenotice::clip_name(_sherbet_side_restore, name))
+			clip_shown = name;
+		if (!clip_shown.empty())
+		{
+			ImGui::TextDisabled("%s", "\xEB\x8C\x80\xEC\x83\x81"); // "대상"
+			ImGui::SameLine();
+			ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(t.accent), "%s", sherbet::sidenotice::display_text(clip_shown).c_str());
+		}
+		else
+		{
+			ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.45f, 1.0f), "%s", kSideNoName);
+		}
+	}
 	if (enter && !hits.empty())
 		sherbet_side_choose(list[hits[static_cast<size_t>(_sherbet_side_sel)]], true);
 	if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
 		_sherbet_side_close = true;
 
 	// 결과 — 칠 때만, 한 줄짜리 최대 5줄(장소 이름만). 빈 검색어면 입력칸 하나만 보인다(작은 박스).
+	// 렉카는 빈 검색어여도 목록 전부(최대 12줄, 클릭하기 좋게 줄을 조금 높게).
 	if (list.empty())
 	{
 		ImGui::TextDisabled("%s", kSideLoading);
@@ -6509,24 +6744,31 @@ void reshade::runtime::sherbet_draw_side_quick()
 	{
 		ImGui::TextDisabled("%s", kSideNone);
 	}
-	else if (!query.empty())
+	else if (!query.empty() || list_mode)
 	{
 		const float line = ImGui::GetTextLineHeight();
-		const float row_h = line + fs * 0.3f;
-		const int shown = ImMin(static_cast<int>(hits.size()), 5);
+		const float row_h = line + fs * (list_mode ? 0.55f : 0.3f);
+		const int shown = ImMin(static_cast<int>(hits.size()), list_mode ? 12 : 5);
 		ImGui::BeginChild("##side_rows", ImVec2(0.0f, shown * (row_h + _imgui_context->Style.ItemSpacing.y)), ImGuiChildFlags_None);
 		ImDrawList *const dl = ImGui::GetWindowDrawList();
+		bool all_listed = true;
 		for (int i = 0; i < static_cast<int>(hits.size()); ++i)
 		{
 			const sherbet::sidenotice::entry &e = list[hits[static_cast<size_t>(i)]];
+			const bool listed = sherbet_side_listed(e.group);
+			all_listed = all_listed && listed;
 			ImGui::PushID(static_cast<int>(hits[static_cast<size_t>(i)]));
 			if (ImGui::Selectable("##row", i == _sherbet_side_sel, ImGuiSelectableFlags_None, ImVec2(0.0f, row_h)))
-				sherbet_side_choose(e, false); // 클릭 = 복사만
+				sherbet_side_choose(e, listed); // 클릭 = 복사만(렉카는 바로 올리기)
 			if (ImGui::IsItemHovered() && ImGui::BeginTooltip())
 			{
 				// 문장 전체는 마우스를 올리면 — 그냥 두면 한 줄로 화면 끝까지 뻗어서 줄을 접는다.
+				// 렉카 문장은 지금 클립보드 이름을 끼운 모양으로(그림 문자는 우리 폰트에 없어 뺀다).
+				const std::string tip = sherbet::sidenotice::has_clip_slot(e.text)
+					? sherbet::sidenotice::fill_clip(e.text, clip_shown.empty() ? std::string("\xE2\x80\xA6") : sherbet::sidenotice::display_text(clip_shown))
+					: e.text;
 				ImGui::PushTextWrapPos(fs * 24.0f);
-				ImGui::TextUnformatted(e.text.c_str());
+				ImGui::TextUnformatted(tip.c_str());
 				ImGui::PopTextWrapPos();
 				ImGui::EndTooltip();
 			}
@@ -6546,9 +6788,14 @@ void reshade::runtime::sherbet_draw_side_quick()
 			{
 				dl->AddRectFilled(a, b, sherbet::with_alpha(t.accent, 28), fs * 0.25f);
 			}
-			dl->AddText(ImVec2(a.x + pad + (sel_row ? fs * 0.2f : 0.0f), a.y + (row_h - line) * 0.5f),
-				sel_row ? sherbet::with_alpha(t.accent, 255) : sherbet::with_alpha(t.text, 235), e.zone.c_str());
-			if (many_groups)
+			// 이름 끝 '(2분)' 같은 덧붙임은 강조색으로 따로(렉카 '압류 2분전 (2분)').
+			std::string main_text, note;
+			sherbet::sidenotice::split_note(e.zone, main_text, note);
+			const ImVec2 text_at(a.x + pad + (sel_row ? fs * 0.2f : 0.0f), a.y + (row_h - line) * 0.5f);
+			dl->AddText(text_at, sel_row ? sherbet::with_alpha(t.accent, 255) : sherbet::with_alpha(t.text, 235), main_text.c_str());
+			if (!note.empty())
+				dl->AddText(ImVec2(text_at.x + ImGui::CalcTextSize(main_text.c_str()).x + fs * 0.3f, text_at.y), sherbet::with_alpha(t.accent, sel_row ? 170 : 220), note.c_str());
+			if (many_groups && !list_mode)
 			{
 				const ImVec2 gs = ImGui::CalcTextSize(e.group.c_str());
 				dl->AddText(ImVec2(b.x - pad - gs.x, a.y + (row_h - line) * 0.5f), sherbet::with_alpha(t.accent, 200), e.group.c_str());
@@ -6556,7 +6803,9 @@ void reshade::runtime::sherbet_draw_side_quick()
 			ImGui::PopID();
 		}
 		ImGui::EndChild();
-		ImGui::TextDisabled("%s", "Enter \xEC\x98\xAC\xEB\xA6\xAC\xEA\xB8\xB0  \xC2\xB7  \xED\x81\xB4\xEB\xA6\xAD \xEB\xB3\xB5\xEC\x82\xAC"); // "Enter 올리기  ·  클릭 복사"
+		ImGui::TextDisabled("%s", all_listed
+			? "Enter \xC2\xB7 \xED\x81\xB4\xEB\xA6\xAD = \xEB\xB0\x94\xEB\xA1\x9C \xEC\x98\xAC\xEB\xA6\xAC\xEA\xB8\xB0" // "Enter · 클릭 = 바로 올리기"
+			: "Enter \xEC\x98\xAC\xEB\xA6\xAC\xEA\xB8\xB0  \xC2\xB7  \xED\x81\xB4\xEB\xA6\xAD \xEB\xB3\xB5\xEC\x82\xAC"); // "Enter 올리기  ·  클릭 복사"
 	}
 	ImGui::End();
 }
@@ -6571,7 +6820,7 @@ void reshade::runtime::draw_gui_sidenotice()
 	ImGui::Spacing();
 
 	// 잠긴 그룹은 판매 카드.
-	for (const char *const fid : { "sidenotice_police", "sidenotice_sec" })
+	for (const char *const fid : { "sidenotice_police", "sidenotice_sec", "sidenotice_tow" })
 	{
 		if (sherbet_feature_unlocked(fid))
 			continue;
@@ -6592,7 +6841,10 @@ void reshade::runtime::draw_gui_sidenotice()
 	// 설정 — 열기 단축키 · 채팅 키 · 채팅창 열리는 시간
 	sherbet::begin_card("##side_set");
 	{
-		sherbet_hint("\xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\x9C\x84\xEC\x97\x90 \xEC\x9E\x91\xEC\x9D\x80 \xEC\xB0\xBD\xEC\x9D\xB4 \xEB\x96\xA0\xEC\x9A\x94. \xEC\x9E\xA5\xEC\x86\x8C\xEB\xA5\xBC \xEB\xAA\x87 \xEA\xB8\x80\xEC\x9E\x90 \xEC\xB9\x98\xEA\xB3\xA0 Enter \xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEA\xB3\xA0, \xEC\xA4\x84\xEC\x9D\x84 \xED\x81\xB4\xEB\xA6\xAD\xED\x95\x98\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\xA7\x8C \xED\x95\xB4\xEC\x9A\x94."); // "단축키를 누르면 게임 위에 작은 창이 떠요. 장소를 몇 글자 치고 Enter 면 바로 올라가고, 줄을 클릭하면 복사만 해요."
+		if (sherbet_feature_unlocked("sidenotice_tow"))
+			sherbet_hint("\xEB\xA0\x89\xEC\xB9\xB4\xEB\x8A\x94 \xEC\xB0\xBD\xEC\x9D\x84 \xEC\x97\xB4\xEB\xA9\xB4 \xEA\xB3\xB5\xEC\xA7\x80 \xEB\xAA\xA9\xEB\xA1\x9D\xEC\x9D\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEB\x96\xA0\xEC\x9A\x94. \xEC\x9D\xB4\xEB\xA6\x84(\xEA\xB3\xA0\xEB\xB2\x88)\xEC\x9D\x84 \xEB\xB3\xB5\xEC\x82\xAC\xED\x95\xB4 \xEB\x91\x90\xEA\xB3\xA0 \xEC\xA4\x84\xEC\x9D\x84 \xEA\xB3\xA0\xEB\xA5\xB4\xEB\xA9\xB4(Enter\xC2\xB7\xED\x81\xB4\xEB\xA6\xAD) \xEA\xB7\xB8 \xEC\x9D\xB4\xEB\xA6\x84\xEC\x9D\xB4 \xEB\x93\xA4\xEC\x96\xB4\xEA\xB0\x84 \xEB\xAC\xB8\xEC\x9E\xA5\xEC\x9D\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEA\xB3\xA0, \xED\x81\xB4\xEB\xA6\xBD\xEB\xB3\xB4\xEB\x93\x9C\xEB\x8A\x94 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x9D\xB4\xEB\xA6\x84\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80\xEC\x9A\x94."); // "렉카는 창을 열면 공지 목록이 바로 떠요. 이름(고번)을 복사해 두고 줄을 고르면(Enter·클릭) 그 이름이 들어간 문장이 바로 올라가고, 클립보드는 다시 이름으로 돌아와요."
+		if (sherbet_feature_unlocked("sidenotice_police") || sherbet_feature_unlocked("sidenotice_sec"))
+			sherbet_hint("\xEB\x8B\xA8\xEC\xB6\x95\xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xEA\xB2\x8C\xEC\x9E\x84 \xEC\x9C\x84\xEC\x97\x90 \xEC\x9E\x91\xEC\x9D\x80 \xEC\xB0\xBD\xEC\x9D\xB4 \xEB\x96\xA0\xEC\x9A\x94. \xEC\x9E\xA5\xEC\x86\x8C\xEB\xA5\xBC \xEB\xAA\x87 \xEA\xB8\x80\xEC\x9E\x90 \xEC\xB9\x98\xEA\xB3\xA0 Enter \xEB\xA9\xB4 \xEB\xB0\x94\xEB\xA1\x9C \xEC\x98\xAC\xEB\x9D\xBC\xEA\xB0\x80\xEA\xB3\xA0, \xEC\xA4\x84\xEC\x9D\x84 \xED\x81\xB4\xEB\xA6\xAD\xED\x95\x98\xEB\xA9\xB4 \xEB\xB3\xB5\xEC\x82\xAC\xEB\xA7\x8C \xED\x95\xB4\xEC\x9A\x94."); // "단축키를 누르면 게임 위에 작은 창이 떠요. 장소를 몇 글자 치고 Enter 면 바로 올라가고, 줄을 클릭하면 복사만 해요."
 		if (_input != nullptr)
 		{
 			// 멀티키 칸(조준점·돋보기 프리셋과 같은 것) — 스페이스바 + ` 처럼 아무 키나 4개까지.

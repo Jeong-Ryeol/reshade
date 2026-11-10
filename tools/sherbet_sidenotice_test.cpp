@@ -282,6 +282,104 @@ static void test_poster()
 	assert(!p.active());
 }
 
+// 신세계렉카 — 문장의 {클립보드} 에 복사해 둔 이름('🚧하은(210)')이 그대로 들어가 정렬이 붙여 준 문장과
+// 글자 하나까지 같아야 한다. 클립보드에 이름이 아닌 것(빈칸·문장·여러 줄)이 있으면 안 올린다.
+static void test_tow_clipboard()
+{
+	const std::string tmpl = "/렉카 {클립보드} 님 2분 후 차량 압류 진행 하겠습니다.";
+	assert(has_clip_slot(tmpl));
+	assert(!has_clip_slot("/경찰청 [{대상}]님"));
+
+	std::string name;
+	assert(clip_name("🚧하은(210)", name) && name == "🚧하은(210)");
+	assert(clip_name("  🚧하은(210)\r\n", name) && name == "🚧하은(210)"); // 복사하며 묻은 줄바꿈·공백
+	assert(!clip_name("", name));
+	assert(!clip_name(" \r\n", name));
+	assert(!clip_name("🚧하은(210)\n🚧민수(11)", name));                  // 여러 줄
+	assert(!clip_name("/렉카 🚧하은(210) 님 차량 압류 진행합니다.", name)); // 문장이 남아 있다
+	assert(!clip_name("가나다라마바사아자차카타파하가나다라마바사아자차카타파하가나다라마", name)); // 너무 김
+	assert(!clip_name("{대상}", name));
+
+	const std::string filled = fill_clip(tmpl, "🚧하은(210)");
+	assert(filled == "/렉카 🚧하은(210) 님 2분 후 차량 압류 진행 하겠습니다.");
+	assert(find_slots(filled).empty()); // 칸 채우기 창을 거치지 않고 바로 올라간다
+	assert(fill_clip("{클립보드}/{클립보드}", "a") == "a/a");
+
+	// 우리 창(폰트에 그림 문자가 없다)에는 🚧 를 빼고 보여 준다. 채팅 문장은 그대로.
+	assert(display_text("🚧하은(210)") == "하은(210)");
+	assert(display_text("하은(210)") == "하은(210)");
+
+	std::string main_text, note;
+	split_note("압류 2분전 (2분)", main_text, note);
+	assert(main_text == "압류 2분전" && note == "(2분)");
+	split_note("보호/준보호", main_text, note);
+	assert(main_text == "보호/준보호" && note.empty());
+
+	// 목록은 빈 검색어면 서버 순서 그대로(사진 순서), 몇 글자로도 찾는다.
+	static const char *const zones[] = { "압류 2분전 (2분)", "압류 2분후", "보호/준보호", "수리불가", "범죄차량", "오프라인",
+		"밀배달", "팩션사유지", "버려진 배", "노래방 인근", "이벤트", "트럭비콘" };
+	std::vector<entry> tow;
+	int n = 0;
+	for (const char *z : zones)
+		tow.push_back({ "tow-" + std::to_string(++n), "신세계렉카", z, "/렉카 {클립보드} 님", {} });
+	const std::vector<std::size_t> all = search(tow, "");
+	assert(all.size() == 12);
+	for (std::size_t i = 0; i < all.size(); ++i)
+		assert(all[i] == i);
+	assert(top(tow, "노래") == "노래방 인근");
+	assert(top(tow, "비콘") == "트럭비콘");
+	assert(top(tow, "ㅂㅋ") == "트럭비콘");
+	assert(top(tow, "shfo") == "노래방 인근"); // 영문 상태로 '노래'
+	assert(has(tow, "압류", "압류 2분후"));
+}
+
+// 압류 2분전 → 그 이름에 2분 쿨타임. 화면에 보이는 '2:00 … 0:01', 같은 이름에 다른 공지를 올리면 끝,
+// 다 되고 3초 뒤 사라짐, ✕ 로 지우기, 여러 대 동시(최대 4).
+static void test_tow_cooldown()
+{
+	std::string main_text, note;
+	split_note("압류 2분전 (2분)", main_text, note);
+	assert(note_minutes(note) == 2);
+	assert(note_minutes("(10분)") == 10);
+	assert(note_minutes("") == 0);
+	assert(note_minutes("(분)") == 0);
+	assert(note_minutes("(2초)") == 0);
+	assert(note_minutes("(a분)") == 0);
+
+	assert(format_remaining(120000) == "2:00");
+	assert(format_remaining(119001) == "2:00");
+	assert(format_remaining(119000) == "1:59");
+	assert(format_remaining(61000) == "1:01");
+	assert(format_remaining(1) == "0:01");
+	assert(format_remaining(0).empty());
+	assert(format_remaining(-5).empty());
+
+	cooldowns c;
+	c.posted("🚧하은(210)", 2, 1000);
+	assert(c.items().size() == 1 && c.items()[0].end_ms == 121000);
+	c.posted("🚧하은(210)", 2, 5000); // 다시 올리면 다시 2분(줄이 둘이 되지 않는다)
+	assert(c.items().size() == 1 && c.items()[0].end_ms == 125000);
+	c.posted("🚧민수(11)", 2, 6000);
+	assert(c.items().size() == 2);
+	c.posted("🚧하은(210)", 0, 7000); // 하은 압류 2분후 → 하은 타이머만 끝
+	assert(c.items().size() == 1 && c.items()[0].target == "🚧민수(11)");
+
+	assert(kCooldownLingerMs == 3000);
+	c.prune(126000 + kCooldownLingerMs - 1); // 민수: 다 됐지만 3초는 더 보인다
+	assert(c.items().size() == 1);
+	c.prune(126000 + kCooldownLingerMs);
+	assert(c.empty());
+
+	for (int i = 0; i < 5; ++i)
+		c.posted("t" + std::to_string(i), 2, i);
+	assert(c.items().size() == kMaxCooldowns && c.items()[0].target == "t1"); // 가장 오래된 t0 이 빠졌다
+
+	c.dismiss("t2"); // ✕ — 그 줄만
+	assert(c.items().size() == 3 && c.items()[0].target == "t1" && c.items()[1].target == "t3");
+	c.dismiss("nobody");
+	assert(c.items().size() == 3);
+}
+
 int main()
 {
 	test_compose();
@@ -293,6 +391,8 @@ int main()
 	test_time_slot();
 	test_slots();
 	test_poster();
-	std::printf("sherbet_sidenotice_test: 9 passed\n");
+	test_tow_clipboard();
+	test_tow_cooldown();
+	std::printf("sherbet_sidenotice_test: 11 passed\n");
 	return 0;
 }

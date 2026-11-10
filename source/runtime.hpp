@@ -538,6 +538,20 @@ namespace reshade
 		std::vector<std::array<char, 128>> _sherbet_side_fill_buf; // 칸마다 입력 버퍼(한글 약 40자 — 긴 닉네임도 들어가게)
 		std::string _sherbet_side_msg;     // 탭에 잠깐 띄우는 결과 한 줄('복사했어요' 등)
 		std::chrono::high_resolution_clock::time_point _sherbet_side_msg_time;
+		// 신세계렉카 — 문장의 {클립보드} 를 미리 복사해 둔 이름으로 채운다. 채팅에 붙여넣느라 클립보드가 문장으로
+		// 바뀌므로 Enter 뒤에 원래 이름으로 되돌린다(다음 공지도 바로 올리게).
+		unsigned long _sherbet_side_clip_seq = 0; // GetClipboardSequenceNumber — 바뀌었을 때만 다시 읽는다
+		std::string _sherbet_side_clip_name;      // 작은 창 '대상' 줄(이름으로 안 보이면 빈칸)
+		std::string _sherbet_side_clip_keep;      // 고른 순간의 클립보드 원문
+		bool _sherbet_side_clip_keep_on = false;  // 고른 문장이 클립보드를 썼다 — 올릴 때 되돌리기를 건다
+		std::string _sherbet_side_restore;        // 올리는 중 — Enter(또는 멈춤) 뒤 클립보드를 이걸로
+		bool _sherbet_side_restore_on = false;
+		long long _sherbet_side_restore_at = 0;   // 되돌릴 시각(GetTickCount64). 0 = 아직 Enter 전
+		// 렉카 쿨타임 — '압류 2분전 (2분)' 을 올리면 그 이름에 2분 타이머. 게임 중엔 작은 창 자리에 HUD 로 보인다
+		// (⚠️ 그래서 draw_gui() early-out 면제 조건에 들어 있다). 타이머는 Enter 를 실제로 보낸 순간 시작한다.
+		sherbet::sidenotice::cooldowns _sherbet_side_cool;
+		std::string _sherbet_side_pend_target;    // 고른 공지의 대상 이름 — Enter 가 나가면 쿨타임에 반영
+		int _sherbet_side_pend_min = -1;          // -1 = 반영할 것 없음, 0 = 그 대상 타이머 끝, N = N분 시작
 
 		// SHERBET: HUD 돋보기 — 화면의 한 사각형(체력·방어구 막대 등)을 확대해 크게 그린다.
 		// **게임 상태를 읽지 않는다.** 픽셀을 확대할 뿐이다(메모리 접근 0, 상태 판정 0).
@@ -812,6 +826,8 @@ namespace reshade
 		void sherbet_side_post(const std::string &text, bool send); // send=false 면 복사만
 		void sherbet_side_choose(const sherbet::sidenotice::entry &e, bool send); // 시간 칸이 있으면 먼저 시간을 묻는다
 		bool sherbet_side_any_unlocked() const;
+		void sherbet_side_restore_clipboard(); // 렉카 — 올린 뒤(또는 멈췄을 때) 클립보드를 이름으로 되돌린다
+		void sherbet_draw_side_cool_hud();     // 렉카 쿨타임 — 게임 중(메뉴 닫힘) 작은 창 자리에 남은 시간
 
 		// SHERBET: 유료 기능 잠금 판정의 **호출부 단일 입구**.
 		// sherbet::paid::unlocked() 에 서버 엔타이틀(has_feature)과 판매자 미리보기 스위치를

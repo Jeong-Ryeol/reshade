@@ -716,6 +716,151 @@ namespace sherbet
 		}
 
 		// ─────────────────────────────────────────────────────────────
+		// 클립보드 칸 — 문장 안 '{클립보드}' 는 올리는 순간 클립보드에 있는 이름으로 바꾼다(신세계렉카).
+		//   렉카 기사는 압류할 차 주인 이름('🚧하은(210)')을 미리 복사해 두고 목록에서 고르기만 한다.
+		//   채팅에 붙여넣느라 클립보드가 문장으로 바뀌므로 올린 뒤 이름으로 되돌린다(runtime 쪽) — 다음 공지도 바로.
+		// ─────────────────────────────────────────────────────────────
+		constexpr const char *kClipSlot = "{\xED\x81\xB4\xEB\xA6\xBD\xEB\xB3\xB4\xEB\x93\x9C}"; // "{클립보드}"
+		constexpr std::size_t kMaxClipNameChars = 32;
+
+		inline bool has_clip_slot(const std::string &text) { return text.find(kClipSlot) != std::string::npos; }
+
+		// 클립보드 글자 → 문장에 넣을 이름. 앞뒤 공백·줄바꿈은 뗀다. 이름으로 안 보이면 false:
+		// 비었음 · 여러 줄 · 너무 김 · '/' 로 시작(채팅 명령 = 문장이 남아 있는 것) · 칸 기호({ } [00:00]).
+		inline bool clip_name(const std::string &raw, std::string &out)
+		{
+			const auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+			std::size_t a = 0, b = raw.size();
+			while (a < b && blank(raw[a])) ++a;
+			while (b > a && blank(raw[b - 1])) --b;
+			const std::string s = raw.substr(a, b - a);
+			if (s.empty() || s[0] == '/' || char_count(s) > kMaxClipNameChars)
+				return false;
+			for (char c : s)
+			{
+				const unsigned char u = static_cast<unsigned char>(c);
+				if (u < 0x20 || u == 0x7F || c == '{' || c == '}')
+					return false;
+			}
+			if (s.find(kTimeSlot) != std::string::npos)
+				return false;
+			out = s;
+			return true;
+		}
+
+		inline std::string fill_clip(const std::string &text, const std::string &name)
+		{
+			std::string out = text;
+			const std::string slot = kClipSlot;
+			for (std::size_t at = out.find(slot); at != std::string::npos; at = out.find(slot, at + name.size()))
+				out.replace(at, slot.size(), name);
+			return out;
+		}
+
+		// 작은 창에 그릴 모양 — 폰트에 없는 그림 문자(🚧 같은 BMP 밖 글자, 이모지 변형 선택자, ZWJ)를 뺀다.
+		// 채팅에 올라가는 문장은 그대로다(채팅은 이모지를 그린다). 우리 창에만 '?' 가 안 찍히게.
+		inline std::string display_text(const std::string &utf8)
+		{
+			std::u32string out;
+			for (char32_t c : to_u32(utf8))
+				if (c < 0x10000 && c != 0xFE0F && c != 0xFE0E && c != 0x200D)
+					out += c;
+			while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+			return to_utf8(out);
+		}
+
+		// 이름 끝의 '(…)' 를 떼어 따로 — '압류 2분전 (2분)' → '압류 2분전' + '(2분)'(덧붙임은 강조색으로 그린다).
+		inline void split_note(const std::string &zone, std::string &main, std::string &note)
+		{
+			main = zone;
+			note.clear();
+			const std::size_t open = zone.rfind(" (");
+			if (open != std::string::npos && open > 0 && zone.size() > open + 3 && zone.back() == ')')
+			{
+				main = zone.substr(0, open);
+				note = zone.substr(open + 1);
+			}
+		}
+
+		// ─────────────────────────────────────────────────────────────
+		// 쿨타임 — 이름 끝이 '(N분)' 인 공지(렉카 '압류 2분전 (2분)')를 올리면 그 대상 이름에 N분 타이머가 돈다.
+		//   게임 중엔 작은 창 자리에, 창을 열면 창 안에 '하은(210) 1:42' 로 보인다. 다 되면 'N분 지났어요' 를
+		//   3초 더 보여 주고 사라진다. 같은 대상에 다른 공지(압류 2분후 등)를 올리면 그 타이머는 끝난다.
+		//   창 안 타이머 줄의 ✕ 로 바로 지울 수도 있다.
+		// ─────────────────────────────────────────────────────────────
+		constexpr long long kCooldownLingerMs = 3000; // 'N분 지났어요' 뜨고 3초 뒤 사라짐
+		constexpr std::size_t kMaxCooldowns = 4; // 차 여러 대를 동시에 걸어 둘 수 있게. 넘치면 가장 오래된 것부터
+
+		// "(2분)" → 2. 모양이 다르면 0.
+		inline int note_minutes(const std::string &note)
+		{
+			const std::string kMin = "\xEB\xB6\x84"; // "분"
+			if (note.size() < 2 + kMin.size() + 1 || note.front() != '(' || note.back() != ')')
+				return 0;
+			const std::string body = note.substr(1, note.size() - 2);
+			if (body.compare(body.size() - kMin.size(), kMin.size(), kMin) != 0)
+				return 0;
+			const std::string digits = body.substr(0, body.size() - kMin.size());
+			if (digits.empty() || digits.size() > 3)
+				return 0;
+			int v = 0;
+			for (char c : digits)
+			{
+				if (c < '0' || c > '9') return 0;
+				v = v * 10 + (c - '0');
+			}
+			return v;
+		}
+
+		struct cooldown
+		{
+			std::string target; // 클립보드 이름 원문('🚧하은(210)')
+			int minutes = 0;
+			long long end_ms = 0;
+		};
+
+		class cooldowns
+		{
+		public:
+			// 공지를 올렸다. minutes > 0 이면 그 대상 타이머를 (다시) 시작, 0 이면 그 대상 타이머를 끝낸다.
+			void posted(const std::string &target, int minutes, long long now_ms)
+			{
+				_v.erase(std::remove_if(_v.begin(), _v.end(), [&target](const cooldown &c) { return c.target == target; }), _v.end());
+				if (minutes <= 0)
+					return;
+				if (_v.size() >= kMaxCooldowns)
+					_v.erase(_v.begin());
+				_v.push_back({ target, minutes, now_ms + minutes * 60000LL });
+			}
+			// ✕ 로 그 대상 타이머를 지운다.
+			void dismiss(const std::string &target)
+			{
+				_v.erase(std::remove_if(_v.begin(), _v.end(), [&target](const cooldown &c) { return c.target == target; }), _v.end());
+			}
+			// 다 되고 3초 지난 것을 지운다.
+			void prune(long long now_ms)
+			{
+				_v.erase(std::remove_if(_v.begin(), _v.end(), [now_ms](const cooldown &c) { return now_ms >= c.end_ms + kCooldownLingerMs; }), _v.end());
+			}
+			const std::vector<cooldown> &items() const { return _v; }
+			bool empty() const { return _v.empty(); }
+
+		private:
+			std::vector<cooldown> _v;
+		};
+
+		// 남은 시간 "1:42"(초는 올림 — 막 시작하면 '2:00', 마지막 순간은 '0:01'). 다 됐으면 빈칸.
+		inline std::string format_remaining(long long remain_ms)
+		{
+			if (remain_ms <= 0)
+				return std::string();
+			const long long s = (remain_ms + 999) / 1000;
+			std::string out = std::to_string(s / 60) + ":";
+			if (s % 60 < 10) out += '0';
+			return out + std::to_string(s % 60);
+		}
+
+		// ─────────────────────────────────────────────────────────────
 		// 채팅으로 올리기 — 시간표
 		// ─────────────────────────────────────────────────────────────
 		// 메뉴를 닫고(입력 막힘이 풀릴 때까지 기다림) → 채팅 키 → (채팅창 열릴 때까지) → Ctrl+V → Enter.
@@ -731,6 +876,7 @@ namespace sherbet
 
 		constexpr int kCloseWaitMs = 120;  // 메뉴가 닫히고 게임 입력 막힘이 풀리는 시간
 		constexpr int kPasteToSendMs = 150; // 붙여넣은 글자가 채팅칸에 들어가는 시간
+		constexpr int kClipRestoreMs = 600; // Enter 뒤 클립보드를 이름으로 되돌리기까지(렉카 — 게임이 렉이어도 붙여넣기가 먼저 끝나게)
 		constexpr int kMinChatDelayMs = 80, kMaxChatDelayMs = 1500, kDefaultChatDelayMs = 300;
 
 		class poster
