@@ -6,6 +6,7 @@
 #include "sherbet_ime.hpp"
 #include <cassert>
 #include <cstdio>
+#include <iterator>
 
 using namespace sherbet::ime;
 
@@ -163,6 +164,32 @@ static void test_second_chat_key()
 	assert(reads_ime(f7, 'T', f7) && !reads_ime(f7, 'T', 0) && !reads_ime('W', 'T', f7));
 }
 
+// 채팅 키 목록(T·F7·F9·F10): 아무 키로 열어도 한글. F키로 연 창을 같은 F키로 다시 닫으면 영문.
+// T 는 채팅 중에 다시 눌러도(글자 'ㅅ') 닫지 않는다.
+static void test_key_list_and_toggle()
+{
+	const chat_keys keys = default_chat_keys();
+	const unsigned int f9 = 0x78, f10 = 0x79;
+	state st;
+	assert(on_key_down(st, true, true, keys, f9, false, false) == action::to_korean);   // 이모트 열기
+	assert(on_key_down(st, true, true, keys, 'A', false, false) == action::none);       // 검색어 입력
+	assert(on_key_down(st, true, true, keys, f9, false, false) == action::to_english);  // F9 로 닫기
+	assert(!st.chat_open);
+	assert(on_key_down(st, true, true, keys, 'W', false, false) == action::none);
+	assert(on_key_down(st, true, true, keys, f10, false, false) == action::to_korean);  // 치장
+	assert(on_key_down(st, true, true, keys, kVkEscape, false, false) == action::none);
+	assert(on_key_up(st, true, kVkEscape, false) == action::to_english);               // Esc 로 닫기
+	assert(on_key_down(st, true, true, keys, 'T', false, false) == action::to_korean);
+	assert(on_key_down(st, true, true, keys, 'T', false, false) == action::none);       // 채팅 중 'ㅅ' — 안 닫는다
+	assert(st.chat_open);
+	assert(reads_ime(f10, keys) && !reads_ime('W', keys));
+
+	// 설정 파일 정리: 0·중복·범위 밖을 버리고 순서는 지킨다
+	const unsigned int raw[] = { 0, 'T', 0x76, 'T', 300, 0x78, 0 };
+	const chat_keys c = sanitize_chat_keys(std::begin(raw), std::end(raw));
+	assert(c.k[0] == 'T' && c.k[1] == 0x76 && c.k[2] == 0x78 && c.k[3] == 0);
+}
+
 int main()
 {
 	test_chat_cycle();
@@ -177,6 +204,7 @@ int main()
 	test_no_chat_key();
 	test_reads_ime_only_rare_keys();
 	test_second_chat_key();
-	std::printf("sherbet_ime_test: 12 passed\n");
+	test_key_list_and_toggle();
+	std::printf("sherbet_ime_test: 13 passed\n");
 	return 0;
 }

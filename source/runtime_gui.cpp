@@ -403,8 +403,26 @@ void reshade::runtime::load_config_gui(const ini_file &config)
 	config.get("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
 	_sherbet_ime_pos[0] = ImClamp(_sherbet_ime_pos[0], 0.0f, 1.0f);
 	_sherbet_ime_pos[1] = ImClamp(_sherbet_ime_pos[1], 0.0f, 1.0f);
-	config_get("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
-	config_get("INPUT", "SherbetImeChatKey2", _sherbet_ime_chat_key2);
+	{
+		// 채팅 키 목록. 없으면(1.13.2 까지의 설정) 예전 채팅 키 1·2 를 이어받고 F9(이모트)·F10(치장)을 더한다.
+		// 사용자가 키를 전부 지워 저장했다면 0 만 든 목록이 있으므로 기본값으로 되살리지 않는다.
+		unsigned int keys[sherbet::ime::kMaxChatKeys] = {};
+		if (config.get("INPUT", "SherbetImeChatKeys", keys))
+		{
+			_sherbet_ime_chat_keys = sherbet::ime::sanitize_chat_keys(std::begin(keys), std::end(keys));
+		}
+		else
+		{
+			unsigned int k1[4] = { 'T', 0, 0, 0 }, k2[4] = { 0x76, 0, 0, 0 };
+			config_get("INPUT", "SherbetImeChatKey", k1);
+			config_get("INPUT", "SherbetImeChatKey2", k2);
+			const unsigned int merged[] = { k1[0], k2[0], 0x78, 0x79 };
+			_sherbet_ime_chat_keys = sherbet::ime::sanitize_chat_keys(std::begin(merged), std::end(merged));
+		}
+		_sherbet_ime_key_rows = 0; // 설정 카드에 보일 칸 = 들어 있는 키 수(sanitize 가 앞으로 모아 둔다)
+		while (_sherbet_ime_key_rows < sherbet::ime::kMaxChatKeys && _sherbet_ime_chat_keys.k[_sherbet_ime_key_rows] != 0)
+			++_sherbet_ime_key_rows;
+	}
 	config.get("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.get("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.get("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -690,8 +708,7 @@ void reshade::runtime::save_config_gui(ini_file &config) const
 	config.set("OVERLAY", "SherbetImeKoreanOnChat", _sherbet_ime_korean_on_chat);
 	config.set("OVERLAY", "SherbetImeShow", _sherbet_ime_show);
 	config.set("OVERLAY", "SherbetImePos", _sherbet_ime_pos);
-	config.set("INPUT", "SherbetImeChatKey", _sherbet_ime_chat_key);
-	config.set("INPUT", "SherbetImeChatKey2", _sherbet_ime_chat_key2);
+	config.set("INPUT", "SherbetImeChatKeys", _sherbet_ime_chat_keys.k);
 	config.set("OVERLAY", "SherbetAdOn", _sherbet_ad_on);
 	config.set("OVERLAY", "SherbetAdInterval", _sherbet_ad_interval);
 	config.set("OVERLAY", "SherbetAdSecs", _sherbet_ad_secs);
@@ -1158,7 +1175,7 @@ void reshade::runtime::draw_gui()
 		// SHERBET: 한글 키밀림 방지 설정을 입력 쪽에 넘긴다. ⚠️ 여기는 early-out **위**라 메뉴가 닫혀 있어도 매 프레임 돈다.
 		// ⚠️ 유료 기능(imefix) — 잠겨 있으면 켜 둔 설정이 남아 있어도 입력기를 건드리지 않는다.
 		const bool ime_active = _sherbet_ime_on && sherbet_feature_unlocked("imefix");
-		_input->sherbet_ime_config(ime_active, _sherbet_ime_chat_key[0], _sherbet_ime_chat_key2[0], _sherbet_ime_korean_on_chat);
+		_input->sherbet_ime_config(ime_active, _sherbet_ime_chat_keys.k, sherbet::ime::kMaxChatKeys, _sherbet_ime_korean_on_chat);
 		// 다른 프로그램(카톡 등)에서 한/영을 바꾸고 돌아와도 게임으로 오면 영문. 입력기 상태는 앱끼리 같이 바뀐다.
 		// 처음 켜졌을 때도 여기서 한 번 걸린다(_sherbet_ime_was_fg 초기값 false) — 게임은 영문으로 시작한다.
 		{
@@ -6258,8 +6275,8 @@ void reshade::runtime::draw_gui_settings()
 		std::string ime_st;
 		if (_sherbet_ime_on)
 		{
-			std::string chat_keys; // "T" / "T·F7" — 두 채팅 키 중 설정된 것
-			for (const unsigned int k : { _sherbet_ime_chat_key[0], _sherbet_ime_chat_key2[0] })
+			std::string chat_keys; // "T·F7·F9·F10" — 채팅 키 목록
+			for (const unsigned int k : _sherbet_ime_chat_keys.k)
 				if (k != 0)
 					chat_keys += (chat_keys.empty() ? "" : "\xC2\xB7") + input::key_name(k);
 			if (_sherbet_ime_korean_on_chat && !chat_keys.empty())
@@ -6301,19 +6318,48 @@ void reshade::runtime::draw_gui_settings()
 		}
 		if (_input != nullptr)
 		{
-			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
-			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4 1##ime_key", _sherbet_ime_chat_key, *_input)) // "채팅 키 1"
+			// 채팅 키 목록 — 채팅(T)·무전(F7)·이모트(F9)·치장(F10) 처럼 글을 치는 창을 여는 키들.
+			// 칸마다 키 하나(Ctrl 등 조합 무시), 휴지통으로 지우고 [+ 키 추가] 로 빈칸을 늘린다(최대 8).
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextUnformatted("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4"); // "채팅 키"
+			const float box_w = ImMax(90.0f, 5.0f * ImGui::GetFontSize());
+			const float row_w = box_w + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+			int remove = -1;
+			_sherbet_ime_key_rows = ImClamp(_sherbet_ime_key_rows, 0, sherbet::ime::kMaxChatKeys);
+			for (int i = 0; i < _sherbet_ime_key_rows; ++i)
 			{
-				_sherbet_ime_chat_key[1] = _sherbet_ime_chat_key[2] = _sherbet_ime_chat_key[3] = 0; // 채팅 키는 키 하나만 본다(Ctrl 등 조합 무시)
+				ImGui::PushID(i);
+				if (i != 0 && ImGui::GetContentRegionAvail().x > row_w)
+					ImGui::SameLine();
+				unsigned int key[4] = { _sherbet_ime_chat_keys.k[i], 0, 0, 0 };
+				ImGui::SetNextItemWidth(box_w);
+				if (imgui::key_input_box("##ime_key", key, *_input))
+				{
+					// 이미 목록에 있는 키면 받지 않는다(같은 키 두 칸은 의미가 없다)
+					if (key[0] == 0 || !sherbet::ime::is_chat_key(key[0], _sherbet_ime_chat_keys))
+						_sherbet_ime_chat_keys.k[i] = key[0];
+					modified = true;
+				}
+				ImGui::SameLine(0.0f, 2.0f);
+				if (ImGui::Button(ICON_FK_TRASH, ImVec2(ImGui::GetFrameHeight(), 0.0f)))
+					remove = i;
+				ImGui::PopID();
+			}
+			if (remove >= 0)
+			{
+				for (int i = remove; i + 1 < sherbet::ime::kMaxChatKeys; ++i)
+					_sherbet_ime_chat_keys.k[i] = _sherbet_ime_chat_keys.k[i + 1];
+				_sherbet_ime_chat_keys.k[sherbet::ime::kMaxChatKeys - 1] = 0;
+				--_sherbet_ime_key_rows;
 				modified = true;
 			}
-			// 두 번째 채팅 키(기본 F7) — 서버에 따라 무전 등 다른 채팅창을 여는 키. 어느 쪽으로 열어도 똑같이 한글.
-			ImGui::SetNextItemWidth(ImMax(120.0f, 6.0f * ImGui::GetFontSize()));
-			if (imgui::key_input_box("\xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4 2##ime_key2", _sherbet_ime_chat_key2, *_input)) // "채팅 키 2"
+			if (_sherbet_ime_key_rows < sherbet::ime::kMaxChatKeys &&
+				sherbet::pill_button(ICON_FK_PLUS "  " "\xED\x82\xA4 \xEC\xB6\x94\xEA\xB0\x80##ime_add", false)) // "키 추가"
 			{
-				_sherbet_ime_chat_key2[1] = _sherbet_ime_chat_key2[2] = _sherbet_ime_chat_key2[3] = 0;
-				modified = true;
+				_sherbet_ime_chat_keys.k[_sherbet_ime_key_rows] = 0; // 빈칸 — 눌러서 키를 지정한다
+				++_sherbet_ime_key_rows;
 			}
+			sherbet_hint("\xEC\xB1\x84\xED\x8C\x85\xC2\xB7\xEC\x9D\xB4\xEB\xAA\xA8\xED\x8A\xB8\xC2\xB7\xEC\xB9\x98\xEC\x9E\xA5\xEC\xB2\x98\xEB\x9F\xBC \xEA\xB8\x80\xEC\x9D\x84 \xEC\xB9\x98\xEB\x8A\x94 \xEC\xB0\xBD\xEC\x9D\x84 \xEC\x97\xAC\xEB\x8A\x94 \xED\x82\xA4\xEB\xA5\xBC \xEB\x84\xA3\xEC\x96\xB4 \xEC\xA3\xBC\xEC\x84\xB8\xEC\x9A\x94. \xEC\x9D\xB4 \xED\x82\xA4\xEB\xA1\x9C \xEC\x97\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80, Enter\xC2\xB7" "Esc \xEB\xA1\x9C \xEB\x8B\xAB\xEC\x9C\xBC\xEB\xA9\xB4 \xEC\x98\x81\xEB\xAC\xB8\xEC\x9D\xB4\xEC\x97\x90\xEC\x9A\x94. F\xED\x82\xA4\xEB\xA1\x9C \xEC\x97\xB0 \xEC\xB0\xBD\xEC\x9D\x80 \xEA\xB0\x99\xEC\x9D\x80 F\xED\x82\xA4\xEB\xA5\xBC \xEB\x8B\xA4\xEC\x8B\x9C \xEB\x88\x8C\xEB\x9F\xAC \xEB\x8B\xAB\xEC\x95\x84\xEB\x8F\x84 \xEC\x98\x81\xEB\xAC\xB8\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x8F\x8C\xEC\x95\x84\xEC\x99\x80\xEC\x9A\x94."); // "채팅·이모트·치장처럼 글을 치는 창을 여는 키를 넣어 주세요. 이 키로 열면 한글, Enter·Esc 로 닫으면 영문이에요. F키로 연 창은 같은 F키를 다시 눌러 닫아도 영문으로 돌아와요."
 		}
 
 		sherbet_hint("\xED\x95\x9C\xEA\xB8\x80 \xEC\x83\x81\xED\x83\x9C\xEB\xA1\x9C \xEB\xAC\xB4\xEB\xB9\x99\xEC\x9D\x84 \xEC\xB9\x98\xEB\xA9\xB4 \xED\x82\xA4\xEA\xB0\x80 \xEC\x9E\x85\xEB\xA0\xA5\xEA\xB8\xB0\xEB\xA5\xBC \xED\x95\x9C \xEB\xB2\x88 \xEA\xB1\xB0\xEC\xB3\x90 \xEB\x93\xA4\xEC\x96\xB4\xEA\xB0\x80\xEC\x84\x9C \xEB\xB0\x80\xEB\xA6\xB4 \xEC\x88\x98 \xEC\x9E\x88\xEC\x96\xB4\xEC\x9A\x94. \xED\x8F\x89\xEC\x86\x8C\xEC\x97\x94 \xEC\x98\x81\xEB\xAC\xB8\xEC\x9C\xBC\xEB\xA1\x9C \xEB\x91\x90\xEA\xB3\xA0, \xEC\xB1\x84\xED\x8C\x85 \xED\x82\xA4\xEB\xA5\xBC \xEB\x88\x84\xEB\xA5\xB4\xEB\xA9\xB4 \xED\x95\x9C\xEA\xB8\x80, Enter\xEB\x82\x98 Esc\xEB\xA1\x9C \xEC\xB1\x84\xED\x8C\x85\xEC\x9D\x84 \xEB\x81\x9D\xEB\x82\xB4\xEB\xA9\xB4 \xEB\x8B\xA4\xEC\x8B\x9C \xEC\x98\x81\xEB\xAC\xB8\xEC\x9C\xBC\xEB\xA1\x9C \xEB\xB0\x94\xEA\xBF\x94 \xEC\xA4\x98\xEC\x9A\x94."); // "한글 상태로 무빙을 치면 키가 입력기를 한 번 거쳐 들어가서 밀릴 수 있어요. 평소엔 영문으로 두고, 채팅 키를 누르면 한글, Enter나 Esc로 채팅을 끝내면 다시 영문으로 바꿔 줘요."

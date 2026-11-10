@@ -242,17 +242,19 @@ bool reshade::input::handle_window_message(const void *message_data)
 		if (!sherbet_ime_thread)
 			return;
 		const bool blocking = input->is_blocking_keyboard_input();
-		const unsigned int chat_vk = input->_sherbet_ime_chat_vk.load(std::memory_order_relaxed);
-		const unsigned int chat_vk2 = input->_sherbet_ime_chat_vk2.load(std::memory_order_relaxed);
+		sherbet::ime::chat_keys chat_keys;
+		static_assert(sherbet::ime::kMaxChatKeys == reshade::input::kSherbetImeMaxChatKeys, "chat key count mismatch");
+		for (int i = 0; i < sherbet::ime::kMaxChatKeys; ++i)
+			chat_keys.k[i] = input->_sherbet_ime_chat_vks[i].load(std::memory_order_relaxed);
 		sherbet::ime::state st { input->_sherbet_ime_chat_open, input->_sherbet_ime_english_on_release };
 		const sherbet::ime::action act = key_up
 			? sherbet::ime::on_key_up(st, true, vk, blocking)
-			: sherbet::ime::on_key_down(st, true, input->_sherbet_ime_korean_on_chat.load(std::memory_order_relaxed), chat_vk, vk, blocking,
-				!blocking && input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed), chat_vk2);
+			: sherbet::ime::on_key_down(st, true, input->_sherbet_ime_korean_on_chat.load(std::memory_order_relaxed), chat_keys, vk, blocking,
+				!blocking && input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed));
 		input->_sherbet_ime_chat_open = st.chat_open;
 		input->_sherbet_ime_english_on_release = st.english_on_release;
 		const int want = act == sherbet::ime::action::to_korean ? 1 : act == sherbet::ime::action::to_english ? 0 : -1;
-		if (want >= 0 || (key_up && sherbet::ime::reads_ime(vk, chat_vk, chat_vk2)))
+		if (want >= 0 || (key_up && sherbet::ime::reads_ime(vk, chat_keys)))
 			sherbet_ime_apply(want);
 	};
 	// 메뉴를 닫았거나 다른 프로그램에서 돌아왔을 때(렌더 스레드가 요청) — 키를 누르기 전에, 돌아오며 움직이는

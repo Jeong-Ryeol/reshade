@@ -41,22 +41,43 @@ namespace sherbet
 		constexpr unsigned int kDefaultChatKey = 'T';
 		constexpr unsigned int kDefaultChatKey2 = 0x76; // F7 — 서버에 따라 다른 채팅(무전 등)을 여는 두 번째 키
 
+		// 채팅(글 입력) 창을 여는 키 목록. 설정 카드의 [+ 키 추가] 로 늘린다. 0 = 빈칸.
+		// 기본 = T(채팅) · F7(무전 등) · F9(이모트) · F10(치장) — 정렬 서버에서 글을 치는 창들.
+		constexpr int kMaxChatKeys = 8;
+		struct chat_keys
+		{
+			unsigned int k[kMaxChatKeys] = {};
+		};
+		inline chat_keys default_chat_keys() { chat_keys c; c.k[0] = 'T'; c.k[1] = 0x76; c.k[2] = 0x78; c.k[3] = 0x79; return c; }
+
 		struct state
 		{
 			bool chat_open = false;          // 채팅 키로 채팅이 열렸다고 보는 중(Enter·Esc 로 닫힌다)
 			bool english_on_release = false; // Enter·Esc 를 눌렀다 — 떼면 영문으로
 		};
 
-		// 이 키가 채팅을 여는 키인가. 채팅 키는 두 개까지(0 = 안 씀).
+		// 이 키가 채팅을 여는 키인가.
+		inline bool is_chat_key(unsigned int vk, const chat_keys &keys)
+		{
+			for (unsigned int k : keys.k)
+				if (k != 0 && vk == k)
+					return true;
+			return false;
+		}
 		inline bool is_chat_key(unsigned int vk, unsigned int chat_vk, unsigned int chat_vk2)
 		{
 			return (chat_vk != 0 && vk == chat_vk) || (chat_vk2 != 0 && vk == chat_vk2);
 		}
 
+		// F1~F24 — 이모트(F9)·치장(F10) 처럼 **같은 키를 한 번 더 눌러 닫는** 창의 키.
+		// 열린 채로 다시 누르면 닫힌 것으로 보고 영문으로 돌린다. 글자 키(T)는 채팅 중에 그 글자를
+		// 치는 것이라 이 규칙에서 뺀다.
+		inline bool is_toggle_key(unsigned int vk) { return vk >= 0x70 && vk <= 0x87; }
+
 		// 키를 눌렀을 때. english_requested = 메뉴를 닫으며 미뤄 둔 영문 전환
 		// (메뉴 닫기는 렌더 스레드에서 일어나는데 입력기는 창 스레드에서만 바꿀 수 있다).
-		// chat_vk2 = 두 번째 채팅 키(기본 F7). 둘 중 어느 쪽으로 열어도 같다.
-		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, unsigned int chat_vk, unsigned int vk, bool overlay_blocking, bool english_requested, unsigned int chat_vk2 = 0)
+		// 채팅 키 목록 중 어느 것으로 열어도 같다.
+		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, const chat_keys &keys, unsigned int vk, bool overlay_blocking, bool english_requested)
 		{
 			if (!enabled || overlay_blocking)
 				return action::none;
@@ -71,14 +92,32 @@ namespace sherbet
 				st.english_on_release = true;
 				return english_requested ? action::to_english : action::none;
 			}
-			if (is_chat_key(vk, chat_vk, chat_vk2) && !st.chat_open)
+			if (is_chat_key(vk, keys))
 			{
-				st.chat_open = true;
-				st.english_on_release = false; // Enter→T 연타: 새 채팅은 한글로 남긴다
-				if (korean_on_chat)
-					return action::to_korean;
+				if (!st.chat_open)
+				{
+					st.chat_open = true;
+					st.english_on_release = false; // Enter→T 연타: 새 채팅은 한글로 남긴다
+					if (korean_on_chat)
+						return action::to_korean;
+				}
+				else if (is_toggle_key(vk))
+				{
+					// F9 로 연 이모트 창을 F9 로 다시 닫았다 — 바로 영문(누를 때. 뗄 때까지 기다릴 이유가 없다)
+					st.chat_open = false;
+					st.english_on_release = false;
+					return action::to_english;
+				}
 			}
 			return english_requested ? action::to_english : action::none;
+		}
+		// 예전 모양(채팅 키 1·2) — 호스트 테스트가 쓴다.
+		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, unsigned int chat_vk, unsigned int vk, bool overlay_blocking, bool english_requested, unsigned int chat_vk2 = 0)
+		{
+			chat_keys keys;
+			keys.k[0] = chat_vk;
+			keys.k[1] = chat_vk2;
+			return on_key_down(st, enabled, korean_on_chat, keys, vk, overlay_blocking, english_requested);
 		}
 
 		// 키를 뗐을 때.
@@ -95,10 +134,31 @@ namespace sherbet
 		}
 
 		// 이 키를 뗀 뒤 입력기 상태를 읽어 화면 표시를 갱신할지. 무빙 키는 절대 아니다.
+		inline bool reads_ime(unsigned int vk, const chat_keys &keys)
+		{
+			return vk == kVkReturn || vk == kVkEscape || vk == kVkHangul || vk == kVkMenu || vk == kVkRMenu ||
+				is_chat_key(vk, keys);
+		}
 		inline bool reads_ime(unsigned int vk, unsigned int chat_vk, unsigned int chat_vk2 = 0)
 		{
 			return vk == kVkReturn || vk == kVkEscape || vk == kVkHangul || vk == kVkMenu || vk == kVkRMenu ||
 				is_chat_key(vk, chat_vk, chat_vk2);
+		}
+
+		// 설정 파일에서 읽은 목록 정리: 0·256 이상·중복을 버리고 앞에서부터 kMaxChatKeys 개까지.
+		template <typename It>
+		inline chat_keys sanitize_chat_keys(It first, It last)
+		{
+			chat_keys c;
+			int n = 0;
+			for (; first != last && n < kMaxChatKeys; ++first)
+			{
+				const unsigned int v = static_cast<unsigned int>(*first);
+				if (v == 0 || v >= 256 || is_chat_key(v, c))
+					continue;
+				c.k[n++] = v;
+			}
+			return c;
 		}
 	}
 }

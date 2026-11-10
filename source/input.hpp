@@ -224,11 +224,12 @@ namespace reshade
 
 		// SHERBET: 한글 키밀림 방지(sherbet_ime.hpp). 설정은 렌더 스레드가 매 프레임 넣고,
 		// 입력기 전환은 창 스레드(메시지 훅)에서만 한다 — 입력기 컨텍스트가 창 스레드에 묶여 있다.
-		void sherbet_ime_config(bool enabled, unsigned int chat_vk, unsigned int chat_vk2, bool korean_on_chat)
+		// 채팅 키는 목록(최대 8개, sherbet::ime::kMaxChatKeys). 남는 칸은 0 으로 채운다.
+		void sherbet_ime_config(bool enabled, const unsigned int *chat_vks, int count, bool korean_on_chat)
 		{
 			_sherbet_ime_enabled.store(enabled, std::memory_order_relaxed);
-			_sherbet_ime_chat_vk.store(chat_vk, std::memory_order_relaxed);
-			_sherbet_ime_chat_vk2.store(chat_vk2, std::memory_order_relaxed);
+			for (int i = 0; i < kSherbetImeMaxChatKeys; ++i)
+				_sherbet_ime_chat_vks[i].store(i < count ? chat_vks[i] : 0u, std::memory_order_relaxed);
 			_sherbet_ime_korean_on_chat.store(korean_on_chat, std::memory_order_relaxed);
 		}
 		void sherbet_ime_request_english() { _sherbet_ime_english_requested.store(true, std::memory_order_relaxed); }
@@ -266,8 +267,8 @@ namespace reshade
 		int64_t _raw_mouse_delta[2] = {}; // SHERBET: raw input 상대 이동 누적(읽으면 리셋)
 		bool _raw_mouse_seen = false;     // SHERBET: 상대 이동을 한 번이라도 받았는지
 		std::atomic<bool> _sherbet_ime_enabled { false };
-		std::atomic<unsigned int> _sherbet_ime_chat_vk { 'T' };
-		std::atomic<unsigned int> _sherbet_ime_chat_vk2 { 0x76 }; // F7 — 두 번째 채팅 키
+		static constexpr int kSherbetImeMaxChatKeys = 8; // = sherbet::ime::kMaxChatKeys (input.hpp 는 그 헤더를 안 끌어온다)
+		std::atomic<unsigned int> _sherbet_ime_chat_vks[kSherbetImeMaxChatKeys] = {}; // 채팅 키 목록(렌더 스레드가 매 프레임 넣는다)
 		std::atomic<bool> _sherbet_ime_korean_on_chat { true };
 		std::atomic<bool> _sherbet_ime_english_requested { false };
 		std::atomic<int> _sherbet_ime_mode { -1 };

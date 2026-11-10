@@ -21,6 +21,7 @@
 #include "sherbet_frametime.hpp"
 #include "sherbet_engine.hpp"
 #include "sherbet_magpreset.hpp"
+#include "sherbet_ime.hpp"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -497,8 +498,9 @@ namespace reshade
 		// 실제 전환은 input 이 창 스레드에서 한다. 이 값들은 draw_gui() 앞부분(early-out 위)에서 매 프레임 넘긴다.
 		bool _sherbet_ime_on = false;
 		bool _sherbet_ime_korean_on_chat = true;
-		unsigned int _sherbet_ime_chat_key[4] = { 'T', 0, 0, 0 };
-		unsigned int _sherbet_ime_chat_key2[4] = { 0x76 /* F7 */, 0, 0, 0 }; // 두 번째 채팅 키(무전 등 다른 채팅창)
+		// 채팅(글 입력) 창을 여는 키 목록 — 설정 카드의 [+ 키 추가] 로 늘린다(기본 T·F7·F9·F10).
+		sherbet::ime::chat_keys _sherbet_ime_chat_keys = sherbet::ime::default_chat_keys();
+		int _sherbet_ime_key_rows = 4; // 설정 카드에 보이는 칸 수(빈칸 포함). 불러올 때 키 개수로 맞춘다
 		// 화면 위쪽 가운데 작은 '한글/영문' 표시. ⚠️ 켜져 있으면 draw_gui() early-out 면제(게임 중에 보여야 한다).
 		bool _sherbet_ime_show = true;
 		float _sherbet_ime_pos[2] = { 0.5f, 0.012f }; // 화면 비율(0=왼쪽/위, 1=오른쪽/아래). 메뉴 연 채로 끌어서 옮긴다
