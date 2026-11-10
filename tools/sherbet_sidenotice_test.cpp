@@ -262,22 +262,29 @@ static void test_poster()
 	assert(p.active());
 	assert(p.tick(1000) == post_action::none);                          // 메뉴가 닫히는 중
 	assert(p.tick(1000 + kCloseWaitMs) == post_action::open_chat);
-	assert(p.tick(1000 + kCloseWaitMs + 10) == post_action::none);      // 채팅창 열리길 기다린다
-	assert(p.tick(1000 + kCloseWaitMs + 300) == post_action::paste);
-	assert(p.tick(1000 + kCloseWaitMs + 300) == post_action::none);     // 한 프레임에 하나씩
-	assert(p.tick(1000 + kCloseWaitMs + 300 + kPasteToSendMs) == post_action::send);
+	// 채팅 키는 누른 채 잠깐 둔다 — 누르자마자 떼면 게임이 못 본다(창은 닫히는데 T 가 안 열림, 구매자 실측)
+	assert(kKeyHoldMs >= 50);
+	assert(p.tick(1000 + kCloseWaitMs + kKeyHoldMs - 1) == post_action::none);
+	assert(p.tick(1000 + kCloseWaitMs + kKeyHoldMs) == post_action::release_chat);
+	const long long t_rel = 1000 + kCloseWaitMs + kKeyHoldMs;
+	assert(p.tick(t_rel + 10) == post_action::none);                    // 채팅창 열리길 기다린다
+	assert(p.tick(t_rel + 300) == post_action::paste);
+	assert(p.tick(t_rel + 300) == post_action::none);                   // 한 프레임에 하나씩
+	assert(p.tick(t_rel + 300 + kPasteToSendMs) == post_action::send);
 	assert(!p.active() && p.tick(99999) == post_action::none);
 
-	// 프레임이 크게 끊겨도 단계를 건너뛰지 않는다(채팅 열기 없이 붙여넣기 금지).
+	// 프레임이 크게 끊겨도 단계를 건너뛰지 않는다(채팅 열기 없이 붙여넣기 금지, 누른 키는 반드시 뗀다).
 	p.start(0, 300);
 	assert(p.tick(100000) == post_action::open_chat);
+	assert(p.tick(100000) == post_action::release_chat);
 	assert(p.tick(100000) == post_action::paste);
 	assert(p.tick(100000) == post_action::send);
 
 	p.start(0, 5); // 상한·하한
 	assert(p.tick(kCloseWaitMs) == post_action::open_chat);
-	assert(p.tick(kCloseWaitMs + kMinChatDelayMs - 1) == post_action::none);
-	assert(p.tick(kCloseWaitMs + kMinChatDelayMs) == post_action::paste);
+	assert(p.tick(kCloseWaitMs + kKeyHoldMs) == post_action::release_chat);
+	assert(p.tick(kCloseWaitMs + kKeyHoldMs + kMinChatDelayMs - 1) == post_action::none);
+	assert(p.tick(kCloseWaitMs + kKeyHoldMs + kMinChatDelayMs) == post_action::paste);
 	p.cancel();
 	assert(!p.active());
 }

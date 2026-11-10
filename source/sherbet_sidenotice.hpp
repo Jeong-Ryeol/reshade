@@ -868,13 +868,17 @@ namespace sherbet
 		enum class post_action
 		{
 			none,
-			open_chat, // 채팅 키 누르고 떼기
-			paste,     // Ctrl+V
-			send,      // Enter
+			open_chat,    // 채팅 키 누르기
+			release_chat, // 채팅 키 떼기
+			paste,        // Ctrl+V
+			send,         // Enter
 			done,
 		};
 
 		constexpr int kCloseWaitMs = 120;  // 메뉴가 닫히고 게임 입력 막힘이 풀리는 시간
+		// 채팅 키를 누르고 있는 시간. 파엠 기본 채팅은 매 프레임 '지금 눌려 있나' 만 본다 — 누르자마자 떼면 그 사이에
+		// 게임 프레임이 안 지나가 채팅이 안 열렸다(구매자 실측: 창은 닫히는데 T 가 안 열림). 사람 손처럼 잠깐 누른다.
+		constexpr int kKeyHoldMs = 80;
 		constexpr int kPasteToSendMs = 150; // 붙여넣은 글자가 채팅칸에 들어가는 시간
 		constexpr int kClipRestoreMs = 600; // Enter 뒤 클립보드를 이름으로 되돌리기까지(렉카 — 게임이 렉이어도 붙여넣기가 먼저 끝나게)
 		constexpr int kMinChatDelayMs = 80, kMaxChatDelayMs = 1500, kDefaultChatDelayMs = 300;
@@ -895,13 +899,15 @@ namespace sherbet
 			post_action tick(long long now_ms)
 			{
 				const long long t_open = _t0 + kCloseWaitMs;
-				const long long t_paste = t_open + _chat_delay;
+				const long long t_release = t_open + kKeyHoldMs;
+				const long long t_paste = t_release + _chat_delay; // 채팅 지연은 키를 뗀 뒤부터
 				const long long t_send = t_paste + kPasteToSendMs;
 				switch (_step)
 				{
 				case 1: if (now_ms >= t_open) { _step = 2; return post_action::open_chat; } break;
-				case 2: if (now_ms >= t_paste) { _step = 3; return post_action::paste; } break;
-				case 3: if (now_ms >= t_send) { _step = 0; return post_action::send; } break;
+				case 2: if (now_ms >= t_release) { _step = 3; return post_action::release_chat; } break;
+				case 3: if (now_ms >= t_paste) { _step = 4; return post_action::paste; } break;
+				case 4: if (now_ms >= t_send) { _step = 0; return post_action::send; } break;
 				default: break;
 				}
 				return post_action::none;

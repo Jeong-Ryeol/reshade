@@ -6290,9 +6290,24 @@ void reshade::runtime::sherbet_side_tick()
 	if (act == sherbet::sidenotice::post_action::none)
 		return;
 
+	INPUT in[6] = {};
+	const auto key = [&in](int i, WORD vk, bool up) {
+		in[i].type = INPUT_KEYBOARD;
+		in[i].ki.wVk = vk;
+		in[i].ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
+		in[i].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+	};
+	// 사이드공지는 일반 채팅창에 친다 — 사이드공지 탭의 '채팅 키'(기본 T).
+	const WORD chat = static_cast<WORD>(_sherbet_side_chat_key[0] != 0 ? _sherbet_side_chat_key[0] : 'T');
+
 	// 메뉴를 다시 열었거나 다른 프로그램으로 갔으면 멈춘다 — 키가 엉뚱한 곳(우리 메뉴·카톡)에 들어간다.
 	if (_show_overlay || GetForegroundWindow() != static_cast<HWND>(get_hwnd()))
 	{
+		if (act == sherbet::sidenotice::post_action::release_chat) // 채팅 키를 누른 채 멈추면 게임에 눌린 채로 남는다
+		{
+			key(0, chat, true);
+			SendInput(1, in, sizeof(INPUT));
+		}
 		_sherbet_side_poster.cancel();
 		_sherbet_side_msg = kSideStopped;
 		_sherbet_side_msg_time = std::chrono::high_resolution_clock::now();
@@ -6301,24 +6316,16 @@ void reshade::runtime::sherbet_side_tick()
 		return;
 	}
 
-	INPUT in[6] = {};
-	const auto key = [&in](int i, WORD vk, bool up) {
-		in[i].type = INPUT_KEYBOARD;
-		in[i].ki.wVk = vk;
-		in[i].ki.wScan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
-		in[i].ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
-	};
 	switch (act)
 	{
 	case sherbet::sidenotice::post_action::open_chat:
-	{
-		// 사이드공지는 일반 채팅창에 친다 — 사이드공지 탭의 '채팅 키'(기본 T).
-		const WORD chat = static_cast<WORD>(_sherbet_side_chat_key[0] != 0 ? _sherbet_side_chat_key[0] : 'T');
-		key(0, chat, false);
-		key(1, chat, true);
-		SendInput(2, in, sizeof(INPUT));
+		key(0, chat, false); // 떼기는 kKeyHoldMs 뒤(release_chat) — 게임이 '눌려 있음' 을 한 프레임은 보게
+		SendInput(1, in, sizeof(INPUT));
 		break;
-	}
+	case sherbet::sidenotice::post_action::release_chat:
+		key(0, chat, true);
+		SendInput(1, in, sizeof(INPUT));
+		break;
 	case sherbet::sidenotice::post_action::paste:
 		// ⚠️ Ctrl+A 로 전체 선택한 뒤 붙여넣는다. 채팅 키(T)를 누르는 순간 키밀림 방지가 한글로 바꿔서
 		//    그 T 가 'ㅅ' 으로 채팅칸에 먼저 들어간다(실측: 'ㅅ/경찰청 …' 로 나가 명령어가 깨졌다).
