@@ -4,6 +4,7 @@
  */
 #include "sherbet_ui.hpp"
 
+#include <imgui_internal.h>
 #include <cmath>
 #include <cstring>
 
@@ -14,6 +15,94 @@ namespace sherbet
 	static ImVec4 to_vec4(ImU32 c)
 	{
 		return ImGui::ColorConvertU32ToFloat4(c);
+	}
+
+	// 두 색을 섞는다(t=0 이면 a, 1 이면 b). 알파도 같이 섞는다.
+	static ImU32 mix(ImU32 a, ImU32 b, float t)
+	{
+		const ImVec4 va = to_vec4(a), vb = to_vec4(b);
+		return ImGui::ColorConvertFloat4ToU32(ImVec4(va.x + (vb.x - va.x) * t, va.y + (vb.y - va.y) * t, va.z + (vb.z - va.z) * t, va.w + (vb.w - va.w) * t));
+	}
+	// 색의 알파에 k(0..1)를 곱한다
+	static ImU32 fade(ImU32 color, float k)
+	{
+		return with_alpha(color, static_cast<ImU32>(((color >> IM_COL32_A_SHIFT) & 0xFF) * k));
+	}
+
+	float animate(ImGuiID id, bool on, float speed)
+	{
+		const float target = on ? 1.0f : 0.0f;
+		float *const v = ImGui::GetStateStorage()->GetFloatRef(id, target); // 처음 보이는 프레임은 바로 목표값(켜지는 연출이 뜨지 않게)
+		*v += (target - *v) * ImMin(1.0f, ImGui::GetIO().DeltaTime * speed);
+		if (fabsf(target - *v) < 0.004f)
+			*v = target;
+		return *v;
+	}
+
+	void smooth_scroll()
+	{
+		ImGuiContext &g = *GImGui;
+		ImGuiWindow *const window = g.CurrentWindow;
+		ImGuiStorage *const st = &window->StateStorage;
+		const ImGuiID id_target = window->GetID("##sherbet_scroll_target"), id_pos = window->GetID("##sherbet_scroll_pos"), id_active = window->GetID("##sherbet_scroll_active");
+		// ⚠️ 저장소는 정렬된 배열이라 새 키가 끼어들면 먼저 받은 포인터가 무효가 된다 → 세 키를 먼저 만들어 놓고 받는다
+		st->GetFloatRef(id_target, window->Scroll.y);
+		st->GetFloatRef(id_pos, window->Scroll.y);
+		st->GetBoolRef(id_active, false);
+		float *const target = st->GetFloatRef(id_target);
+		float *const pos = st->GetFloatRef(id_pos);
+		bool *const active = st->GetBoolRef(id_active);
+
+		// 휠을 받을 창 = 마우스 아래 창에서 위로 올라가며 처음 만나는 '세로로 굴릴 수 있는 창'(ImGui 기본 규칙과 같다).
+		// Ctrl+휠은 글자 크기 조절이라 건드리지 않는다.
+		if (g.IO.MouseWheel != 0.0f && !g.IO.KeyCtrl && !g.IO.KeyShift && g.HoveredWindow != nullptr)
+		{
+			ImGuiWindow *owner = g.HoveredWindow;
+			while (owner != nullptr && owner != window && owner->ScrollMax.y == 0.0f)
+				owner = (owner->Flags & ImGuiWindowFlags_ChildWindow) != 0 ? owner->ParentWindow : nullptr;
+			if (owner == window && window->ScrollMax.y > 0.0f)
+			{
+				if (!*active)
+					*target = *pos = window->Scroll.y;
+				const float step = ImTrunc(ImMin(5.0f * window->FontRefSize, window->InnerRect.GetHeight() * 0.67f));
+				*target = ImClamp(*target - g.IO.MouseWheel * step, 0.0f, window->ScrollMax.y);
+				*active = true;
+			}
+		}
+		// 스크롤바를 직접 끌면 그쪽이 이긴다
+		if (*active && g.ActiveId != 0 && g.ActiveId == ImGui::GetWindowScrollbarID(window, ImGuiAxis_Y))
+			*active = false;
+		if (*active)
+		{
+			// ImGui 는 스크롤 위치를 정수로 자르므로 창의 값을 되읽지 않고 따로 든 실수 위치를 굴린다(안 그러면 1px 앞에서 멈춘다)
+			*target = ImClamp(*target, 0.0f, window->ScrollMax.y);
+			*pos += (*target - *pos) * ImMin(1.0f, g.IO.DeltaTime * 16.0f);
+			if (fabsf(*target - *pos) < 0.5f)
+			{
+				*pos = *target;
+				*active = false;
+			}
+			ImGui::SetScrollY(*pos);
+		}
+	}
+
+	static void fade_window_tree(ImGuiWindow *window, float alpha, float offset_y, float scale, const ImVec2 &pivot)
+	{
+		for (ImDrawVert &v : window->DrawList->VtxBuffer)
+		{
+			v.col = with_alpha(v.col, static_cast<ImU32>(((v.col >> IM_COL32_A_SHIFT) & 0xFF) * alpha));
+			v.pos.x = pivot.x + (v.pos.x - pivot.x) * scale;
+			v.pos.y = pivot.y + (v.pos.y - pivot.y) * scale + offset_y;
+		}
+		for (ImGuiWindow *child : window->DC.ChildWindows)
+			fade_window_tree(child, alpha, offset_y, scale, pivot);
+	}
+	void fade_window(ImGuiWindow *window, float alpha, float offset_y, float scale)
+	{
+		if (window == nullptr || (alpha >= 1.0f && offset_y == 0.0f && scale == 1.0f))
+			return;
+		// 크기는 그 창의 가운데를 기준으로 줄인다(자식창도 같은 점 기준이라 한 덩어리로 움직인다)
+		fade_window_tree(window, ImClamp(alpha, 0.0f, 1.0f), offset_y, scale, window->Rect().GetCenter());
 	}
 
 	void apply_style(ImGuiStyle &style, const theme &t)
@@ -153,13 +242,13 @@ namespace sherbet
 		}
 	}
 
-	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, ImU32 glow_color)
+	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, ImU32 glow_color, float strength)
 	{
 		// 사각형 주변 3겹 확산 글로우
 		for (int i = 3; i >= 1; --i)
 		{
 			const float e = i * 4.0f;
-			ImU32 a = with_alpha(glow_color, (ImU32)(30 / i));
+			ImU32 a = with_alpha(glow_color, (ImU32)(30 / i * strength));
 			dl->AddRect(ImVec2(min.x - e, min.y - e), ImVec2(max.x + e, max.y + e), a, 16.0f, 0, 3.0f);
 		}
 	}
@@ -182,16 +271,20 @@ namespace sherbet
 
 		const bool hovered = ImGui::IsItemHovered();
 		ImDrawList *dl = ImGui::GetWindowDrawList();
-		const float tnorm = *v ? 1.0f : 0.0f;
-		const ImU32 track = *v ? t.accent : t.chip;
-		dl->AddRectFilled(p, ImVec2(p.x + width, p.y + height), track, radius);
-		if (*v)
-			draw_glow(dl, p, ImVec2(p.x + width, p.y + height), t.glow);
+		// 손잡이가 미끄러지고 색이 번지게(딱 끊기지 않게)
+		const ImGuiID id = ImGui::GetItemID();
+		const float tnorm = animate(id, *v);
+		const float hov = animate(id ^ 0x9E3779B9, hovered, 20.0f);
+		dl->AddRectFilled(p, ImVec2(p.x + width, p.y + height), mix(t.chip, t.accent, tnorm), radius);
+		// 꺼진 트랙은 칩 색이라 어두운 카드 위에서 안 보였다(손잡이만 떠 보임) → 옅은 테두리로 자리를 보여 준다
+		if (tnorm < 1.0f)
+			dl->AddRect(p, ImVec2(p.x + width, p.y + height), with_alpha(t.text_dim, static_cast<ImU32>(120 * (1.0f - tnorm))), radius, 0, 1.0f);
+		if (tnorm > 0.0f)
+			draw_glow(dl, p, ImVec2(p.x + width, p.y + height), t.glow, tnorm);
 		const float knob_x = p.x + radius + tnorm * (width - 2 * radius);
-		const ImU32 knob = *v ? IM_COL32(255, 255, 255, 255) : t.text_dim;
-		dl->AddCircleFilled(ImVec2(knob_x, p.y + radius), radius - 2.0f, knob, 24);
-		if (hovered)
-			dl->AddRect(p, ImVec2(p.x + width, p.y + height), t.border, radius, 0, 1.5f);
+		dl->AddCircleFilled(ImVec2(knob_x, p.y + radius), radius - 2.0f, mix(t.text_dim, IM_COL32(255, 255, 255, 255), tnorm), 24);
+		if (hov > 0.0f)
+			dl->AddRect(p, ImVec2(p.x + width, p.y + height), fade(t.border, hov), radius, 0, 1.5f);
 
 		if (label_w > 0.0f)
 		{
@@ -228,8 +321,11 @@ namespace sherbet
 		const theme &t = active_theme();
 		const ImU32 bg = active ? t.accent : t.chip;
 		const ImU32 fg = active ? IM_COL32(20, 20, 20, 255) : t.text_dim;
-		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(bg));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(active ? t.accent2 : t.panel_alt));
+		// 마우스를 올렸을 때 색이 번지듯 바뀌게: 지난 프레임까지의 올림 정도로 바탕색을 섞는다
+		const ImGuiID hover_id = ImGui::GetID(label) ^ 0x9E3779B9;
+		const ImU32 bg_now = mix(bg, active ? t.accent2 : t.panel_alt, ImGui::GetStateStorage()->GetFloat(hover_id, 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(bg_now));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(bg_now));
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::ColorConvertU32ToFloat4(t.accent));
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(fg));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
@@ -237,6 +333,7 @@ namespace sherbet
 		const bool pressed = ImGui::Button(label);
 		ImGui::PopStyleVar(2);
 		ImGui::PopStyleColor(4);
+		animate(hover_id, ImGui::IsItemHovered(), 20.0f);
 		return pressed;
 	}
 
@@ -288,17 +385,20 @@ namespace sherbet
 		const bool clicked = ImGui::InvisibleButton(id, ImVec2(sz, sz));
 		const bool hovered = ImGui::IsItemHovered();
 		ImDrawList *dl = ImGui::GetWindowDrawList();
-		if (active)
+		// 선택 표시는 살짝 커지며 번져 들어오고, 올림 표시는 서서히 뜬다
+		const ImGuiID item_id = ImGui::GetItemID();
+		const float sel = animate(item_id, active, 14.0f);
+		const float hov = animate(item_id ^ 0x9E3779B9, hovered, 20.0f);
+		if (hov > 0.0f && sel < 1.0f)
+			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), fade(t.panel_alt, hov * (1.0f - sel)), 14.0f);
+		if (sel > 0.0f)
 		{
-			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), t.accent, 14.0f);
-			draw_glow(dl, p, ImVec2(p.x + sz, p.y + sz), t.glow);
+			const float inset = (1.0f - sel) * sz * 0.08f;
+			const ImVec2 a(p.x + inset, p.y + inset), b(p.x + sz - inset, p.y + sz - inset);
+			dl->AddRectFilled(a, b, fade(t.accent, sel), 14.0f);
+			draw_glow(dl, a, b, t.glow, sel);
 		}
-		else if (hovered)
-		{
-			dl->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), t.panel_alt, 14.0f);
-		}
-		const ImU32 col = active ? IM_COL32(20, 20, 20, 255)
-			: (hovered ? t.text : (idle_col != 0 ? idle_col : t.text_dim));
+		const ImU32 col = mix(mix(idle_col != 0 ? idle_col : t.text_dim, t.text, hov), IM_COL32(20, 20, 20, 255), sel);
 		const ImVec2 ts = ImGui::CalcTextSize(icon);
 		dl->AddText(ImVec2(p.x + (sz - ts.x) * 0.5f, p.y + (sz - ts.y) * 0.5f), col, icon);
 		return clicked;

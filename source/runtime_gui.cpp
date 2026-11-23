@@ -1179,6 +1179,32 @@ void reshade::runtime::save_custom_style() const
 	}
 }
 
+#ifdef SHERBET_UI_HARNESS
+// 개발용 화면 점검 장치. SHERBET_UI_HARNESS 를 정의한 시험 빌드에만 들어간다(배포 빌드에는 없다).
+// 게임 없이 오버레이를 조작하고 화면을 찍으려고 DLL 옆 uih_cmd.txt 의 명령을 한 줄씩 실행한다:
+//   open / close / tab N / mseg N / sseg N / scroll Y / mouse X Y / mouse off / down / up / wheel D
+//   theme ID / shot 이름 / wait 프레임수
+// 다 실행하면 uih_done.txt 를 만든다(바깥 스크립트가 그걸 보고 다음 명령을 쓴다).
+struct sherbet_uih_state
+{
+	std::vector<std::string> queue;
+	int wait = 0;
+	bool busy = false;
+	bool mouse_on = false, mouse_down = false;
+	float mouse_x = 0.0f, mouse_y = 0.0f, wheel = 0.0f;
+	float scroll = -1.0f;
+	int scroll_frames = 0;
+	int trace = 0; // 남은 프레임 동안 내용 스크롤 위치를 uih_trace.txt 에 적는다
+};
+static sherbet_uih_state s_uih;
+#endif
+
+// SHERBET: 큰 메뉴를 닫으면 잠깐 남아서 사라진다. 남은 시간(초) — 0 이면 연출 없음.
+// ⚠️ 닫는 순간 _show_overlay 는 바로 false 가 된다(게임 입력·커서는 그 프레임에 돌아간다).
+//    남아 있는 창은 그림일 뿐이라 입력을 주지 않는다. 닫기를 늦추면 그동안 누른 이동 키를 게임이 못 받는다.
+static float s_sherbet_closing = 0.0f;
+static constexpr float kSherbetCloseSec = 0.13f;
+
 void reshade::runtime::draw_gui()
 {
 	assert(_is_initialized);
@@ -1280,6 +1306,62 @@ void reshade::runtime::draw_gui()
 		}
 	}
 
+#ifdef SHERBET_UI_HARNESS
+	{
+		std::error_code uih_ec;
+		const std::filesystem::path uih_dir = _config_path.parent_path();
+		if (s_uih.queue.empty() && s_uih.wait == 0 && !s_uih.busy && std::filesystem::exists(uih_dir / L"uih_cmd.txt", uih_ec))
+		{
+			{
+				std::ifstream uih_file(uih_dir / L"uih_cmd.txt");
+				for (std::string line; std::getline(uih_file, line);)
+				{
+					while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+						line.pop_back();
+					if (!line.empty())
+						s_uih.queue.push_back(line);
+				}
+			}
+			std::filesystem::remove(uih_dir / L"uih_cmd.txt", uih_ec);
+			s_uih.busy = true;
+		}
+		if (s_uih.wait > 0)
+			s_uih.wait--;
+		while (s_uih.wait == 0 && !s_uih.queue.empty())
+		{
+			const std::string line = s_uih.queue.front();
+			s_uih.queue.erase(s_uih.queue.begin());
+			const size_t sp = line.find(' ');
+			const std::string cmd = line.substr(0, sp), arg = sp == std::string::npos ? std::string() : line.substr(sp + 1);
+			if (cmd == "open") show_overlay = true;
+			else if (cmd == "close") show_overlay = false;
+			else if (cmd == "tab") _sherbet_tab = std::atoi(arg.c_str());
+			else if (cmd == "mseg") _sherbet_market_seg = std::atoi(arg.c_str());
+			else if (cmd == "sseg") _sherbet_settings_seg = std::atoi(arg.c_str());
+			else if (cmd == "scroll") { s_uih.scroll = static_cast<float>(std::atof(arg.c_str())); s_uih.scroll_frames = 3; }
+			else if (cmd == "mouse") { s_uih.mouse_on = arg != "off"; if (s_uih.mouse_on) std::sscanf(arg.c_str(), "%f %f", &s_uih.mouse_x, &s_uih.mouse_y); }
+			else if (cmd == "down") s_uih.mouse_down = true;
+			else if (cmd == "up") s_uih.mouse_down = false;
+			else if (cmd == "wheel") s_uih.wheel = static_cast<float>(std::atof(arg.c_str()));
+			else if (cmd == "theme") sherbet::set_active_theme(arg.c_str());
+			else if (cmd == "wait") s_uih.wait = std::atoi(arg.c_str());
+			else if (cmd == "trace") s_uih.trace = std::atoi(arg.c_str());
+			else if (cmd == "shot")
+			{
+				_screenshot_name = arg;
+				_screenshot_save_gui = true;
+				_should_save_screenshot = true; // 이 프레임 끝에 "<이름> Overlay.png" 로 저장된다
+				s_uih.wait = 2;
+			}
+		}
+		if (s_uih.busy && s_uih.queue.empty() && s_uih.wait == 0)
+		{
+			s_uih.busy = false;
+			std::ofstream(uih_dir / L"uih_done.txt") << "done";
+		}
+	}
+#endif
+
 	if (show_overlay != _show_overlay)
 	{
 		// SHERBET: 메뉴에서 한글을 쳤어도 게임으로 돌아가면 영문으로(다음 키 누름 때 창 스레드에서 바꾼다).
@@ -1290,6 +1372,8 @@ void reshade::runtime::draw_gui()
 			// 사이드공지 창에서 한글로 바꿔 뒀으면 열기 전 상태로(키밀림 방지가 켜졌으면 위의 영문 요청이 한다)
 			if ((_sherbet_side_quick || !_sherbet_side_fill_text.empty()) && _input != nullptr)
 				_input->sherbet_ime_request_restore();
+			// 큰 메뉴만 사라지는 연출을 한다. 작은 창(사이드공지)은 닫힌 직후에 채팅 키를 보내야 해서 바로 닫는다.
+			s_sherbet_closing = (!_sherbet_side_quick && !_sherbet_mag_picking) ? kSherbetCloseSec : 0.0f;
 			_sherbet_side_quick = false; // 다음에 Home 으로 열면 늘 큰 메뉴
 			_sherbet_side_fill_text.clear(); // 칸 채우던 중에 닫았으면 다음엔 검색부터
 		}
@@ -1339,7 +1423,15 @@ void reshade::runtime::draw_gui()
 	const bool sherbet_spray_unlocked = sherbet_feature_unlocked("spray");
 	const bool sherbet_spray_on = sherbet::paid::spray_enabled(sherbet_spray_unlocked, _sherbet_spray_live, _sherbet_spray_chart);
 
+	// SHERBET: 닫히는 연출의 시간은 여기서(early-out 위에서) 흐른다 — 그리는 쪽에 두면 창을 안 그리는 프레임엔 영영 안 끝난다.
+	if (_show_overlay)
+		s_sherbet_closing = 0.0f;
+	else if (s_sherbet_closing > 0.0f)
+		s_sherbet_closing = std::max(0.0f, s_sherbet_closing - _last_frame_duration.count() * 1e-9f);
+	const bool sherbet_ghost = !_show_overlay && s_sherbet_closing > 0.0f; // 닫힌 뒤 사라지는 중인 큰 메뉴
+
 	if (!show_splash_window && !show_message_window && !show_statistics_window && !_show_overlay && _preview_texture == std::numeric_limits<size_t>::max()
+		&& !sherbet_ghost
 		// SHERBET: 커스텀 조준점/반반 비교는 오버레이가 닫혀도 항상 그려야 하므로 early-out 하지 않는다.
 		// (안 그러면 다른 GUI 요소가 없는 유저는 오버레이 닫을 때 조준점이 같이 사라진다)
 		&& !_sherbet_crosshair_on && !_sherbet_val_on && !_sherbet_compare_active
@@ -1533,8 +1625,31 @@ void reshade::runtime::draw_gui()
 				imgui_io.AddKeyEvent(mapping.first, true);
 			imgui_io.AddKeyEvent(mapping.first, _input->is_key_down(mapping.second));
 		}
+#ifdef SHERBET_UI_HARNESS
+		if (!s_uih.mouse_on) // 진짜 버튼 상태(늘 '뗌')와 명령으로 준 상태가 한 프레임에 섞이면 ImGui 가 눌렀다 뗐다로 읽는다
+#endif
 		for (ImGuiMouseButton i = 0; i < ImGuiMouseButton_COUNT; i++)
 			imgui_io.AddMouseButtonEvent(i, _input->is_mouse_button_down(i));
+		// SHERBET: 사라지는 중인 메뉴는 그림일 뿐이다 — 게임으로 돌아간 마우스·키에 반응하면 안 된다.
+		if (sherbet_ghost)
+		{
+			imgui_io.ClearEventsQueue();
+			imgui_io.ClearInputKeys();
+			imgui_io.ClearInputMouse();
+		}
+#ifdef SHERBET_UI_HARNESS
+		// 진짜 마우스 대신 명령으로 준 위치·버튼·휠을 쓴다(뒤에 넣은 이벤트가 이긴다)
+		if (s_uih.mouse_on)
+		{
+			imgui_io.AddMousePosEvent(s_uih.mouse_x, s_uih.mouse_y);
+			imgui_io.AddMouseButtonEvent(0, s_uih.mouse_down);
+			if (s_uih.wheel != 0.0f)
+			{
+				imgui_io.AddMouseWheelEvent(0.0f, s_uih.wheel);
+				s_uih.wheel = 0.0f;
+			}
+		}
+#endif
 	}
 
 	if (_input_gamepad != nullptr)
@@ -2474,14 +2589,20 @@ void reshade::runtime::draw_gui()
 		sherbet::apply_style(_imgui_context->Style, sherbet::active_theme());
 		sherbet_draw_side_quick();
 	}
-	else if (_show_overlay && !_sherbet_mag_picking)
+	else if ((_show_overlay || sherbet_ghost) && !_sherbet_mag_picking)
 	{
 		const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+		if (sherbet_ghost)
+		{
+			ImGui::ClearActiveID(); // 치던 입력칸이 닫힌 뒤에도 키를 잡고 있지 않게
+			if (_imgui_context->OpenPopupStack.Size > 0)
+				ImGui::ClosePopupToLevel(0, false); // 열려 있던 목록·대화창은 같이 흐려지지 않으니 바로 닫는다
+		}
 
 		sherbet::apply_style(_imgui_context->Style, sherbet::active_theme());
 
 		// Change font size if user presses the control key and moves the mouse wheel
-		if (!_no_font_scaling && imgui_io.KeyCtrl && imgui_io.MouseWheel != 0 && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+		if (!_no_font_scaling && !sherbet_ghost && imgui_io.KeyCtrl && imgui_io.MouseWheel != 0 && ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
 		{
 			_imgui_context->Style.FontScaleMain = ImClamp(_imgui_context->Style.FontScaleMain + imgui_io.MouseWheel * 0.25f, 0.5f, 4.0f);
 			save_config();
@@ -2513,14 +2634,28 @@ void reshade::runtime::draw_gui()
 		ImGui::SetNextWindowSize(sherbet_win_size, ImGuiCond_FirstUseEver);
 		// 최소 높이도 하단바가 항상 보이도록 상향(단, 화면보다 크게는 안 되게 max=viewport)
 		ImGui::SetNextWindowSizeConstraints(ImVec2(540.0f, ImMin(560.0f, viewport->Size.y)), viewport->Size);
+		// 열릴 때 창이 툭 튀어나오지 않는다: 살짝 작고 아래에서 커지며 떠오르고(0.2초), 둘레에 강조색 빛이 한 번 번진다(0.5초).
+		// 지난 프레임에 안 그렸으면 처음부터. 닫힌 뒤 사라지는 중(ghost)에는 시간이 흐르지 않는다.
+		static int s_sherbet_open_frame = -2;
+		static float s_sherbet_open_t = 1.0f, s_sherbet_glow_t = 1.0f;
+		if (!sherbet_ghost)
+		{
+			if (ImGui::GetFrameCount() != s_sherbet_open_frame + 1)
+				s_sherbet_open_t = s_sherbet_glow_t = 0.0f;
+			s_sherbet_open_frame = ImGui::GetFrameCount();
+			s_sherbet_open_t = ImMin(1.0f, s_sherbet_open_t + _imgui_context->IO.DeltaTime / 0.20f);
+			s_sherbet_glow_t = ImMin(1.0f, s_sherbet_glow_t + _imgui_context->IO.DeltaTime / 0.50f);
+		}
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 		ImGui::Begin("Sherbet###Viewport", nullptr,
 			ImGuiWindowFlags_NoTitleBar |
 			ImGuiWindowFlags_NoDocking |
 			ImGuiWindowFlags_NoScrollbar |
 			ImGuiWindowFlags_NoFocusOnAppearing |
-			ImGuiWindowFlags_NoBackground);
+			ImGuiWindowFlags_NoBackground |
+			(sherbet_ghost ? ImGuiWindowFlags_NoInputs : 0));
 		ImGui::PopStyleVar();
+		ImGuiWindow *const sherbet_root_window = ImGui::GetCurrentWindow();
 
 		{
 			// 애니메이션 배경 + 파티클 — '창 영역'에만 그린다(게임은 창 밖에서 그대로 보임)
@@ -2568,6 +2703,16 @@ void reshade::runtime::draw_gui()
 			sherbet::draw_particles(sherbet_bg, sherbet_vmin, sherbet_vmax, sherbet::active_theme(), s_sherbet_time);
 			// 얇은 테두리(카드 느낌)
 			sherbet_bg->AddRect(sherbet_vmin, sherbet_vmax, sherbet::active_theme().border, 12.0f, 0, 1.5f);
+			if (s_sherbet_glow_t < 1.0f && !sherbet_ghost)
+			{
+				// 창이 나타나는 만큼 켜졌다가 서서히 꺼진다. 창 밖으로 번져야 해서 배경 그리기 목록에 그린다.
+				const float glow = ImMin(1.0f, s_sherbet_open_t * 1.5f) * (1.0f - s_sherbet_glow_t) * (1.0f - s_sherbet_glow_t);
+				ImDrawList *const glow_dl = ImGui::GetBackgroundDrawList();
+				for (int i = 1; i <= 6; ++i)
+					glow_dl->AddRect(
+						ImVec2(sherbet_vmin.x - i * 3.0f, sherbet_vmin.y - i * 3.0f), ImVec2(sherbet_vmax.x + i * 3.0f, sherbet_vmax.y + i * 3.0f),
+						sherbet::with_alpha(sherbet::active_theme().accent, static_cast<ImU32>(90.0f * glow * (1.0f - i / 7.0f))), 12.0f + i * 3.0f, 0, 3.0f);
+			}
 		}
 
 		// SHERBET: 온라인 인증 — 미인증이면 로그인 패널만 노출(효과/오버레이 잠금)
@@ -2806,20 +2951,20 @@ void reshade::runtime::draw_gui()
 			ImGui::SetItemTooltip("Sherbet \xED\x99\x88"); // "Sherbet 홈"
 			ImGui::Dummy(ImVec2(0, 10));
 
-			struct RailItem { const char *id; const char *icon; int tab; };
+			struct RailItem { const char *id; const char *icon; int tab; const char *name; }; // name = 마우스를 올리면 뜨는 탭 이름
 			// ⚠️ tab 번호는 config 에 저장되므로 기존 번호(0~4)를 재사용/재배치하지 않는다.
 			//    새 「에임」 탭은 남는 번호 5 를 쓰고, 화면 순서만 마켓 다음으로 둔다.
 			const RailItem items[] = {
-				{ "##tab_home", ICON_FK_HOME, 0 },
-				{ "##tab_market", ICON_FK_SHOPPING_CART, 1 },
-				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5 },
-				{ "##tab_aimlab", ICON_FK_BULLSEYE, 7 },
-				{ "##tab_optimize", ICON_FK_DASHBOARD, 6 },
-				{ "##tab_engine", ICON_FK_BOLT, 8 },
-				{ "##tab_side", ICON_FK_COMMENTS, 9 }, // 사이드공지
-				{ "##tab_settings", ICON_FK_SLIDERS, 2 },
-				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3 },
-				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4 },
+				{ "##tab_home", ICON_FK_HOME, 0, "\xED\x99\x88" }, // "홈"
+				{ "##tab_market", ICON_FK_SHOPPING_CART, 1, "\xEB\xA7\x88\xEC\xBC\x93" }, // "마켓"
+				{ "##tab_aim", ICON_FK_CROSSHAIRS, 5, "\xEC\x97\x90\xEC\x9E\x84" }, // "에임"
+				{ "##tab_aimlab", ICON_FK_BULLSEYE, 7, "\xEC\x97\x90\xEC\x9E\x84 \xEB\x9E\xA9" }, // "에임 랩"
+				{ "##tab_optimize", ICON_FK_DASHBOARD, 6, "\xEC\xB5\x9C\xEC\xA0\x81\xED\x99\x94" }, // "최적화"
+				{ "##tab_engine", ICON_FK_BOLT, 8, "\xEC\x97\x94\xEC\xA7\x84\xEB\xA3\xB8" }, // "엔진룸"
+				{ "##tab_side", ICON_FK_COMMENTS, 9, "\xEC\x82\xAC\xEC\x9D\xB4\xEB\x93\x9C\xEA\xB3\xB5\xEC\xA7\x80" }, // "사이드공지"
+				{ "##tab_settings", ICON_FK_SLIDERS, 2, "\xEC\x84\xA4\xEC\xA0\x95" }, // "설정"
+				{ "##tab_about", ICON_FK_INFO_CIRCLE, 3, "\xEC\xA0\x95\xEB\xB3\xB4" }, // "정보"
+				{ "##tab_addons", ICON_FK_PUZZLE_PIECE, 4, "\xEC\x95\xA0\xEB\x93\x9C\xEC\x98\xA8" }, // "애드온"
 			};
 			// 애드온 탭은 배열 마지막이므로 개수만 늘리면 노출된다.
 			// ⚠️ 배열에 항목을 추가하면 **반드시 여기도 같이 늘린다** — 안 그러면 마지막
@@ -2838,6 +2983,7 @@ void reshade::runtime::draw_gui()
 				ImGui::SetCursorPosX((sherbet::rail_width - sherbet::rail_button_size) * 0.5f);
 				if (sherbet::rail_button(items[i].id, items[i].icon, _sherbet_tab == items[i].tab))
 					_sherbet_tab = items[i].tab;
+				ImGui::SetItemTooltip("%s", items[i].name);
 				ImGui::Dummy(ImVec2(0, 4));
 			}
 		}
@@ -2851,8 +2997,35 @@ void reshade::runtime::draw_gui()
 		//    설정 탭을 끝까지 내린 뒤 마켓을 열면 맨 위가 아니라 중간부터 보이고, 전환 첫 프레임엔
 		//    Begin() 의 스크롤 클램프가 **직전 프레임(=이전 탭)의 ContentSize** 로 계산돼 화면이 튄다.
 		//    마켓·설정은 세그먼트마다 내용 길이가 크게 달라 세그먼트까지 시드에 넣는다.
-		ImGui::PushID(_sherbet_tab * 10 + (_sherbet_tab == 1 ? _sherbet_market_seg : _sherbet_tab == 2 ? _sherbet_settings_seg : 0));
-		ImGui::BeginChild("##sherbet_content", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_NoFocusOnAppearing);
+		const int sherbet_view = _sherbet_tab * 10 + (_sherbet_tab == 1 ? _sherbet_market_seg : _sherbet_tab == 2 ? _sherbet_settings_seg : 0);
+		// 탭·세그먼트를 바꾸면 내용이 살짝 올라오며 나타난다(0.18초).
+		static int s_sherbet_view = -1;
+		static float s_sherbet_view_t = 1.0f;
+		if (sherbet_view != s_sherbet_view)
+		{
+			s_sherbet_view = sherbet_view;
+			s_sherbet_view_t = 0.0f;
+		}
+		s_sherbet_view_t = ImMin(1.0f, s_sherbet_view_t + _imgui_context->IO.DeltaTime / 0.18f);
+		ImGui::PushID(sherbet_view);
+		// 양옆·아래에 틈을 둔다 — 틈이 없어서 카드가 창 테두리에 붙고 홈의 [+] 버튼이 테두리에 잘렸다.
+		// 휠은 ImGui 기본 처리(뚝뚝 끊김) 대신 smooth_scroll 이 굴린다.
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 0.0f));
+		ImGui::BeginChild("##sherbet_content", ImVec2(-4.0f, -6.0f), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoScrollWithMouse);
+		ImGui::PopStyleVar();
+		sherbet::smooth_scroll();
+#ifdef SHERBET_UI_HARNESS
+		if (s_uih.scroll_frames > 0)
+		{
+			s_uih.scroll_frames--;
+			ImGui::SetScrollY(s_uih.scroll);
+		}
+		if (s_uih.trace > 0)
+		{
+			s_uih.trace--;
+			std::ofstream(_config_path.parent_path() / L"uih_trace.txt", std::ios::app) << ImGui::GetScrollY() << ' ';
+		}
+#endif
 		switch (_sherbet_tab)
 		{
 		case 0: draw_gui_home(); break;
@@ -2869,13 +3042,31 @@ void reshade::runtime::draw_gui()
 		case 9: draw_gui_sidenotice(); break;
 		default: draw_gui_home(); break;
 		}
+		ImGuiWindow *const sherbet_content_window = ImGui::GetCurrentWindow();
 		ImGui::EndChild();
 		ImGui::PopID(); // ⚠️ 반드시 EndChild() 뒤 — 짝이 어긋나면 ID 스택이 다음 프레임으로 샌다
+		if (s_sherbet_view_t < 1.0f)
+		{
+			const float k = 1.0f - s_sherbet_view_t, e = 1.0f - k * k * k;
+			sherbet::fade_window(sherbet_content_window, e, (1.0f - e) * 10.0f);
+		}
 
 		ImGui::End();
 		} // SHERBET: 노드락 else 블록 끝
 
-		if (!_editors.empty())
+		// 열림·닫힘 연출 — 어느 화면(로그인·안내·보통)이든 같은 창이라 여기 한 곳에서 한꺼번에 움직인다.
+		if (sherbet_ghost)
+		{
+			const float k = s_sherbet_closing / kSherbetCloseSec; // 1 → 0
+			sherbet::fade_window(sherbet_root_window, k * k, (1.0f - k) * 8.0f, 1.0f - (1.0f - k) * 0.03f);
+		}
+		else if (s_sherbet_open_t < 1.0f)
+		{
+			const float k = 1.0f - s_sherbet_open_t, e = 1.0f - k * k * k;
+			sherbet::fade_window(sherbet_root_window, e, (1.0f - e) * 12.0f, 0.965f + 0.035f * e);
+		}
+
+		if (!_editors.empty() && !sherbet_ghost)
 		{
 			if (ImGui::Begin(_("Edit###editor"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing) &&
 				ImGui::BeginTabBar("editor_tabs"))
@@ -3038,6 +3229,12 @@ void reshade::runtime::draw_gui()
 			cmd_list->barrier(back_buffer_resource, api::resource_usage::render_target, api::resource_usage::present);
 		}
 	}
+
+#ifdef SHERBET_UI_HARNESS
+	// 닫힌 뒤 사라지는 장면은 본래 저장 조건(_show_overlay)에 안 걸려서 여기서 직접 찍는다
+	if (_should_save_screenshot && _screenshot_save_gui && sherbet_ghost)
+		save_screenshot("Overlay");
+#endif
 
 	ImGui::SetCurrentContext(backup_context);
 }
@@ -3615,8 +3812,9 @@ void reshade::runtime::draw_gui_home()
 			_performance_mode ? 0 : (17 /* splitter */ + (bottom_height + (_tutorial_index == 3 ? 175 : 0))));
 		bottom_height = std::min(bottom_height, ImGui::GetContentRegionAvail().y - 20.0f);
 
-		if (ImGui::BeginChild("##techniques", ImVec2(0, -bottom_height), ImGuiChildFlags_Borders))
+		if (ImGui::BeginChild("##techniques", ImVec2(0, -bottom_height), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollWithMouse))
 		{
+			sherbet::smooth_scroll();
 			if (_effect_load_skipping && _show_force_load_effects_button)
 			{
 				const size_t skipped_effects = std::count_if(_effects.cbegin(), _effects.cend(),
@@ -8632,7 +8830,7 @@ void reshade::runtime::draw_gui_about()
 
 	ImGui::TextUnformatted("ReShade " VERSION_STRING_PRODUCT);
 
-	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("https://reshade.me").x, ImGui::GetStyle().ItemSpacing.x);
+	ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("https://reshade.me").x, 0.0f); // SHERBET: 간격을 더하면 그만큼 오른쪽으로 넘쳐 끝 글자가 잘렸다
 	ImGui::TextLinkOpenURL("https://reshade.me");
 
 	ImGui::Separator();
@@ -9869,31 +10067,51 @@ void reshade::runtime::draw_gui_market()
 		}
 
 		const std::vector<const sherbet::theme *> snapshot = sherbet::themes_snapshot();
+		// 테마가 서른 개를 넘는데 한 줄에 하나씩 놓여 한참 내려야 했다 → 격자로 놓고, 카드 전체를 누르면 적용된다.
+		const sherbet::theme &cur = sherbet::active_theme();
+		const float fs = ImGui::GetFontSize(), gap = _imgui_context->Style.ItemSpacing.x, pad = 10.0f;
+		const float avail_w = ImGui::GetContentRegionAvail().x;
+		const int cols = ImClamp(static_cast<int>((avail_w + gap) / (fs * 11.0f + gap)), 1, 4);
+		const float card_w = ImTrunc((avail_w - gap * (cols - 1)) / cols);
+		const float swatch_h = ImTrunc(fs * 2.4f);
+		const float card_h = swatch_h + pad * 2.0f + ImGui::GetTextLineHeight() * 2.0f + 4.0f;
 		for (std::size_t i = 0; i < snapshot.size(); ++i)
 		{
 			const sherbet::theme &th = *snapshot[i];
 			const bool unlocked = sherbet::is_unlocked(th.id);
 			const bool active = std::strcmp(th.id, sherbet::active_theme_id()) == 0;
 			ImGui::PushID((int)i);
-			sherbet::begin_card("##theme_card");
+			if (i % cols != 0)
+				ImGui::SameLine(0.0f, gap);
+			const ImVec2 p = ImGui::GetCursorScreenPos(), q(p.x + card_w, p.y + card_h);
+			if (ImGui::InvisibleButton("##theme_card", ImVec2(card_w, card_h)) && unlocked && !active)
+			{ sherbet::set_active_theme(th.id); save_config(); }
+			const float hov = sherbet::animate(ImGui::GetItemID(), ImGui::IsItemHovered() && unlocked && !active, 18.0f);
+			const float sel = sherbet::animate(ImGui::GetItemID() ^ 0x9E3779B9, active, 12.0f);
+
 			ImDrawList *dl = ImGui::GetWindowDrawList();
-			const ImVec2 p = ImGui::GetCursorScreenPos();
-			const float bw = ImGui::GetContentRegionAvail().x;
-			dl->AddRectFilledMultiColor(p, ImVec2(p.x + bw, p.y + 26.0f), th.bg1, th.accent, th.accent, th.bg1);
-			ImGui::Dummy(ImVec2(bw, 30.0f));
-			ImGui::Text("%s", th.display_name);
+			dl->AddRectFilled(p, q, cur.panel, 14.0f);
+			// 색 띠: 그 테마의 바탕색 → 강조색. 카드의 둥근 윗모서리를 따라가도록 둥근 사각형을 그린 뒤 색만 입힌다.
+			const int vtx0 = dl->VtxBuffer.Size;
+			dl->AddRectFilled(ImVec2(p.x + 1.0f, p.y + 1.0f), ImVec2(q.x - 1.0f, p.y + swatch_h), IM_COL32_WHITE, 13.0f, ImDrawFlags_RoundCornersTop);
+			ImGui::ShadeVertsLinearColorGradientKeepAlpha(dl, vtx0, dl->VtxBuffer.Size, p, ImVec2(q.x, p.y), th.bg1, th.accent);
+			if (!unlocked) // 잠긴 테마는 색 띠를 눌러 둔다
+				dl->AddRectFilled(ImVec2(p.x + 1.0f, p.y + 1.0f), ImVec2(q.x - 1.0f, p.y + swatch_h), IM_COL32(0, 0, 0, 120), 13.0f, ImDrawFlags_RoundCornersTop);
+			dl->AddRect(p, q, cur.border, 14.0f, 0, 1.0f);
+			if (hov > 0.0f)
+				dl->AddRect(p, q, sherbet::with_alpha(cur.text, static_cast<ImU32>(90 * hov)), 14.0f, 0, 1.0f);
+			if (sel > 0.0f) // 쓰는 중인 테마는 강조색 테두리
+				dl->AddRect(p, q, sherbet::with_alpha(cur.accent, static_cast<ImU32>(255 * sel)), 14.0f, 0, 2.0f);
+
+			const ImVec2 tp(p.x + pad, p.y + swatch_h + pad);
+			dl->AddText(tp, cur.text, sherbet_ellipsize(th.display_name, card_w - pad * 2.0f).c_str());
+			const ImVec2 sp(tp.x, tp.y + ImGui::GetTextLineHeight() + 4.0f);
 			if (active)
-				ImGui::TextDisabled("%s", ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
+				dl->AddText(sp, cur.accent, ICON_FK_OK " \xEC\x82\xAC\xEC\x9A\xA9 \xEC\xA4\x91"); // "사용 중"
 			else if (unlocked)
-			{
-				if (sherbet::pill_button(ICON_FK_OK "  \xEC\xA0\x81\xEC\x9A\xA9", false)) // "적용"
-				{ sherbet::set_active_theme(th.id); save_config(); }
-			}
+				dl->AddText(sp, ImGui::GetColorU32(ImLerp(ImGui::ColorConvertU32ToFloat4(cur.text_dim), ImGui::ColorConvertU32ToFloat4(cur.text), hov)), "\xEB\x88\x8C\xEB\x9F\xAC\xEC\x84\x9C \xEC\xA0\x81\xEC\x9A\xA9"); // "눌러서 적용"
 			else
-			{
-				ImGui::TextDisabled("%s", ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
-			}
-			sherbet::end_card();
+				dl->AddText(sp, cur.text_dim, ICON_FK_LOCK " \xEC\x9E\xA0\xEA\xB9\x80"); // "잠김"
 			ImGui::PopID();
 		}
 	}
@@ -10261,7 +10479,8 @@ void reshade::runtime::draw_variable_editor()
 		_was_preprocessor_popup_edited = false;
 	}
 
-	ImGui::BeginChild("##variables", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+	ImGui::BeginChild("##variables", ImVec2(0, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoScrollWithMouse);
+	sherbet::smooth_scroll(); // SHERBET: 값 목록도 휠이 부드럽게 굴러간다
 	if (_variable_editor_tabs)
 		ImGui::BeginTabBar("##variables", ImGuiTabBarFlags_TabListPopupButton | ImGuiTabBarFlags_FittingPolicyScroll);
 

@@ -12,6 +12,8 @@
 #include "sherbet_xhmarket.hpp"
 #include "sherbet_sidenotice.hpp"
 
+struct ImGuiWindow; // imgui_internal.h (fade_window)
+
 namespace sherbet
 {
 	// 레이아웃 상수 (runtime_gui.cpp 와 rail_button 이 공유)
@@ -51,8 +53,17 @@ namespace sherbet
 	void draw_background(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const theme &t, float time, float rounding = 0.0f);
 	// 테마 파티클(스파클/하트/잎)을 위로 떠오르게
 	void draw_particles(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, const theme &t, float time);
-	// 사각형 뒤 부드러운 글로우
-	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, ImU32 glow_color);
+	// 사각형 뒤 부드러운 글로우. strength(0..1) 로 세기를 줄일 수 있다(켜지는 연출).
+	void draw_glow(ImDrawList *dl, const ImVec2 &min, const ImVec2 &max, ImU32 glow_color, float strength = 1.0f);
+
+	// on 을 0..1 로 부드럽게 따라가는 값. id 별로 현재 창의 상태 저장소에 둔다. 처음 보이는 프레임은 바로 목표값.
+	float animate(ImGuiID id, bool on, float speed = 16.0f);
+	// 지금 창(자식창)의 휠 스크롤을 부드럽게 굴린다. 그 창은 ImGuiWindowFlags_NoScrollWithMouse 로 열고
+	// Begin 바로 뒤에 한 번 부른다(ImGui 기본 휠 처리 대신 이쪽이 굴린다).
+	void smooth_scroll();
+	// 창과 그 자식창이 이번 프레임에 그린 것 전부에 투명도(0..1)·세로 밀림(px)·크기(창 가운데 기준)를 준다 — 탭 전환·열림·닫힘 연출.
+	// 직접 그린 것(토글·사진)까지 한꺼번에 흐려지도록 스타일 알파 대신 그려진 정점을 고친다. 창을 다 그린 뒤에 부른다.
+	void fade_window(ImGuiWindow *window, float alpha, float offset_y, float scale = 1.0f);
 
 	// 필형 토글 스위치. 값이 변경되면 true 반환.
 	bool toggle(const char *label, bool *v);
