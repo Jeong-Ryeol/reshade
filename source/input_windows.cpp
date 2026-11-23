@@ -250,9 +250,11 @@ bool reshade::input::handle_window_message(const void *message_data)
 	// SHERBET: 입력기 요청 처리 신호(sherbet_ime_kick_if_pending). 아래에서 요청을 처리하고 삼킨다.
 	static const UINT s_sherbet_kick = RegisterWindowMessageW(L"SherbetImeKick");
 	const bool sherbet_kick = s_sherbet_kick != 0 && details.message == s_sherbet_kick;
+	// SHERBET: 자판 전환 요청(왼쪽 Alt+Shift·Win+Space) — 게임이 처리해 자판이 바뀐 뒤 영문으로 돌린다(아래).
+	const bool sherbet_lang = details.message == WM_INPUTLANGCHANGEREQUEST;
 
 	// Ignore messages that are not related to mouse or keyboard input
-	if (details.message != WM_INPUT && !is_mouse_message && !is_keyboard_message && !sherbet_kick)
+	if (details.message != WM_INPUT && !is_mouse_message && !is_keyboard_message && !sherbet_kick && !sherbet_lang)
 		return false;
 
 	// Guard access to windows list against race conditions
@@ -335,13 +337,17 @@ bool reshade::input::handle_window_message(const void *message_data)
 		static_assert(sherbet::ime::kMaxChatKeys == reshade::input::kSherbetImeMaxChatKeys, "chat key count mismatch");
 		for (int i = 0; i < sherbet::ime::kMaxChatKeys; ++i)
 			chat_keys.k[i] = input->_sherbet_ime_chat_vks[i].load(std::memory_order_relaxed);
-		sherbet::ime::state st { input->_sherbet_ime_chat_open, input->_sherbet_ime_english_on_release };
+		sherbet::ime::state st { input->_sherbet_ime_chat_open, input->_sherbet_ime_english_on_release,
+			input->_sherbet_ime_shift_down, input->_sherbet_ime_alt_down, input->_sherbet_ime_alt_shift };
 		const sherbet::ime::action act = key_up
 			? sherbet::ime::on_key_up(st, true, vk, blocking)
 			: sherbet::ime::on_key_down(st, true, input->_sherbet_ime_korean_on_chat.load(std::memory_order_relaxed), chat_keys, vk, blocking,
 				!blocking && input->_sherbet_ime_english_requested.exchange(false, std::memory_order_relaxed));
 		input->_sherbet_ime_chat_open = st.chat_open;
 		input->_sherbet_ime_english_on_release = st.english_on_release;
+		input->_sherbet_ime_shift_down = st.shift_down;
+		input->_sherbet_ime_alt_down = st.alt_down;
+		input->_sherbet_ime_alt_shift = st.alt_shift;
 		const int want = act == sherbet::ime::action::to_korean ? 1 : act == sherbet::ime::action::to_english ? 0 : -1;
 		if (want >= 0 || (key_up && sherbet::ime::reads_ime(vk, chat_keys)))
 			sherbet_ime_apply(want);
@@ -380,6 +386,14 @@ bool reshade::input::handle_window_message(const void *message_data)
 	}
 	if (sherbet_kick)
 		return true; // 신호는 요청 처리용 — 게임에 보내지 않는다
+	if (sherbet_lang)
+	{
+		// 자판은 이 메시지를 게임이 처리할 때 바뀐다 — 지금 바꾸면 덮인다. 영문 요청만 걸어 두면 다음 메시지
+		// (마우스·raw input·렌더 스레드 신호)에서 바뀐 자판 위에 영문을 건다. 채팅 중이면 손대지 않는다.
+		if (sherbet_ime_thread && !input->_sherbet_ime_chat_open && !input->is_blocking_keyboard_input())
+			input->_sherbet_ime_english_requested.store(true, std::memory_order_relaxed);
+		return false; // 게임에 그대로 보낸다
+	}
 
 	input->_mouse_position[0] = details.pt.x;
 	input->_mouse_position[1] = details.pt.y;

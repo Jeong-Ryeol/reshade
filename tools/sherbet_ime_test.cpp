@@ -190,6 +190,44 @@ static void test_key_list_and_toggle()
 	assert(c.k[0] == 'T' && c.k[1] == 0x76 && c.k[2] == 0x78 && c.k[3] == 0);
 }
 
+// Shift+Alt(윈도우 자판 전환 단축키 — 서버에 따라 1인칭 전환)를 떼면 영문. 채팅 중엔 그대로.
+// Shift 만(달리기)·Alt 만(오른쪽 Alt 를 한/영으로 쓰는 키보드)은 건드리지 않는다.
+static void test_alt_shift()
+{
+	state st;
+	assert(down(st, kVkShift) == action::none && down(st, kVkMenu) == action::none);
+	assert(up(st, kVkMenu) == action::to_english);
+	assert(up(st, kVkShift) == action::none);
+
+	assert(down(st, kVkMenu) == action::none && down(st, kVkShift) == action::none); // 반대 순서
+	assert(up(st, kVkShift) == action::to_english);
+	assert(up(st, kVkMenu) == action::none);
+
+	for (int i = 0; i < 5; ++i)
+		assert(down(st, kVkShift) == action::none); // 달리는 중(키 반복)
+	assert(down(st, kVkMenu) == action::none);
+	assert(down(st, kVkMenu) == action::none);      // raw + WM_SYSKEYDOWN 두 번
+	assert(up(st, kVkMenu) == action::to_english);   // Shift 를 계속 누르고 있어도 바로
+	assert(up(st, kVkMenu) == action::none);         // 두 번째 떼기
+	assert(down(st, kVkShift) == action::none);
+	assert(up(st, kVkShift) == action::none);
+
+	assert(down(st, kVkShift) == action::none && up(st, kVkShift) == action::none);
+	assert(down(st, kVkMenu) == action::none && up(st, kVkMenu) == action::none);
+
+	state chat;
+	assert(down(chat, 'T') == action::to_korean);
+	assert(down(chat, kVkShift) == action::none && down(chat, kVkMenu) == action::none);
+	assert(up(chat, kVkMenu) == action::none && up(chat, kVkShift) == action::none);
+	assert(chat.chat_open);
+
+	state menu; // 셰르벳 메뉴가 키보드를 잡고 있을 때 눌렀으면 나중에 Shift 만 떼도 안 바꾼다
+	assert(down(menu, kVkShift, true, true) == action::none && down(menu, kVkMenu, true, true) == action::none);
+	assert(up(menu, kVkMenu, true) == action::none);
+	assert(up(menu, kVkShift) == action::none);
+	assert(!menu.shift_down && !menu.alt_down && !menu.alt_shift);
+}
+
 int main()
 {
 	test_chat_cycle();
@@ -205,6 +243,7 @@ int main()
 	test_reads_ime_only_rare_keys();
 	test_second_chat_key();
 	test_key_list_and_toggle();
-	std::printf("sherbet_ime_test: 13 passed\n");
+	test_alt_shift();
+	std::printf("sherbet_ime_test: 14 passed\n");
 	return 0;
 }

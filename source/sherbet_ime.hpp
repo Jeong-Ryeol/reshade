@@ -38,6 +38,7 @@ namespace sherbet
 		constexpr unsigned int kVkHangul = 0x15; // 한/영
 		constexpr unsigned int kVkMenu = 0x12;   // Alt — 오른쪽 Alt 를 한/영으로 쓰는 키보드
 		constexpr unsigned int kVkRMenu = 0xA5;
+		constexpr unsigned int kVkShift = 0x10;
 		constexpr unsigned int kDefaultChatKey = 'T';
 		constexpr unsigned int kDefaultChatKey2 = 0x76; // F7 — 서버에 따라 다른 채팅(무전 등)을 여는 두 번째 키
 
@@ -54,7 +55,26 @@ namespace sherbet
 		{
 			bool chat_open = false;          // 채팅 키로 채팅이 열렸다고 보는 중(Enter·Esc 로 닫힌다)
 			bool english_on_release = false; // Enter·Esc 를 눌렀다 — 떼면 영문으로
+			bool shift_down = false;
+			bool alt_down = false;
+			bool alt_shift = false;          // Shift+Alt 를 같이 눌렀다 — 떼면 영문으로
 		};
+
+		// Shift·Alt 상태를 따라간다. 막혀 있어도(메뉴) 따라가야 떼기를 놓쳐 눌린 채 남지 않는다.
+		// ⚠️ Shift+Alt 는 윈도우 기본 자판 전환 단축키(왼쪽 Alt+Shift)다. 영어 자판을 같이 깔아 둔 사람은
+		//    파이브엠에서 Shift+Alt(1인칭 전환 등)를 누를 때 한국어 자판으로 넘어가 한글이 된다(구매자 신고).
+		//    한글만 깔린 사람도 다른 창에서 한글로 두고 돌아오면 그 상태가 보일 수 있다 — 채팅 밖이면 영문으로 돌린다.
+		inline void track_modifier(state &st, unsigned int vk, bool down)
+		{
+			if (vk == kVkShift)
+				st.shift_down = down;
+			else if (vk == kVkMenu)
+				st.alt_down = down;
+			else
+				return;
+			if (down && st.shift_down && st.alt_down)
+				st.alt_shift = true;
+		}
 
 		// 이 키가 채팅을 여는 키인가.
 		inline bool is_chat_key(unsigned int vk, const chat_keys &keys)
@@ -79,6 +99,7 @@ namespace sherbet
 		// 채팅 키 목록 중 어느 것으로 열어도 같다.
 		inline action on_key_down(state &st, bool enabled, bool korean_on_chat, const chat_keys &keys, unsigned int vk, bool overlay_blocking, bool english_requested)
 		{
+			track_modifier(st, vk, true);
 			if (!enabled || overlay_blocking)
 				return action::none;
 			if (english_requested)
@@ -123,6 +144,15 @@ namespace sherbet
 		// 키를 뗐을 때.
 		inline action on_key_up(state &st, bool enabled, unsigned int vk, bool overlay_blocking)
 		{
+			track_modifier(st, vk, false);
+			if ((vk == kVkShift || vk == kVkMenu) && st.alt_shift)
+			{
+				// 둘 중 먼저 떼는 키에서(Shift 를 계속 누르고 달려도 바로). 자판이 늦게 바뀌는 경우는
+				// 창 스레드가 WM_INPUTLANGCHANGEREQUEST 뒤에 한 번 더 영문으로 돌린다.
+				st.alt_shift = false;
+				if (enabled && !overlay_blocking && !st.chat_open)
+					return action::to_english;
+			}
 			if (!enabled || overlay_blocking)
 				return action::none;
 			if ((vk == kVkReturn || vk == kVkEscape) && st.english_on_release)

@@ -294,6 +294,9 @@ namespace reshade
 		std::atomic<int> _sherbet_ime_mode { -1 };
 		bool _sherbet_ime_chat_open = false;          // 창 스레드 전용(_mutex 아래)
 		bool _sherbet_ime_english_on_release = false; // 창 스레드 전용 — Enter·Esc 를 떼면 영문으로
+		bool _sherbet_ime_shift_down = false;         // 창 스레드 전용 — Shift+Alt(자판 전환) 판정용
+		bool _sherbet_ime_alt_down = false;
+		bool _sherbet_ime_alt_shift = false;
 		uint64_t _frame_count = 0; // Keep track of frame count to identify windows with a lot of rendering
 		std::wstring _text_input;
 		std::wstring _text_composition; // SHERBET: 조합 중인 글자 — 매 프레임 지우지 않는다(조합이 끝나야 지운다)
